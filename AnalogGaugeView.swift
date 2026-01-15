@@ -1,6 +1,9 @@
 import SwiftUI
+import UIKit
 
-// MARK: - Rich Focus Dial with Border
+// Uses Haptics, Triangle, and Color(hex:) from ContentView.swift
+
+// MARK: - Focus Dial (Figma style - dark, clean)
 struct FocusDial: View {
     @Binding var value: Float
     let onChanged: (Float) -> Void
@@ -13,101 +16,81 @@ struct FocusDial: View {
         GeometryReader { geo in
             let size = min(geo.size.width, geo.size.height)
             let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
-            let radius = size * 0.40
+            let radius = size * 0.42
 
             ZStack {
-                // Outer border ring
+                // Outer ring (subtle gradient stroke)
                 Circle()
                     .stroke(
                         LinearGradient(
-                            colors: [Color.white.opacity(0.15), Color.white.opacity(0.05)],
+                            colors: [Color.white.opacity(0.12), Color.white.opacity(0.03)],
                             startPoint: .top,
                             endPoint: .bottom
                         ),
-                        lineWidth: 2
+                        lineWidth: 1.5
                     )
+
+                // Dark background (Figma: very dark, almost black)
+                Circle()
+                    .fill(Color(hex: "0a0a0a"))
                     .padding(2)
 
-                // Background
-                Circle()
-                    .fill(Color(white: 0.04))
-                    .padding(4)
-
-                // Inner dial face with rich gradient
+                // Inner dial face (subtle gradient for depth)
                 Circle()
                     .fill(
                         RadialGradient(
-                            colors: [Color(white: 0.18), Color(white: 0.06)],
-                            center: .init(x: 0.3, y: 0.3),
+                            colors: [Color(hex: "1a1a1a"), Color(hex: "0d0d0d")],
+                            center: .init(x: 0.35, y: 0.35),
                             startRadius: 0,
-                            endRadius: radius * 1.2
+                            endRadius: radius
                         )
                     )
-                    .padding(8)
+                    .padding(6)
 
-                // Tick marks with gradient
-                ForEach(0..<31, id: \.self) { i in
-                    let angle = -150.0 + Double(i) * 10
-                    let isMajor = i % 5 == 0
+                // Tick marks (Figma style - clean white)
+                ForEach(0..<25, id: \.self) { i in
+                    let angle = -150.0 + Double(i) * 12.5
+                    let isMajor = i % 4 == 0
 
                     Rectangle()
-                        .fill(
-                            LinearGradient(
-                                colors: isMajor ? [.white.opacity(0.9), .white.opacity(0.5)] : [.white.opacity(0.3), .white.opacity(0.15)],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .frame(width: isMajor ? 2 : 1, height: isMajor ? 12 : 7)
-                        .offset(y: -radius + (isMajor ? 6 : 3.5))
+                        .fill(Color.white.opacity(isMajor ? 0.7 : 0.25))
+                        .frame(width: isMajor ? 1.5 : 1, height: isMajor ? 10 : 5)
+                        .offset(y: -radius + (isMajor ? 5 : 2.5))
                         .rotationEffect(.degrees(angle))
                 }
 
-                // Labels
+                // Labels (Figma: white, monospace)
                 ForEach(marks.indices, id: \.self) { i in
                     let mark = marks[i]
                     let angle = -150.0 + Double(mark.1) * 300.0
-                    let labelRadius = radius * 0.58
+                    let labelRadius = radius * 0.62
 
                     Text(mark.0)
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.8))
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.85))
                         .position(
                             x: center.x + labelRadius * cos(angle * .pi / 180),
                             y: center.y + labelRadius * sin(angle * .pi / 180)
                         )
                 }
 
-                // Needle with gradient
-                NeedleShape(length: radius * 0.75)
-                    .fill(
-                        LinearGradient(
-                            colors: [.white, .white.opacity(0.6)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .shadow(color: .black.opacity(0.5), radius: 2, y: 1)
+                // Needle (Figma: clean white)
+                NeedleShape(length: radius * 0.7)
+                    .fill(Color.white)
+                    .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
                     .rotationEffect(.degrees(-150 + Double(value) * 300))
 
-                // Center hub
+                // Center hub (small, dark)
                 Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [Color(white: 0.3), Color(white: 0.1)],
-                            center: .center,
-                            startRadius: 0,
-                            endRadius: 10
-                        )
-                    )
-                    .frame(width: 14, height: 14)
-                    .overlay(Circle().stroke(Color.white.opacity(0.3), lineWidth: 0.5))
+                    .fill(Color(hex: "1a1a1a"))
+                    .frame(width: 10, height: 10)
+                    .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 0.5))
 
-                // Red indicator at bottom
+                // Red indicator at bottom (Figma)
                 Circle()
                     .fill(Color.red)
-                    .frame(width: 6, height: 6)
-                    .offset(y: radius - 4)
+                    .frame(width: 5, height: 5)
+                    .offset(y: radius - 8)
             }
             .position(center)
             .contentShape(Circle().scale(1.3)) // Larger touch target
@@ -143,7 +126,134 @@ struct FocusDial: View {
     }
 }
 
-// MARK: - Rich Exposure Dial
+// MARK: - Aperture Dial (Figma style - dark, clean, f-stops)
+struct ApertureDial: View {
+    @Binding var value: Float  // f-stop value (2 to 16)
+    let onChanged: (Float) -> Void
+
+    // f-stops as shown in Figma: 2, 2.8, 4, 5.6, 8, 11, 16
+    private let fStops: [Float] = [2.0, 2.8, 4.0, 5.6, 8.0, 11.0, 16.0]
+    private let marks: [(String, Float)] = [
+        ("2", 0.0), ("2.8", 0.167), ("4", 0.333), ("5.6", 0.5), ("8", 0.667), ("11", 0.833), ("16", 1.0)
+    ]
+
+    private var normalizedValue: Float {
+        guard let minF = fStops.first, let maxF = fStops.last else { return 0.5 }
+        return (value - minF) / (maxF - minF)
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let size = min(geo.size.width, geo.size.height)
+            let center = CGPoint(x: geo.size.width / 2, y: geo.size.height / 2)
+            let radius = size * 0.42
+
+            ZStack {
+                // Outer ring (subtle gradient stroke)
+                Circle()
+                    .stroke(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.12), Color.white.opacity(0.03)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 1.5
+                    )
+
+                // Dark background (Figma: very dark)
+                Circle()
+                    .fill(Color(hex: "0a0a0a"))
+                    .padding(2)
+
+                // Inner dial face (subtle gradient)
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [Color(hex: "1a1a1a"), Color(hex: "0d0d0d")],
+                            center: .init(x: 0.35, y: 0.35),
+                            startRadius: 0,
+                            endRadius: radius
+                        )
+                    )
+                    .padding(6)
+
+                // Tick marks - major for each f-stop
+                ForEach(0..<7, id: \.self) { i in
+                    let angle = -150.0 + Double(i) * 50
+
+                    Rectangle()
+                        .fill(Color.white.opacity(0.7))
+                        .frame(width: 1.5, height: 10)
+                        .offset(y: -radius + 5)
+                        .rotationEffect(.degrees(angle))
+                }
+
+                // Minor ticks
+                ForEach(0..<6, id: \.self) { i in
+                    let angle = -150.0 + Double(i) * 50 + 25
+
+                    Rectangle()
+                        .fill(Color.white.opacity(0.25))
+                        .frame(width: 1, height: 5)
+                        .offset(y: -radius + 2.5)
+                        .rotationEffect(.degrees(angle))
+                }
+
+                // Labels (Figma: white, monospace)
+                ForEach(marks.indices, id: \.self) { i in
+                    let mark = marks[i]
+                    let angle = -150.0 + Double(mark.1) * 300.0
+                    let labelRadius = radius * 0.62
+
+                    Text(mark.0)
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.85))
+                        .position(
+                            x: center.x + labelRadius * cos(angle * .pi / 180),
+                            y: center.y + labelRadius * sin(angle * .pi / 180)
+                        )
+                }
+
+                // Needle (Figma: clean white)
+                NeedleShape(length: radius * 0.7)
+                    .fill(Color.white)
+                    .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
+                    .rotationEffect(.degrees(-150 + Double(normalizedValue) * 300))
+
+                // Center hub (small, dark)
+                Circle()
+                    .fill(Color(hex: "1a1a1a"))
+                    .frame(width: 10, height: 10)
+                    .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 0.5))
+            }
+            .position(center)
+            .contentShape(Circle().scale(1.3))
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { drag in
+                        let vector = CGVector(dx: drag.location.x - center.x, dy: drag.location.y - center.y)
+                        var angle = atan2(vector.dy, vector.dx) * 180 / .pi
+                        angle = angle + 150
+                        if angle < 0 { angle += 360 }
+                        if angle > 300 { angle = angle > 330 ? 0 : 300 }
+                        let normalized = Float(min(max(angle / 300, 0), 1))
+                        // Find closest f-stop
+                        let index = Int(round(normalized * Float(fStops.count - 1)))
+                        let clampedIndex = max(0, min(fStops.count - 1, index))
+                        let newValue = fStops[clampedIndex]
+                        if abs(newValue - value) > 0.1 {
+                            value = newValue
+                            onChanged(newValue)
+                            Haptics.light()
+                        }
+                    }
+            )
+        }
+        .aspectRatio(1, contentMode: .fit)
+    }
+}
+
+// MARK: - Rich Exposure Dial (keeping for backward compatibility)
 struct ExposureDial: View {
     @Binding var value: Float
     let onChanged: (Float) -> Void
@@ -305,52 +415,103 @@ struct NeedleShape: Shape {
     }
 }
 
-// MARK: - Center Display
+// MARK: - Horizontal Exposure Meter (matches Figma design)
+struct HorizontalExposureMeter: View {
+    let value: Float // -2 to +2
+    let iso: Int
+
+    private let marks = ["+2", "+1", "0", "-1", "-2"]
+
+    var body: some View {
+        VStack(spacing: 4) {
+            // Meter bar with ticks
+            HStack(spacing: 0) {
+                ForEach(0..<5, id: \.self) { i in
+                    HStack(spacing: 0) {
+                        // Major tick
+                        VStack(spacing: 2) {
+                            Rectangle()
+                                .fill(Color.white.opacity(i == 2 ? 0.8 : 0.4))
+                                .frame(width: i == 2 ? 2 : 1, height: i == 2 ? 10 : 6)
+
+                            Text(marks[i])
+                                .font(.system(size: 7, weight: .medium, design: .monospaced))
+                                .foregroundColor(.white.opacity(i == 2 ? 0.8 : 0.4))
+                        }
+
+                        if i < 4 {
+                            Spacer()
+                            // Minor ticks between major ones
+                            Rectangle()
+                                .fill(Color.white.opacity(0.2))
+                                .frame(width: 1, height: 4)
+                            Spacer()
+                        }
+                    }
+                }
+            }
+            .frame(width: 80, height: 24)
+            .overlay(
+                // Indicator triangle
+                Triangle()
+                    .fill(Color.white)
+                    .frame(width: 6, height: 5)
+                    .offset(x: CGFloat(value) * -20) // Move based on EV value
+                    .offset(y: -14),
+                alignment: .center
+            )
+
+            // ISO display
+            Text("\(iso)")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.6))
+        }
+    }
+}
+
+// MARK: - Center Display (Simplified - just exposure meter centered)
 struct CenterDisplay: View {
     let timerSeconds: Int
     let iso: Int
     let flashMode: String
     let macroEnabled: Bool
+    let isAutoFocus: Bool
+    let exposureValue: Float
     let onTimerTap: () -> Void
     let onMacroTap: () -> Void
 
     var body: some View {
-        VStack(spacing: 6) {
-            HStack(spacing: 12) {
-                // Timer button
-                Button(action: onTimerTap) {
-                    Image(systemName: "timer")
-                        .foregroundColor(timerSeconds > 0 ? .white : .white.opacity(0.25))
-                }
-
-                // Macro button
-                Button(action: onMacroTap) {
-                    Image(systemName: "leaf.fill")
-                        .foregroundColor(macroEnabled ? .green : .white.opacity(0.25))
-                }
-            }
-            .font(.system(size: 13))
-
-            Text(timerSeconds > 0 ? "\(timerSeconds)s" : "--")
-                .font(.system(size: 20, weight: .semibold, design: .monospaced))
-                .foregroundColor(.white)
-
-            Text("ISO \(iso)")
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
-                .foregroundColor(.white.opacity(0.5))
-
-            Text(flashMode)
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .foregroundColor(.white.opacity(0.3))
-        }
-        .frame(width: 85)
+        // Just the horizontal exposure meter, centered between gauges
+        HorizontalExposureMeter(value: exposureValue, iso: iso)
     }
 }
 
-// MARK: - Analog Display Panel with Border
+// Legacy initializer for backward compatibility
+extension CenterDisplay {
+    init(
+        timerSeconds: Int,
+        iso: Int,
+        flashMode: String,
+        macroEnabled: Bool,
+        onTimerTap: @escaping () -> Void,
+        onMacroTap: @escaping () -> Void
+    ) {
+        self.timerSeconds = timerSeconds
+        self.iso = iso
+        self.flashMode = flashMode
+        self.macroEnabled = macroEnabled
+        self.isAutoFocus = true
+        self.exposureValue = 0
+        self.onTimerTap = onTimerTap
+        self.onMacroTap = onMacroTap
+    }
+}
+
+// MARK: - Analog Display Panel (Figma: 355x190, r=95 pill shape)
 struct AnalogDisplayPanel: View {
     @Binding var focusPosition: Float
     @Binding var exposureValue: Float
+    @Binding var apertureValue: Float
     let timerSeconds: Int
     let iso: Int
     let flashMode: String
@@ -358,60 +519,58 @@ struct AnalogDisplayPanel: View {
     let isAutoFocus: Bool
     let onFocusChanged: (Float) -> Void
     let onExposureChanged: (Float) -> Void
+    let onApertureChanged: (Float) -> Void
     var onTimerTap: () -> Void = {}
     var onMacroTap: () -> Void = {}
 
+    // Figma pill radius
+    private let pillRadius: CGFloat = 60
+
     var body: some View {
         ZStack {
-            // Charcoal background
-            RoundedRectangle(cornerRadius: 18)
-                .fill(Color(white: 0.06))
+            // Dark background (Figma: pill shape)
+            RoundedRectangle(cornerRadius: pillRadius)
+                .fill(Color(hex: "0d0d0d"))
 
-            // Border
-            RoundedRectangle(cornerRadius: 18)
+            // Subtle border
+            RoundedRectangle(cornerRadius: pillRadius)
                 .stroke(
                     LinearGradient(
-                        colors: [Color.white.opacity(0.12), Color.white.opacity(0.04)],
+                        colors: [Color.white.opacity(0.1), Color.white.opacity(0.03)],
                         startPoint: .top,
                         endPoint: .bottom
                     ),
-                    lineWidth: 1.5
+                    lineWidth: 1
                 )
-
-            // Inner shadow
-            RoundedRectangle(cornerRadius: 17)
-                .fill(
-                    LinearGradient(
-                        colors: [Color.black.opacity(0.3), Color.clear, Color.clear],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .padding(2)
 
             HStack(spacing: 0) {
+                // Left: Focus dial
                 FocusDial(value: $focusPosition, onChanged: onFocusChanged)
-                    .frame(width: 115, height: 115)
+                    .frame(width: 100, height: 100)
 
                 Spacer()
 
+                // Center: AF badge, timer, AUTO/SV, exposure meter with ISO
                 CenterDisplay(
                     timerSeconds: timerSeconds,
                     iso: iso,
                     flashMode: flashMode,
                     macroEnabled: macroEnabled,
+                    isAutoFocus: isAutoFocus,
+                    exposureValue: exposureValue,
                     onTimerTap: onTimerTap,
                     onMacroTap: onMacroTap
                 )
 
                 Spacer()
 
-                ExposureDial(value: $exposureValue, onChanged: onExposureChanged)
-                    .frame(width: 115, height: 115)
+                // Right: Aperture dial (f-stop)
+                ApertureDial(value: $apertureValue, onChanged: onApertureChanged)
+                    .frame(width: 100, height: 100)
             }
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 12)
 
-            // Bottom label only (removed AF badge - was overlapping)
+            // Bottom label
             VStack {
                 Spacer()
                 HStack(spacing: 4) {
@@ -424,6 +583,37 @@ struct AnalogDisplayPanel: View {
                 .padding(.bottom, 6)
             }
         }
+    }
+}
+
+// Legacy initializer for backward compatibility (without aperture)
+extension AnalogDisplayPanel {
+    init(
+        focusPosition: Binding<Float>,
+        exposureValue: Binding<Float>,
+        timerSeconds: Int,
+        iso: Int,
+        flashMode: String,
+        macroEnabled: Bool,
+        isAutoFocus: Bool,
+        onFocusChanged: @escaping (Float) -> Void,
+        onExposureChanged: @escaping (Float) -> Void,
+        onTimerTap: @escaping () -> Void = {},
+        onMacroTap: @escaping () -> Void = {}
+    ) {
+        self._focusPosition = focusPosition
+        self._exposureValue = exposureValue
+        self._apertureValue = .constant(2.8)  // Default aperture
+        self.timerSeconds = timerSeconds
+        self.iso = iso
+        self.flashMode = flashMode
+        self.macroEnabled = macroEnabled
+        self.isAutoFocus = isAutoFocus
+        self.onFocusChanged = onFocusChanged
+        self.onExposureChanged = onExposureChanged
+        self.onApertureChanged = { _ in }
+        self.onTimerTap = onTimerTap
+        self.onMacroTap = onMacroTap
     }
 }
 
@@ -445,7 +635,7 @@ struct ModeBadge: View {
     }
 }
 
-// Convenience init
+// Convenience init (for previews/static use)
 extension AnalogDisplayPanel {
     init(
         focusPosition: Float,
@@ -458,6 +648,7 @@ extension AnalogDisplayPanel {
     ) {
         self._focusPosition = .constant(focusPosition)
         self._exposureValue = .constant(ev)
+        self._apertureValue = .constant(aperture)
         self.timerSeconds = timerSeconds
         self.iso = 100
         self.flashMode = flashMode
@@ -465,5 +656,6 @@ extension AnalogDisplayPanel {
         self.isAutoFocus = isAutoFocus
         self.onFocusChanged = { _ in }
         self.onExposureChanged = { _ in }
+        self.onApertureChanged = { _ in }
     }
 }

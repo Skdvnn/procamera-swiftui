@@ -24,7 +24,7 @@ struct FilmGrainOverlay: View {
     }
 }
 
-// MARK: - Viewfinder Overlay
+// MARK: - Viewfinder Overlay (matches Figma design)
 struct ViewfinderOverlay: View {
     let showGrid: Bool
 
@@ -32,49 +32,49 @@ struct ViewfinderOverlay: View {
         GeometryReader { geo in
             let width = geo.size.width
             let height = geo.size.height
-            let inset: CGFloat = 12
+            let inset: CGFloat = 16
 
             ZStack {
-                // Film grain texture
+                // Film grain texture (subtle)
                 FilmGrainOverlay()
-                    .opacity(0.4)
+                    .opacity(0.3)
 
-                // Corner brackets
-                ViewfinderBracket()
-                    .position(x: inset + 20, y: inset + 20)
-
-                ViewfinderBracket()
-                    .rotationEffect(.degrees(90))
-                    .position(x: width - inset - 20, y: inset + 20)
-
-                ViewfinderBracket()
-                    .rotationEffect(.degrees(-90))
-                    .position(x: inset + 20, y: height - inset - 20)
-
-                ViewfinderBracket()
-                    .rotationEffect(.degrees(180))
-                    .position(x: width - inset - 20, y: height - inset - 20)
-
-                // Center focus indicator - curved brackets style
+                // Center focus indicator - curved brackets style (main feature)
                 CenterFocusBrackets()
                     .position(x: width/2, y: height/2)
 
-                // Grid
+                // Grid (rule of thirds)
                 if showGrid {
                     GridLines()
                 }
 
-                // Top left - viewfinder icon
-                Image(systemName: "viewfinder")
-                    .font(.system(size: 14, weight: .light))
-                    .foregroundColor(.white.opacity(0.6))
-                    .position(x: inset + 18, y: inset + 18)
+                // Top left - crop/grid icon (matches Figma)
+                Button(action: {}) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.black.opacity(0.3))
+                            .frame(width: 32, height: 32)
+                        Image(systemName: "crop")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                }
+                .position(x: inset + 20, y: inset + 20)
+                .allowsHitTesting(true)
 
-                // Top right - stabilization icon
-                Image(systemName: "hand.raised")
-                    .font(.system(size: 13, weight: .light))
-                    .foregroundColor(.white.opacity(0.6))
-                    .position(x: width - inset - 16, y: inset + 18)
+                // Top right - settings gear icon (matches Figma)
+                Button(action: {}) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.black.opacity(0.3))
+                            .frame(width: 32, height: 32)
+                        Image(systemName: "gearshape")
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                }
+                .position(x: width - inset - 20, y: inset + 20)
+                .allowsHitTesting(true)
             }
         }
         .allowsHitTesting(false)
@@ -230,75 +230,90 @@ struct HistogramView: View {
     }
 }
 
-// MARK: - Info Bar
+// MARK: - Info Bar (matches Figma design)
 struct InfoBar: View {
     let iso: Int
     let shutterSpeed: String
     let aperture: Float
     let photoCount: Int
+    let isAutoISO: Bool
+
+    init(iso: Int, shutterSpeed: String, aperture: Float, photoCount: Int, isAutoISO: Bool = true) {
+        self.iso = iso
+        self.shutterSpeed = shutterSpeed
+        self.aperture = aperture
+        self.photoCount = photoCount
+        self.isAutoISO = isAutoISO
+    }
 
     var body: some View {
-        HStack(spacing: 10) {
-            // Histogram
+        HStack(spacing: 8) {
+            // Histogram with blue tint (matches Figma)
             HistogramView()
 
-            // Center info
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text("RAW+J")
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+            // Center info - matches Figma layout
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text("HEIC")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         .foregroundColor(.white)
 
-                    // Aspect ratio badge
-                    Text("4:3")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundColor(.black)
-                        .padding(.horizontal, 5)
-                        .padding(.vertical, 2)
-                        .background(Color.white)
-                        .cornerRadius(3)
+                    // Large badge
+                    Text("L")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.white.opacity(0.2))
+                        .cornerRadius(2)
 
-                    Text("30M")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.6))
+                    Text("1:1")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.7))
                 }
 
-                HStack(spacing: 10) {
-                    HStack(spacing: 3) {
-                        Image(systemName: "square.on.square")
-                            .font(.system(size: 9))
-                        Text(formatNumber(photoCount))
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    }
-                    .foregroundColor(.white.opacity(0.6))
+                HStack(spacing: 8) {
+                    Text(formatNumber(photoCount))
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.6))
 
-                    Text("F \(String(format: "%.1f", aperture))")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    Text("F\(String(format: "%.1f", aperture))")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundColor(.white.opacity(0.6))
                 }
             }
 
             Spacer()
 
-            // Right info
-            VStack(alignment: .trailing, spacing: 3) {
-                HStack(spacing: 4) {
-                    Text("ISO")
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.5))
-                    Text("\(iso)")
-                        .font(.system(size: 13, weight: .semibold, design: .monospaced))
+            // Right info - matches Figma
+            VStack(alignment: .trailing, spacing: 2) {
+                HStack(spacing: 3) {
+                    // Auto badge
+                    Text("A")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Color.white.opacity(0.2))
+                        .cornerRadius(2)
+                        .opacity(isAutoISO ? 1 : 0)
+
+                    Text("ISO \(iso)")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         .foregroundColor(.white)
                 }
 
                 Text(shutterSpeed)
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
                     .foregroundColor(.white)
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(Color.black)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.black.opacity(0.6))
+        )
     }
 
     private func formatNumber(_ num: Int) -> String {
