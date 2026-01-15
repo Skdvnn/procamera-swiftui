@@ -141,9 +141,9 @@ struct ContentView: View {
 
             // Layout measurements - maximize viewport
             let topPanelHeight: CGFloat = 110
-            let bottomControlsHeight: CGFloat = 240  // Grid-like DSLR controls
+            let bottomControlsHeight: CGFloat = 230  // Grid-like DSLR controls
             let spacing: CGFloat = 6
-            let bottomPadding: CGFloat = 8
+            let bottomPadding: CGFloat = 0
 
             // Calculate viewfinder to fill remaining space
             let availableHeight = geo.size.height - topPanelHeight - bottomControlsHeight - spacing * 2 - bottomPadding - safeTop
@@ -315,7 +315,7 @@ struct ContentView: View {
                             // ROW 3: Main capture row with proper spacing
                             HStack(alignment: .bottom, spacing: 0) {
                                 // Left: Flash/Thumbnail stack
-                                VStack(spacing: 10) {
+                                VStack(spacing: 14) {
                                     FlashButtonPill(flashMode: camera.flashMode) {
                                         Haptics.click()
                                         camera.cycleFlash()
@@ -328,6 +328,7 @@ struct ContentView: View {
                                         }
                                     }
                                 }
+                                .padding(.trailing, 8)
 
                                 Spacer()
 
@@ -346,7 +347,7 @@ struct ContentView: View {
                                 Spacer()
 
                                 // Right: Mode controls + WB
-                                VStack(spacing: 10) {
+                                VStack(spacing: 14) {
                                     // Icons + Buttons combined for perfect alignment
                                     HStack(spacing: 16) {
                                         // Macro column

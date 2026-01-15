@@ -266,9 +266,9 @@ class CameraManager: NSObject, ObservableObject {
             do {
                 try device.lockForConfiguration()
 
-                // Set to minimum ISO for long exposure (reduce noise)
-                let minISO = device.activeFormat.minISO
-                device.setExposureModeCustom(duration: targetDuration, iso: minISO) { _ in
+                // Use user's selected ISO (clamped to device limits) for dark room support
+                let targetISO = max(device.activeFormat.minISO, min(self.isoValue, device.activeFormat.maxISO))
+                device.setExposureModeCustom(duration: targetDuration, iso: targetISO) { _ in
                     // Now capture the photo
                     DispatchQueue.main.async {
                         self.capturePhoto(completion: completion)
@@ -307,13 +307,16 @@ class CameraManager: NSObject, ObservableObject {
             do {
                 try device.lockForConfiguration()
 
-                // Use a moderate exposure per frame (hardware max or 1/30)
+                // Use hardware max exposure duration per frame for dark room support
                 let maxDuration = device.activeFormat.maxExposureDuration
                 let frameDuration = CMTime(seconds: 1.0/fps, preferredTimescale: 1000000)
-                let exposureDuration = CMTimeCompare(frameDuration, maxDuration) < 0 ? frameDuration : maxDuration
+                // In dark rooms, use max hardware exposure duration to capture more light
+                let exposureDuration = CMTimeCompare(maxDuration, frameDuration) > 0 ? maxDuration : frameDuration
 
-                let minISO = device.activeFormat.minISO
-                device.setExposureModeCustom(duration: exposureDuration, iso: minISO) { _ in }
+                // Use user's selected ISO (clamped to device limits) instead of forcing minISO
+                // This allows proper exposure in dark rooms
+                let targetISO = max(device.activeFormat.minISO, min(self.isoValue, device.activeFormat.maxISO))
+                device.setExposureModeCustom(duration: exposureDuration, iso: targetISO) { _ in }
 
                 device.unlockForConfiguration()
             } catch {
