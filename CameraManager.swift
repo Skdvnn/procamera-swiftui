@@ -1,6 +1,8 @@
 import AVFoundation
 import UIKit
 import Photos
+import CoreImage
+import CoreImage.CIFilterBuiltins
 
 class CameraManager: NSObject, ObservableObject {
     @Published var session = AVCaptureSession()
@@ -12,23 +14,69 @@ class CameraManager: NSObject, ObservableObject {
     @Published var flashMode: AVCaptureDevice.FlashMode = .off
     @Published var exposureValue: Float = 0.0
     @Published var isoValue: Float = 100
-    @Published var shutterSpeed: CMTime = CMTime(value: 1, timescale: 60)
+    @Published var shutterSpeed: CMTime = CMTime(value: 1, timescale: 125)
     @Published var focusPoint: CGPoint = CGPoint(x: 0.5, y: 0.5)
     @Published var isManualFocus: Bool = false
     @Published var lensPosition: Float = 0.5
     @Published var whiteBalance: AVCaptureDevice.WhiteBalanceGains?
     @Published var zoomFactor: CGFloat = 1.0
+    @Published var isManualExposure: Bool = false
+    @Published var selectedFilmFilter: FilmFilter = .none
+
+    // Film filter types
+    enum FilmFilter: Int, CaseIterable {
+        case none = 0
+        case portra400      // Warm, natural skin tones
+        case ektar100       // Vivid, saturated colors
+        case trix400        // Classic B&W
+        case cinestill800   // Cinematic with halation
+        case velvia50       // Ultra-vivid landscape
+
+        var name: String {
+            switch self {
+            case .none: return "None"
+            case .portra400: return "Portra"
+            case .ektar100: return "Ektar"
+            case .trix400: return "Tri-X"
+            case .cinestill800: return "Cine"
+            case .velvia50: return "Velvia"
+            }
+        }
+    }
+
+    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 
     // Device capabilities
     @Published var minISO: Float = 50
     @Published var maxISO: Float = 1600
     @Published var minExposure: Float = -2.0
     @Published var maxExposure: Float = 2.0
+    @Published var minShutterDuration: CMTime = CMTime(value: 1, timescale: 8000)
+    @Published var maxShutterDuration: CMTime = CMTime(value: 1, timescale: 3)
 
     private var videoDeviceInput: AVCaptureDeviceInput?
     private let photoOutput = AVCapturePhotoOutput()
     private let sessionQueue = DispatchQueue(label: "camera.session.queue")
     private var photoCompletionHandler: ((UIImage?) -> Void)?
+
+    // Shutter speed lookup table (index to CMTime)
+    static let shutterSpeedValues: [CMTime] = [
+        CMTime(value: 4, timescale: 1),      // 4" (4 seconds)
+        CMTime(value: 2, timescale: 1),      // 2"
+        CMTime(value: 1, timescale: 1),      // 1"
+        CMTime(value: 1, timescale: 2),      // 1/2
+        CMTime(value: 1, timescale: 4),      // 1/4
+        CMTime(value: 1, timescale: 8),      // 1/8
+        CMTime(value: 1, timescale: 15),     // 1/15
+        CMTime(value: 1, timescale: 30),     // 1/30
+        CMTime(value: 1, timescale: 60),     // 1/60
+        CMTime(value: 1, timescale: 125),    // 1/125
+        CMTime(value: 1, timescale: 250),    // 1/250
+        CMTime(value: 1, timescale: 500),    // 1/500
+        CMTime(value: 1, timescale: 1000),   // 1/1000
+        CMTime(value: 1, timescale: 2000),   // 1/2000
+        CMTime(value: 1, timescale: 4000),   // 1/4000
+    ]
 
     enum CameraError: Error, LocalizedError {
         case cameraUnavailable
@@ -124,6 +172,8 @@ class CameraManager: NSObject, ObservableObject {
             self.maxISO = device.activeFormat.maxISO
             self.minExposure = device.minExposureTargetBias
             self.maxExposure = device.maxExposureTargetBias
+            self.minShutterDuration = device.activeFormat.minExposureDuration
+            self.maxShutterDuration = device.activeFormat.maxExposureDuration
         }
     }
 
@@ -210,13 +260,69 @@ class CameraManager: NSObject, ObservableObject {
         sessionQueue.async {
             do {
                 try device.lockForConfiguration()
-                device.setExposureModeCustom(duration: device.exposureDuration, iso: clampedISO) { _ in }
+                // Use custom exposure mode with current shutter speed and new ISO
+                device.setExposureModeCustom(duration: self.shutterSpeed, iso: clampedISO) { _ in }
                 device.unlockForConfiguration()
                 DispatchQueue.main.async {
                     self.isoValue = clampedISO
+                    self.isManualExposure = true
                 }
             } catch {
                 print("Error setting ISO: \(error)")
+            }
+        }
+    }
+
+    func setShutterSpeed(index: Int) {
+        guard let device = videoDeviceInput?.device else { return }
+        guard index >= 0 && index < CameraManager.shutterSpeedValues.count else { return }
+
+        let targetDuration = CameraManager.shutterSpeedValues[index]
+
+        // Clamp to device capabilities
+        let minDuration = device.activeFormat.minExposureDuration
+        let maxDuration = device.activeFormat.maxExposureDuration
+
+        var clampedDuration = targetDuration
+        if CMTimeCompare(targetDuration, minDuration) < 0 {
+            clampedDuration = minDuration
+        }
+        if CMTimeCompare(targetDuration, maxDuration) > 0 {
+            clampedDuration = maxDuration
+        }
+
+        sessionQueue.async {
+            do {
+                try device.lockForConfiguration()
+                // Set custom exposure with specific shutter speed
+                let currentISO = max(device.activeFormat.minISO, min(self.isoValue, device.activeFormat.maxISO))
+                device.setExposureModeCustom(duration: clampedDuration, iso: currentISO) { _ in }
+                device.unlockForConfiguration()
+                DispatchQueue.main.async {
+                    self.shutterSpeed = clampedDuration
+                    self.isManualExposure = true
+                }
+            } catch {
+                print("Error setting shutter speed: \(error)")
+            }
+        }
+    }
+
+    func setAutoExposure() {
+        guard let device = videoDeviceInput?.device else { return }
+
+        sessionQueue.async {
+            do {
+                try device.lockForConfiguration()
+                if device.isExposureModeSupported(.continuousAutoExposure) {
+                    device.exposureMode = .continuousAutoExposure
+                }
+                device.unlockForConfiguration()
+                DispatchQueue.main.async {
+                    self.isManualExposure = false
+                }
+            } catch {
+                print("Error setting auto exposure: \(error)")
             }
         }
     }
@@ -359,8 +465,138 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    // MARK: - Film Filter Processing
+    func applyFilmFilter(to image: UIImage) -> UIImage {
+        guard selectedFilmFilter != .none else { return image }
+        guard let ciImage = CIImage(image: image) else { return image }
+
+        var outputImage = ciImage
+
+        switch selectedFilmFilter {
+        case .none:
+            break
+
+        case .portra400:
+            // Warm, slightly desaturated, lifted shadows
+            let colorControls = CIFilter.colorControls()
+            colorControls.inputImage = outputImage
+            colorControls.saturation = 0.9
+            colorControls.contrast = 0.95
+            colorControls.brightness = 0.02
+            if let result = colorControls.outputImage {
+                outputImage = result
+            }
+
+            // Add warmth
+            let tempTint = CIFilter.temperatureAndTint()
+            tempTint.inputImage = outputImage
+            tempTint.neutral = CIVector(x: 6500, y: 0)
+            tempTint.targetNeutral = CIVector(x: 5800, y: 10)
+            if let result = tempTint.outputImage {
+                outputImage = result
+            }
+
+        case .ektar100:
+            // Vivid, saturated, punchy
+            let colorControls = CIFilter.colorControls()
+            colorControls.inputImage = outputImage
+            colorControls.saturation = 1.3
+            colorControls.contrast = 1.1
+            colorControls.brightness = 0.0
+            if let result = colorControls.outputImage {
+                outputImage = result
+            }
+
+            // Add slight warmth
+            let vibrance = CIFilter.vibrance()
+            vibrance.inputImage = outputImage
+            vibrance.amount = 0.3
+            if let result = vibrance.outputImage {
+                outputImage = result
+            }
+
+        case .trix400:
+            // Classic black and white
+            let noir = CIFilter.photoEffectNoir()
+            noir.inputImage = outputImage
+            if let result = noir.outputImage {
+                outputImage = result
+            }
+
+            // Add contrast
+            let colorControls = CIFilter.colorControls()
+            colorControls.inputImage = outputImage
+            colorControls.contrast = 1.15
+            if let result = colorControls.outputImage {
+                outputImage = result
+            }
+
+        case .cinestill800:
+            // Cinematic look with warm highlights
+            let colorControls = CIFilter.colorControls()
+            colorControls.inputImage = outputImage
+            colorControls.saturation = 0.95
+            colorControls.contrast = 1.05
+            if let result = colorControls.outputImage {
+                outputImage = result
+            }
+
+            // Warm color cast
+            let tempTint = CIFilter.temperatureAndTint()
+            tempTint.inputImage = outputImage
+            tempTint.neutral = CIVector(x: 6500, y: 0)
+            tempTint.targetNeutral = CIVector(x: 5200, y: 15)
+            if let result = tempTint.outputImage {
+                outputImage = result
+            }
+
+            // Add halation-like bloom (subtle highlight glow)
+            let bloom = CIFilter.bloom()
+            bloom.inputImage = outputImage
+            bloom.radius = 5
+            bloom.intensity = 0.3
+            if let result = bloom.outputImage {
+                outputImage = result
+            }
+
+        case .velvia50:
+            // Ultra vivid, high saturation
+            let colorControls = CIFilter.colorControls()
+            colorControls.inputImage = outputImage
+            colorControls.saturation = 1.5
+            colorControls.contrast = 1.15
+            colorControls.brightness = -0.02
+            if let result = colorControls.outputImage {
+                outputImage = result
+            }
+
+            // Boost vibrance
+            let vibrance = CIFilter.vibrance()
+            vibrance.inputImage = outputImage
+            vibrance.amount = 0.4
+            if let result = vibrance.outputImage {
+                outputImage = result
+            }
+        }
+
+        // Render the filtered image
+        guard let cgImage = ciContext.createCGImage(outputImage, from: ciImage.extent) else {
+            return image
+        }
+
+        return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
+    }
+
     func capturePhoto(completion: @escaping (UIImage?) -> Void) {
-        photoCompletionHandler = completion
+        photoCompletionHandler = { [weak self] image in
+            guard let self = self, let image = image else {
+                completion(nil)
+                return
+            }
+            // Apply film filter before returning
+            let filteredImage = self.applyFilmFilter(to: image)
+            completion(filteredImage)
+        }
 
         var settings = AVCapturePhotoSettings()
 
