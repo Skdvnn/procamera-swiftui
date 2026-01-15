@@ -518,8 +518,10 @@ struct AnalogDisplayPanel: View {
             RoundedRectangle(cornerRadius: cornerRadius)
                 .fill(Color(hex: "0d0d0d"))
 
-            // Content
+            // Content - centered vertically
             VStack(spacing: 0) {
+                Spacer(minLength: 4)
+
                 HStack(spacing: 0) {
                     // Left: Focus dial
                     FocusDial(value: $focusPosition, onChanged: onFocusChanged)
@@ -547,7 +549,7 @@ struct AnalogDisplayPanel: View {
                 }
                 .padding(.horizontal, 12)
 
-                Spacer()
+                Spacer(minLength: 2)
 
                 // Bottom label
                 HStack(spacing: 4) {
@@ -557,7 +559,7 @@ struct AnalogDisplayPanel: View {
                         .foregroundColor(.white.opacity(0.3))
                         .tracking(1)
                 }
-                .padding(.bottom, 6)
+                .padding(.bottom, 4)
             }
 
             // Inner shadow overlay (top and left edges for inset depth)

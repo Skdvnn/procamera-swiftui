@@ -141,9 +141,9 @@ struct ContentView: View {
 
             // Layout measurements - maximize viewport
             let topPanelHeight: CGFloat = 110
-            let bottomControlsHeight: CGFloat = 145  // Tight controls
-            let spacing: CGFloat = 4
-            let bottomPadding: CGFloat = 10
+            let bottomControlsHeight: CGFloat = 240  // Grid-like DSLR controls
+            let spacing: CGFloat = 6
+            let bottomPadding: CGFloat = 8
 
             // Calculate viewfinder to fill remaining space
             let availableHeight = geo.size.height - topPanelHeight - bottomControlsHeight - spacing * 2 - bottomPadding - safeTop
@@ -266,12 +266,12 @@ struct ContentView: View {
 
                     Spacer().frame(height: spacing)
 
-                    // BOTTOM CONTROLS - better spacing per Figma
+                    // BOTTOM CONTROLS - grid-like DSLR layout with equidistant spacing
                     ZStack {
                         // Grain texture for controls area
                         ControlsGrain()
 
-                        VStack(spacing: 8) {
+                        VStack(spacing: 12) {
                             // ROW 1: Zoom control (full width)
                             LensRingControl(
                                 focalLength: $focalLength,
@@ -288,11 +288,11 @@ struct ContentView: View {
                                     camera.setISO(Float(iso))
                                 }
                             )
-                            .frame(height: 42)
+                            .frame(height: 48)
                             .padding(.horizontal, DS.pageMargin)
 
-                            // ROW 2: ISO & Shutter side by side (same height as buttons)
-                            HStack(spacing: 8) {
+                            // ROW 2: ISO & Shutter side by side (bigger scrubbers)
+                            HStack(spacing: 12) {
                                 ISOScrubberHorizontal(
                                     iso: $isoValue,
                                     onChanged: { iso in
@@ -309,90 +309,88 @@ struct ContentView: View {
                                     }
                                 )
                             }
-                            .frame(height: 42)
+                            .frame(height: 48)
                             .padding(.horizontal, DS.pageMargin)
 
-                            // Extra spacing before capture row
-                            Spacer().frame(height: 8)
-
-                        // ROW 3: Main capture row with proper spacing
-                        HStack(alignment: .bottom, spacing: 0) {
-                            // Left: Flash/Thumbnail stack
-                            VStack(spacing: 8) {
-                                FlashButtonPill(flashMode: camera.flashMode) {
-                                    Haptics.click()
-                                    camera.cycleFlash()
-                                }
-
-                                ThumbnailPill(image: lastCapturedImage) {
-                                    Haptics.click()
-                                    if let url = URL(string: "photos-redirect://") {
-                                        UIApplication.shared.open(url)
-                                    }
-                                }
-                            }
-
-                            Spacer()
-
-                            // Center: Format toggle on top of shutter
-                            VStack(spacing: 6) {
-                                FormatTogglePill(format: $captureFormat) { newFormat in
-                                    // Hook up to CameraManager for actual capture format
-                                }
-
-                                ShutterButton(isCapturing: isCapturing) {
-                                    Haptics.heavy()
-                                    handleCapture()
-                                }
-                            }
-
-                            Spacer()
-
-                            // Right: Mode controls + WB
-                            VStack(spacing: 10) {
-                                // Icons + Buttons combined for perfect alignment
-                                HStack(spacing: 16) {
-                                    // Macro column
-                                    VStack(spacing: 6) {
-                                        ModeIcon(icon: "camera.macro", isActive: macroEnabled)
-                                        ModeButton(isActive: macroEnabled) {
-                                            Haptics.click()
-                                            macroEnabled.toggle()
-                                        }
+                            // ROW 3: Main capture row with proper spacing
+                            HStack(alignment: .bottom, spacing: 0) {
+                                // Left: Flash/Thumbnail stack
+                                VStack(spacing: 10) {
+                                    FlashButtonPill(flashMode: camera.flashMode) {
+                                        Haptics.click()
+                                        camera.cycleFlash()
                                     }
 
-                                    // Timer column
-                                    VStack(spacing: 6) {
-                                        ModeIcon(icon: "timer", isActive: timerSeconds > 0)
-                                        ModeButton(isActive: timerSeconds > 0) {
-                                            Haptics.click()
-                                            if timerSeconds == 0 { timerSeconds = 3 }
-                                            else if timerSeconds == 3 { timerSeconds = 10 }
-                                            else { timerSeconds = 0 }
-                                        }
-                                    }
-
-                                    // Grid column
-                                    VStack(spacing: 6) {
-                                        ModeIcon(icon: "rectangle.on.rectangle", isActive: showGrid)
-                                        ModeButton(isActive: showGrid) {
-                                            Haptics.click()
-                                            showGrid.toggle()
+                                    ThumbnailPill(image: lastCapturedImage) {
+                                        Haptics.click()
+                                        if let url = URL(string: "photos-redirect://") {
+                                            UIApplication.shared.open(url)
                                         }
                                     }
                                 }
 
-                                // WB pill below
-                                WBPill(
-                                    whiteBalanceIndex: $whiteBalanceIndex,
-                                    onChanged: { mode in
-                                        camera.setWhiteBalance(mode: mode)
+                                Spacer()
+
+                                // Center: Format toggle on top of shutter
+                                VStack(spacing: 8) {
+                                    FormatTogglePill(format: $captureFormat) { newFormat in
+                                        // Hook up to CameraManager for actual capture format
                                     }
-                                )
+
+                                    ShutterButton(isCapturing: isCapturing) {
+                                        Haptics.heavy()
+                                        handleCapture()
+                                    }
+                                }
+
+                                Spacer()
+
+                                // Right: Mode controls + WB
+                                VStack(spacing: 10) {
+                                    // Icons + Buttons combined for perfect alignment
+                                    HStack(spacing: 16) {
+                                        // Macro column
+                                        VStack(spacing: 6) {
+                                            ModeIcon(icon: "camera.macro", isActive: macroEnabled)
+                                            ModeButton(isActive: macroEnabled) {
+                                                Haptics.click()
+                                                macroEnabled.toggle()
+                                            }
+                                        }
+
+                                        // Timer column
+                                        VStack(spacing: 6) {
+                                            ModeIcon(icon: "timer", isActive: timerSeconds > 0)
+                                            ModeButton(isActive: timerSeconds > 0) {
+                                                Haptics.click()
+                                                if timerSeconds == 0 { timerSeconds = 3 }
+                                                else if timerSeconds == 3 { timerSeconds = 10 }
+                                                else { timerSeconds = 0 }
+                                            }
+                                        }
+
+                                        // Grid column
+                                        VStack(spacing: 6) {
+                                            ModeIcon(icon: "rectangle.on.rectangle", isActive: showGrid)
+                                            ModeButton(isActive: showGrid) {
+                                                Haptics.click()
+                                                showGrid.toggle()
+                                            }
+                                        }
+                                    }
+
+                                    // WB pill below
+                                    WBPill(
+                                        whiteBalanceIndex: $whiteBalanceIndex,
+                                        onChanged: { mode in
+                                            camera.setWhiteBalance(mode: mode)
+                                        }
+                                    )
+                                }
                             }
+                            .padding(.horizontal, DS.pageMargin + 4)
                         }
-                        .padding(.horizontal, DS.pageMargin + 4)
-                        }
+                        .padding(.top, 8)
                     }
                     .padding(.bottom, bottomPadding)
                 }
@@ -1423,6 +1421,10 @@ struct FlashButtonPill: View {
     let flashMode: AVCaptureDevice.FlashMode
     let action: () -> Void
 
+    // Uniform size for flash/thumbnail/WB
+    private let pillWidth: CGFloat = 88
+    private let pillHeight: CGFloat = 48
+
     private var iconColor: Color {
         switch flashMode {
         case .off: return Color(hex: "5e5e5e")
@@ -1438,24 +1440,24 @@ struct FlashButtonPill: View {
                 // Outer dark frame (Figma: pill shape r=100)
                 Capsule()
                     .fill(Color.black)
-                    .frame(width: 80, height: 42)
+                    .frame(width: pillWidth, height: pillHeight)
 
                 // Inner frame (Figma: #2c2c2c fill)
                 Capsule()
                     .fill(Color(hex: "2c2c2c"))
-                    .frame(width: 76, height: 38)
+                    .frame(width: pillWidth - 4, height: pillHeight - 4)
 
                 // Inner stroke (Figma: #444444)
                 Capsule()
                     .stroke(Color(hex: "444444"), lineWidth: 0.5)
-                    .frame(width: 76, height: 38)
+                    .frame(width: pillWidth - 4, height: pillHeight - 4)
 
                 // Lightning bolt icon
                 Image(systemName: "bolt.fill")
-                    .font(.system(size: 16, weight: .medium))
+                    .font(.system(size: 18, weight: .medium))
                     .foregroundColor(iconColor)
             }
-            .frame(width: 80, height: 42)
+            .frame(width: pillWidth, height: pillHeight)
         }
         .buttonStyle(ProButtonStyle())
     }
@@ -1538,38 +1540,42 @@ struct ThumbnailPill: View {
     let image: UIImage?
     let action: () -> Void
 
+    // Uniform size for flash/thumbnail/WB
+    private let pillWidth: CGFloat = 88
+    private let pillHeight: CGFloat = 48
+
     var body: some View {
         Button(action: action) {
             ZStack {
                 // Outer dark frame (Figma: r=27)
-                RoundedRectangle(cornerRadius: 21)
+                RoundedRectangle(cornerRadius: 24)
                     .fill(Color.black)
-                    .frame(width: 80, height: 42)
+                    .frame(width: pillWidth, height: pillHeight)
 
                 // Inner frame
-                RoundedRectangle(cornerRadius: 19)
+                RoundedRectangle(cornerRadius: 22)
                     .fill(Color(hex: "2c2c2c"))
-                    .frame(width: 76, height: 38)
+                    .frame(width: pillWidth - 4, height: pillHeight - 4)
 
                 // Inner stroke
-                RoundedRectangle(cornerRadius: 19)
+                RoundedRectangle(cornerRadius: 22)
                     .stroke(Color(hex: "444444"), lineWidth: 0.5)
-                    .frame(width: 76, height: 38)
+                    .frame(width: pillWidth - 4, height: pillHeight - 4)
 
                 // Image or placeholder
                 if let img = image {
                     Image(uiImage: img)
                         .resizable()
                         .aspectRatio(contentMode: .fill)
-                        .frame(width: 68, height: 30)
-                        .clipShape(RoundedRectangle(cornerRadius: 15))
+                        .frame(width: pillWidth - 12, height: pillHeight - 12)
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
                 } else {
                     Image(systemName: "photo.stack")
-                        .font(.system(size: 14, weight: .medium))
+                        .font(.system(size: 16, weight: .medium))
                         .foregroundColor(Color(hex: "5e5e5e"))
                 }
             }
-            .frame(width: 80, height: 42)
+            .frame(width: pillWidth, height: pillHeight)
         }
         .buttonStyle(.plain)
     }
@@ -1580,6 +1586,10 @@ struct FormatTogglePill: View {
     @Binding var format: CaptureFormat
     let onChanged: (CaptureFormat) -> Void
 
+    // Width matches shutter button (72px)
+    private let toggleWidth: CGFloat = 72
+    private let toggleHeight: CGFloat = 28
+
     var body: some View {
         Button(action: {
             Haptics.click()
@@ -1588,26 +1598,26 @@ struct FormatTogglePill: View {
         }) {
             ZStack {
                 // Outer dark frame
-                RoundedRectangle(cornerRadius: 16)
+                RoundedRectangle(cornerRadius: 14)
                     .fill(Color.black)
-                    .frame(width: 56, height: 32)
+                    .frame(width: toggleWidth, height: toggleHeight)
 
                 // Inner frame
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: 12)
                     .fill(Color(hex: "2c2c2c"))
-                    .frame(width: 52, height: 28)
+                    .frame(width: toggleWidth - 4, height: toggleHeight - 4)
 
                 // Inner stroke
-                RoundedRectangle(cornerRadius: 14)
+                RoundedRectangle(cornerRadius: 12)
                     .stroke(Color(hex: "444444"), lineWidth: 0.5)
-                    .frame(width: 52, height: 28)
+                    .frame(width: toggleWidth - 4, height: toggleHeight - 4)
 
                 // Format label
                 Text(format.label)
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
                     .foregroundColor(format == .raw ? DS.accent : .white)
             }
-            .frame(width: 56, height: 32)
+            .frame(width: toggleWidth, height: toggleHeight)
         }
         .buttonStyle(.plain)
     }
@@ -1790,8 +1800,9 @@ struct WBPill: View {
     let onChanged: (Int) -> Void
 
     private let wbModes = ["Auto", "Sun", "Cloud", "Shade", "Lamp", "Fluo"]
-    // Width to align flush with first/last mode button (3 * 16px + 2 * 16px spacing = 80px)
-    private let pillWidth: CGFloat = 80
+    // Uniform size for flash/thumbnail/WB
+    private let pillWidth: CGFloat = 88
+    private let pillHeight: CGFloat = 48
 
     var body: some View {
         Button(action: {
@@ -1803,16 +1814,16 @@ struct WBPill: View {
                 // Outer frame (pill shape)
                 Capsule()
                     .fill(Color.black)
-                    .frame(width: pillWidth, height: 38)
+                    .frame(width: pillWidth, height: pillHeight)
 
                 // Inner frame
                 Capsule()
                     .fill(Color(hex: "2c2c2c"))
-                    .frame(width: pillWidth - 4, height: 34)
+                    .frame(width: pillWidth - 4, height: pillHeight - 4)
 
                 Capsule()
                     .stroke(Color(hex: "444444"), lineWidth: 0.5)
-                    .frame(width: pillWidth - 4, height: 34)
+                    .frame(width: pillWidth - 4, height: pillHeight - 4)
 
                 // Text
                 HStack(spacing: 4) {
@@ -1824,7 +1835,7 @@ struct WBPill: View {
                         .foregroundColor(.white.opacity(0.6))
                 }
             }
-            .frame(width: pillWidth, height: 38)
+            .frame(width: pillWidth, height: pillHeight)
         }
         .buttonStyle(.plain)
     }
