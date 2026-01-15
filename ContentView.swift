@@ -196,53 +196,71 @@ struct ContentView: View {
 
                     Spacer().frame(height: spacing)
 
-                    // VIEWFINDER - with 20px margins for camera body look
+                    // VIEWFINDER - DSLR-style inset look
                     ZStack {
-                        CameraPreviewView(
-                            session: camera.session,
-                            onTap: handleFocusTap,
-                            onPinch: { scale in
-                                guard !isLocked else { return }
-                                Haptics.light()
-                                let newZoom = zoomValue * scale
-                                zoomValue = min(max(newZoom, 1.0), 5.0)
-                                camera.setZoom(zoomValue)
-                                if !isManualFocusEnabled {
-                                    focusPosition = Float(zoomValue - 1) / 4.0
+                        // Outer inset frame (dark border for recessed look)
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(Color(hex: "0a0a0a"))
+
+                        // Inner shadow effect
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(Color.black, lineWidth: 3)
+                            .blur(radius: 2)
+                            .offset(y: 1)
+
+                        // Inner border
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(Color(hex: "1a1a1a"), lineWidth: 1)
+
+                        // Actual viewfinder content
+                        ZStack {
+                            CameraPreviewView(
+                                session: camera.session,
+                                onTap: handleFocusTap,
+                                onPinch: { scale in
+                                    guard !isLocked else { return }
+                                    Haptics.light()
+                                    let newZoom = zoomValue * scale
+                                    zoomValue = min(max(newZoom, 1.0), 5.0)
+                                    camera.setZoom(zoomValue)
+                                    if !isManualFocusEnabled {
+                                        focusPosition = Float(zoomValue - 1) / 4.0
+                                    }
                                 }
-                            }
-                        )
-
-                        ViewfinderOverlay(showGrid: showGrid, aspectRatio: $aspectRatio, filmFilter: $filmFilter)
-                        ViewfinderVignette()
-
-                        if showFocusPoint {
-                            FocusIndicator().position(focusPoint)
-                        }
-
-                        if timerCountdown > 0 {
-                            Text("\(timerCountdown)")
-                                .font(.system(size: 80, weight: .thin, design: .monospaced))
-                                .foregroundColor(.white.opacity(0.9))
-                        }
-
-                        VStack {
-                            Spacer()
-                            RefractiveGlassInfoBar(
-                                iso: isoValue,
-                                shutterSpeed: computeShutterSpeed(),
-                                aperture: apertureValue,
-                                photoCount: photoCount,
-                                exposureValue: exposureValue,
-                                captureFormat: captureFormat
                             )
-                            .padding(.horizontal, 12)
-                            .padding(.bottom, 8)
+
+                            ViewfinderOverlay(showGrid: showGrid, aspectRatio: $aspectRatio, filmFilter: $filmFilter)
+                            ViewfinderVignette()
+
+                            if showFocusPoint {
+                                FocusIndicator().position(focusPoint)
+                            }
+
+                            if timerCountdown > 0 {
+                                Text("\(timerCountdown)")
+                                    .font(.system(size: 80, weight: .thin, design: .monospaced))
+                                    .foregroundColor(.white.opacity(0.9))
+                            }
+
+                            VStack {
+                                Spacer()
+                                RefractiveGlassInfoBar(
+                                    iso: isoValue,
+                                    shutterSpeed: computeShutterSpeed(),
+                                    aperture: apertureValue,
+                                    photoCount: photoCount,
+                                    exposureValue: exposureValue,
+                                    captureFormat: captureFormat
+                                )
+                                .padding(.horizontal, 12)
+                                .padding(.bottom, 8)
+                            }
                         }
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .padding(4)
                     }
                     .frame(height: viewfinderHeight)
                     .frame(maxWidth: .infinity)
-                    .clipShape(RoundedRectangle(cornerRadius: DS.radiusMedium))
                     .padding(.horizontal, DS.pageMargin)
 
                     Spacer().frame(height: spacing)
@@ -300,29 +318,29 @@ struct ContentView: View {
                         ZStack {
                             // Background layer: Left stack + Right WB with icons
                             HStack(alignment: .bottom, spacing: 0) {
-                                // Left: Flash pill and Thumbnail pill (stacked)
-                                VStack(spacing: 8) {
-                                    FlashButtonPill(flashMode: camera.flashMode) {
-                                        Haptics.click()
-                                        camera.cycleFlash()
-                                    }
+                                // Left: Flash/Thumbnail stack + Format toggle
+                                HStack(alignment: .center, spacing: 12) {
+                                    VStack(spacing: 8) {
+                                        FlashButtonPill(flashMode: camera.flashMode) {
+                                            Haptics.click()
+                                            camera.cycleFlash()
+                                        }
 
-                                    ThumbnailPill(image: lastCapturedImage) {
-                                        Haptics.click()
-                                        if let url = URL(string: "photos-redirect://") {
-                                            UIApplication.shared.open(url)
+                                        ThumbnailPill(image: lastCapturedImage) {
+                                            Haptics.click()
+                                            if let url = URL(string: "photos-redirect://") {
+                                                UIApplication.shared.open(url)
+                                            }
                                         }
                                     }
-                                }
 
-                                // Format toggle between left controls and shutter
-                                Spacer()
-                                FormatTogglePill(format: $captureFormat) { newFormat in
-                                    // Hook up to CameraManager for actual capture format
+                                    // Format toggle (vertical, to right of flash/thumbnail)
+                                    FormatTogglePill(format: $captureFormat) { newFormat in
+                                        // Hook up to CameraManager for actual capture format
+                                    }
+                                    .rotationEffect(.degrees(-90))
+                                    .fixedSize()
                                 }
-                                .rotationEffect(.degrees(-90))
-                                .fixedSize()
-                                .padding(.trailing, 24)
 
                                 Spacer()
 

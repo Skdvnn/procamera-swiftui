@@ -432,48 +432,43 @@ struct InfoBar: View {
     }
 }
 
-// MARK: - Film Picker (matches app design system)
+// MARK: - Film Picker (DSLR-style inset menu)
 struct LeicaFilmPicker: View {
     @Binding var selectedFilter: FilmFilterMode
     @Binding var isPresented: Bool
 
-    // Match app design system colors
-    private let pageBg = Color(red: 0.09, green: 0.09, blue: 0.09)      // #171717
-    private let controlBg = Color(red: 0.17, green: 0.17, blue: 0.17)   // #2c2c2c
-    private let strokeColor = Color(red: 0.27, green: 0.27, blue: 0.27) // #444444
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
 
     var body: some View {
         ZStack {
             // Tap outside to dismiss
-            Color.black.opacity(0.5)
+            Color.black.opacity(0.6)
                 .ignoresSafeArea()
                 .onTapGesture {
                     VFHaptics.click()
                     isPresented = false
                 }
 
-            // Film picker panel - matches app control styling
+            // DSLR-style inset panel
             VStack(spacing: 0) {
-                // Header
+                // Header with inset style
                 HStack {
-                    Text("FILM")
-                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.4))
+                    Text("FILM SIMULATION")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.5))
                     Spacer()
-                    Button(action: {
-                        VFHaptics.click()
-                        isPresented = false
-                    }) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.white.opacity(0.5))
-                    }
                 }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
+                .padding(.bottom, 6)
 
-                // Film options
+                // Separator line
+                Rectangle()
+                    .fill(Color(hex: "2a2a2a"))
+                    .frame(height: 1)
+                    .padding(.horizontal, 8)
+
+                // Film options - DSLR list style
                 ForEach(FilmFilterMode.allCases, id: \.self) { filter in
                     Button(action: {
                         VFHaptics.click()
@@ -482,63 +477,74 @@ struct LeicaFilmPicker: View {
                             isPresented = false
                         }
                     }) {
-                        HStack(spacing: 10) {
-                            // Color swatch - small rounded rect
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(swatchColor(for: filter))
-                                .frame(width: 20, height: 14)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 2)
-                                        .stroke(strokeColor, lineWidth: 0.5)
-                                )
+                        HStack(spacing: 8) {
+                            // Selection indicator bracket
+                            Text(selectedFilter == filter ? ">" : " ")
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundColor(accent)
+                                .frame(width: 12)
 
                             // Film name
-                            Text(filter.name)
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(selectedFilter == filter ? .white : .white.opacity(0.7))
+                            Text(filter.name.uppercased())
+                                .font(.system(size: 11, weight: selectedFilter == filter ? .semibold : .regular, design: .monospaced))
+                                .foregroundColor(selectedFilter == filter ? .white : .white.opacity(0.6))
 
                             Spacer()
 
-                            // Selected indicator dot
-                            if selectedFilter == filter {
-                                Circle()
-                                    .fill(accent)
-                                    .frame(width: 5, height: 5)
+                            // ISO indicator for film types
+                            if filter != .none {
+                                Text(isoLabel(for: filter))
+                                    .font(.system(size: 9, weight: .regular, design: .monospaced))
+                                    .foregroundColor(.white.opacity(0.3))
                             }
                         }
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(selectedFilter == filter ? Color.white.opacity(0.08) : Color.clear)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(selectedFilter == filter ? Color.white.opacity(0.05) : Color.clear)
                     }
                     .buttonStyle(.plain)
                 }
+
+                Spacer().frame(height: 6)
             }
             .background(
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(controlBg)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(strokeColor, lineWidth: 0.5)
+                ZStack {
+                    // Outer frame (inset look)
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color(hex: "0a0a0a"))
+
+                    // Inner shadow
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color.black, lineWidth: 2)
+                        .blur(radius: 1)
+
+                    // Outer border
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(Color(hex: "1a1a1a"), lineWidth: 1)
+
+                    // Inner content
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(Color(hex: "0d0d0d"))
+                        .padding(2)
+
+                    // Inner border
+                    RoundedRectangle(cornerRadius: 6)
+                        .stroke(Color(hex: "252525"), lineWidth: 0.5)
+                        .padding(2)
+                }
             )
             .frame(width: 180)
         }
     }
 
-    private func swatchColor(for filter: FilmFilterMode) -> LinearGradient {
+    private func isoLabel(for filter: FilmFilterMode) -> String {
         switch filter {
-        case .none:
-            return LinearGradient(colors: [.gray.opacity(0.3), .gray.opacity(0.5)], startPoint: .topLeading, endPoint: .bottomTrailing)
-        case .portra400:
-            return LinearGradient(colors: [Color(red: 0.95, green: 0.85, blue: 0.75), Color(red: 0.85, green: 0.70, blue: 0.55)], startPoint: .topLeading, endPoint: .bottomTrailing)
-        case .kodakGold:
-            return LinearGradient(colors: [Color(red: 1.0, green: 0.85, blue: 0.4), Color(red: 0.95, green: 0.65, blue: 0.2)], startPoint: .topLeading, endPoint: .bottomTrailing)
-        case .trix400:
-            return LinearGradient(colors: [.white, .gray], startPoint: .topLeading, endPoint: .bottomTrailing)
-        case .velvia50:
-            return LinearGradient(colors: [Color(red: 0.2, green: 0.7, blue: 0.4), Color(red: 0.1, green: 0.4, blue: 0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
-        case .cinestill800:
-            return LinearGradient(colors: [Color(red: 0.3, green: 0.5, blue: 0.7), Color(red: 0.6, green: 0.3, blue: 0.5)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        case .none: return ""
+        case .portra400: return "400"
+        case .kodakGold: return "200"
+        case .trix400: return "400"
+        case .velvia50: return "50"
+        case .cinestill800: return "800T"
         }
     }
 }

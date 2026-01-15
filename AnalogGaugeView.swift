@@ -514,20 +514,29 @@ struct AnalogDisplayPanel: View {
 
     var body: some View {
         ZStack {
-            // Dark background with 10px corners
+            // Outer dark frame (inset look like viewfinder)
             RoundedRectangle(cornerRadius: cornerRadius)
-                .fill(Color(hex: "0d0d0d"))
+                .fill(Color(hex: "0a0a0a"))
 
-            // Subtle border
+            // Inner shadow for depth
             RoundedRectangle(cornerRadius: cornerRadius)
-                .stroke(
-                    LinearGradient(
-                        colors: [Color.white.opacity(0.1), Color.white.opacity(0.03)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    ),
-                    lineWidth: 1
-                )
+                .stroke(Color.black, lineWidth: 2)
+                .blur(radius: 1)
+                .offset(y: 0.5)
+
+            // Outer border (dark)
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .stroke(Color(hex: "1a1a1a"), lineWidth: 1)
+
+            // Inner content area
+            RoundedRectangle(cornerRadius: cornerRadius - 2)
+                .fill(Color(hex: "0d0d0d"))
+                .padding(3)
+
+            // Inner border (subtle highlight)
+            RoundedRectangle(cornerRadius: cornerRadius - 2)
+                .stroke(Color(hex: "2a2a2a"), lineWidth: 0.5)
+                .padding(3)
 
             HStack(spacing: 0) {
                 // Left: Focus dial
