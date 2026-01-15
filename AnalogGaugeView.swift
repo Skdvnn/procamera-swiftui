@@ -3,7 +3,7 @@ import UIKit
 
 // Uses Haptics, Triangle, and Color(hex:) from ContentView.swift
 
-// MARK: - Focus Dial (cohesive with controls)
+// MARK: - Focus Dial (premium Leica/Nikon style)
 struct FocusDial: View {
     @Binding var value: Float
     let onChanged: (Float) -> Void
@@ -19,65 +19,72 @@ struct FocusDial: View {
             let radius = size * 0.42
 
             ZStack {
-                // Outer dark frame (matches WB style)
+                // Outer bezel (pure black, premium)
                 Circle()
                     .fill(Color.black)
 
-                // Inner frame (matches controls #2c2c2c)
+                // Knurled grip texture ring
                 Circle()
-                    .fill(Color(hex: "2c2c2c"))
-                    .padding(2)
+                    .stroke(Color(hex: "0f0f0f"), lineWidth: 2)
+                    .padding(1)
 
-                // Inner stroke
+                // Inner bezel highlight
                 Circle()
-                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
-                    .padding(2)
+                    .stroke(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.08), Color.black],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 0.5
+                    )
+                    .padding(3)
 
-                // Dial face (subtle, not too dark)
+                // Dial face (pure black)
                 Circle()
-                    .fill(Color(hex: "252525"))
-                    .padding(5)
+                    .fill(Color.black)
+                    .padding(4)
 
-                // Tick marks (Figma style - clean white)
+                // Tick marks (Leica-style - crisp white)
                 ForEach(0..<25, id: \.self) { i in
                     let angle = -150.0 + Double(i) * 12.5
                     let isMajor = i % 4 == 0
 
                     Rectangle()
-                        .fill(Color.white.opacity(isMajor ? 0.7 : 0.25))
+                        .fill(Color.white.opacity(isMajor ? 0.85 : 0.3))
                         .frame(width: isMajor ? 1.5 : 1, height: isMajor ? 10 : 5)
                         .offset(y: -radius + (isMajor ? 5 : 2.5))
                         .rotationEffect(.degrees(angle))
                 }
 
-                // Labels (Figma: white, monospace)
+                // Labels (white, monospace)
                 ForEach(marks.indices, id: \.self) { i in
                     let mark = marks[i]
                     let angle = -150.0 + Double(mark.1) * 300.0
                     let labelRadius = radius * 0.62
 
                     Text(mark.0)
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.85))
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.9))
                         .position(
                             x: center.x + labelRadius * cos(angle * .pi / 180),
                             y: center.y + labelRadius * sin(angle * .pi / 180)
                         )
                 }
 
-                // Needle (Figma: clean white)
+                // Needle (clean white with glow)
                 NeedleShape(length: radius * 0.7)
                     .fill(Color.white)
-                    .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
+                    .shadow(color: .black.opacity(0.8), radius: 2, y: 1)
                     .rotationEffect(.degrees(-150 + Double(value) * 300))
 
-                // Center hub (small, dark)
+                // Center hub (Leica-style)
                 Circle()
-                    .fill(Color(hex: "1a1a1a"))
+                    .fill(Color(hex: "0a0a0a"))
                     .frame(width: 10, height: 10)
-                    .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 0.5))
+                    .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 0.5))
 
-                // Red indicator at bottom (Figma)
+                // Red indicator dot at bottom
                 Circle()
                     .fill(Color.red)
                     .frame(width: 5, height: 5)
@@ -117,7 +124,7 @@ struct FocusDial: View {
     }
 }
 
-// MARK: - Shutter Speed Dial (real iOS control)
+// MARK: - Shutter Speed Dial (premium Leica/Nikon style)
 struct ShutterSpeedDial: View {
     @Binding var value: Int  // Index into shutter speeds array
     let onChanged: (Int) -> Void
@@ -139,62 +146,69 @@ struct ShutterSpeedDial: View {
             let radius = size * 0.42
 
             ZStack {
-                // Outer dark frame (matches WB style)
+                // Outer bezel (pure black, premium)
                 Circle()
                     .fill(Color.black)
 
-                // Inner frame (matches controls #2c2c2c)
+                // Knurled grip texture ring
                 Circle()
-                    .fill(Color(hex: "2c2c2c"))
-                    .padding(2)
+                    .stroke(Color(hex: "0f0f0f"), lineWidth: 2)
+                    .padding(1)
 
-                // Inner stroke
+                // Inner bezel highlight
                 Circle()
-                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
-                    .padding(2)
+                    .stroke(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.08), Color.black],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 0.5
+                    )
+                    .padding(3)
 
-                // Dial face (subtle, not too dark)
+                // Dial face (pure black)
                 Circle()
-                    .fill(Color(hex: "252525"))
-                    .padding(5)
+                    .fill(Color.black)
+                    .padding(4)
 
-                // Tick marks - 8 major for each shutter speed
+                // Tick marks - 8 major for each shutter speed (crisp white)
                 ForEach(0..<8, id: \.self) { i in
                     let angle = -150.0 + Double(i) * (300.0 / 7.0)
 
                     Rectangle()
-                        .fill(Color.white.opacity(0.7))
+                        .fill(Color.white.opacity(0.85))
                         .frame(width: 1.5, height: 10)
                         .offset(y: -radius + 5)
                         .rotationEffect(.degrees(angle))
                 }
 
-                // Labels
+                // Labels (white, semibold)
                 ForEach(marks.indices, id: \.self) { i in
                     let mark = marks[i]
                     let angle = -150.0 + Double(mark.1) * 300.0
                     let labelRadius = radius * 0.60
 
                     Text(mark.0)
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.85))
+                        .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.9))
                         .position(
                             x: center.x + labelRadius * cos(angle * .pi / 180),
                             y: center.y + labelRadius * sin(angle * .pi / 180)
                         )
                 }
 
-                // Needle
+                // Needle (clean white with glow)
                 NeedleShape(length: radius * 0.7)
                     .fill(Color.white)
-                    .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
+                    .shadow(color: .black.opacity(0.8), radius: 2, y: 1)
                     .rotationEffect(.degrees(-150 + Double(normalizedValue) * 300))
 
-                // Center hub
+                // Center hub (Leica-style)
                 Circle()
-                    .fill(Color(hex: "1a1a1a"))
+                    .fill(Color(hex: "0a0a0a"))
                     .frame(width: 10, height: 10)
-                    .overlay(Circle().stroke(Color.white.opacity(0.2), lineWidth: 0.5))
+                    .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 0.5))
             }
             .position(center)
             .contentShape(Circle().scale(1.3))

@@ -226,12 +226,12 @@ struct ContentView: View {
 
                     Spacer().frame(height: spacing)
 
-                    // BOTTOM CONTROLS - tight layout with grain
+                    // BOTTOM CONTROLS - better spacing per Figma
                     ZStack {
                         // Grain texture for controls area
                         ControlsGrain()
 
-                        VStack(spacing: 5) {
+                        VStack(spacing: 8) {
                             // ROW 1: Zoom control (full width)
                             LensRingControl(
                                 focalLength: $focalLength,
@@ -272,6 +272,9 @@ struct ContentView: View {
                             .frame(height: 42)
                             .padding(.horizontal, DS.pageMargin)
 
+                            // Extra spacing before capture row
+                            Spacer().frame(height: 8)
+
                         // ROW 3: Main capture row with proper spacing
                         ZStack {
                             // Background layer: Left stack + Right WB with icons
@@ -288,33 +291,41 @@ struct ContentView: View {
 
                                 Spacer()
 
-                                // Right: Mode icons above WB pill
-                                VStack(spacing: 8) {
-                                    // Mode icons row (Macro, Timer, Film)
-                                    HStack(spacing: 6) {
-                                        ModeIconButton(icon: "camera.macro", isActive: macroEnabled) {
-                                            Haptics.click()
-                                            macroEnabled.toggle()
+                                // Right: Mode controls per Figma (icons centered above buttons)
+                                VStack(spacing: 10) {
+                                    // Icons + Buttons combined for perfect alignment
+                                    HStack(spacing: 16) {
+                                        // Macro column
+                                        VStack(spacing: 6) {
+                                            ModeIcon(icon: "camera.macro", isActive: macroEnabled)
+                                            ModeButton(isActive: macroEnabled) {
+                                                Haptics.click()
+                                                macroEnabled.toggle()
+                                            }
                                         }
 
-                                        ModeIconButton(icon: "timer", isActive: timerSeconds > 0) {
-                                            Haptics.click()
-                                            if timerSeconds == 0 { timerSeconds = 3 }
-                                            else if timerSeconds == 3 { timerSeconds = 10 }
-                                            else { timerSeconds = 0 }
+                                        // Timer column
+                                        VStack(spacing: 6) {
+                                            ModeIcon(icon: "timer", isActive: timerSeconds > 0)
+                                            ModeButton(isActive: timerSeconds > 0) {
+                                                Haptics.click()
+                                                if timerSeconds == 0 { timerSeconds = 3 }
+                                                else if timerSeconds == 3 { timerSeconds = 10 }
+                                                else { timerSeconds = 0 }
+                                            }
                                         }
 
-                                        ModeIconButton(icon: "film", isActive: filmFilter != .none) {
-                                            Haptics.click()
-                                            // Cycle through film filters
-                                            let filters = FilmFilterMode.allCases
-                                            if let idx = filters.firstIndex(of: filmFilter) {
-                                                filmFilter = filters[(idx + 1) % filters.count]
+                                        // Grid column
+                                        VStack(spacing: 6) {
+                                            ModeIcon(icon: "rectangle.on.rectangle", isActive: showGrid)
+                                            ModeButton(isActive: showGrid) {
+                                                Haptics.click()
+                                                showGrid.toggle()
                                             }
                                         }
                                     }
 
-                                    // WB pill below icons
+                                    // WB pill below with spacing
                                     WBPill(
                                         whiteBalanceIndex: $whiteBalanceIndex,
                                         onChanged: { mode in
@@ -346,6 +357,17 @@ struct ContentView: View {
         .preferredColorScheme(.dark)
         .statusBarHidden(false)
         .onAppear { camera.checkPermissions() }
+        .onChange(of: filmFilter) { newFilter in
+            // Sync UI film filter to CameraManager
+            switch newFilter {
+            case .none: camera.selectedFilmFilter = .none
+            case .portra400: camera.selectedFilmFilter = .portra400
+            case .kodakGold: camera.selectedFilmFilter = .ektar100  // Map to similar
+            case .trix400: camera.selectedFilmFilter = .trix400
+            case .velvia50: camera.selectedFilmFilter = .velvia50
+            case .cinestill800: camera.selectedFilmFilter = .cinestill800
+            }
+        }
     }
 
     // MARK: - Helpers
@@ -644,12 +666,14 @@ struct ISOScrubberHorizontal: View {
                     .stroke(Color(hex: "444444"), lineWidth: 0.5)
                     .padding(2)
 
-                // Tick marks at bottom
+                // Tick marks at bottom with yellow center indicator
                 Canvas { ctx, size in
                     let tickCount = 16
                     let usableWidth = size.width - 24
                     let spacing = usableWidth / CGFloat(tickCount - 1)
                     let offset = dragOffset * 0.08
+                    let centerX = size.width / 2
+
                     for i in 0..<tickCount {
                         let x = 12 + CGFloat(i) * spacing + offset
                         guard x >= 6 && x <= size.width - 6 else { continue }
@@ -658,9 +682,20 @@ struct ISOScrubberHorizontal: View {
                         let rect = CGRect(x: x - 0.5, y: size.height - h - 4, width: 1, height: h)
                         ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.25 : 0.1)))
                     }
+
+                    // Yellow center indicator line (grows when dragging)
+                    let indicatorHeight: CGFloat = isDragging ? 14 : 10
+                    let indicatorWidth: CGFloat = isDragging ? 2.5 : 2
+                    let indicatorRect = CGRect(
+                        x: centerX - indicatorWidth / 2,
+                        y: size.height - indicatorHeight - 2,
+                        width: indicatorWidth,
+                        height: indicatorHeight
+                    )
+                    ctx.fill(Path(indicatorRect), with: .color(Color(red: 1.0, green: 0.85, blue: 0.35)))
                 }
 
-                // Content with prev/next values
+                // Content with prev/next values (yellow when active)
                 HStack(spacing: 0) {
                     Text(prevISO)
                         .font(DS.mono(9, weight: .medium))
@@ -672,10 +707,10 @@ struct ISOScrubberHorizontal: View {
                     HStack(spacing: 2) {
                         Text("ISO")
                             .font(DS.mono(8, weight: .medium))
-                            .foregroundColor(DS.textSecondary)
+                            .foregroundColor(isDragging ? DS.accent : DS.textSecondary)
                         Text("\(iso)")
                             .font(DS.mono(11, weight: .bold))
-                            .foregroundColor(.white)
+                            .foregroundColor(isDragging ? DS.accent : .white)
                             .frame(minWidth: 32, alignment: .center)
                     }
 
@@ -689,6 +724,7 @@ struct ISOScrubberHorizontal: View {
                 .padding(.horizontal, 4)
                 .padding(.bottom, 6)
             }
+            .animation(.easeOut(duration: 0.15), value: isDragging)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture()
@@ -728,6 +764,7 @@ struct LensRingControl: View {
 
     @State private var tickOffset: CGFloat = 0
     @State private var accumulatedDrag: CGFloat = 0
+    @State private var isDragging = false
 
     private var currentIndex: Int {
         focalLengths.firstIndex(of: focalLength) ?? 0
@@ -758,12 +795,14 @@ struct LensRingControl: View {
                     .stroke(Color(hex: "444444"), lineWidth: 0.5)
                     .padding(2)
 
-                // Tick marks at bottom
+                // Tick marks at bottom with yellow center indicator
                 Canvas { ctx, size in
                     let tickCount = 20
                     let usableWidth = size.width - 24
                     let spacing = usableWidth / CGFloat(tickCount - 1)
                     let offset = tickOffset * 0.08
+                    let centerX = size.width / 2
+
                     for i in 0..<tickCount {
                         let x = 12 + CGFloat(i) * spacing + offset
                         guard x >= 6 && x <= size.width - 6 else { continue }
@@ -772,9 +811,20 @@ struct LensRingControl: View {
                         let rect = CGRect(x: x - 0.5, y: size.height - h - 4, width: 1, height: h)
                         ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.25 : 0.1)))
                     }
+
+                    // Yellow center indicator (grows when dragging)
+                    let indicatorHeight: CGFloat = isDragging ? 14 : 10
+                    let indicatorWidth: CGFloat = isDragging ? 2.5 : 2
+                    let indicatorRect = CGRect(
+                        x: centerX - indicatorWidth / 2,
+                        y: size.height - indicatorHeight - 2,
+                        width: indicatorWidth,
+                        height: indicatorHeight
+                    )
+                    ctx.fill(Path(indicatorRect), with: .color(Color(red: 1.0, green: 0.85, blue: 0.35)))
                 }
 
-                // Content with prev/next values
+                // Content with prev/next values (yellow when active)
                 HStack(spacing: 0) {
                     Text(prevFocalLength)
                         .font(DS.mono(9, weight: .medium))
@@ -785,8 +835,8 @@ struct LensRingControl: View {
 
                     Text("\(focalLength)MM")
                         .font(DS.mono(11, weight: .bold))
-                        .foregroundColor(.white)
-                        .frame(minWidth: 50, alignment: .center)
+                        .foregroundColor(isDragging ? DS.accent : .white)
+                        .frame(width: 50, alignment: .center)
 
                     Spacer()
 
@@ -798,10 +848,12 @@ struct LensRingControl: View {
                 .padding(.horizontal, 6)
                 .padding(.bottom, 6)
             }
+            .animation(.easeOut(duration: 0.15), value: isDragging)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture()
                     .onChanged { value in
+                        if !isDragging { isDragging = true }
                         tickOffset = value.translation.width
 
                         let stepWidth: CGFloat = 45
@@ -830,6 +882,7 @@ struct LensRingControl: View {
                         }
                     }
                     .onEnded { _ in
+                        isDragging = false
                         accumulatedDrag = 0
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
                             tickOffset = 0
@@ -1334,36 +1387,75 @@ struct FlashButtonPill: View {
     }
 }
 
-// MARK: - Mode Icon Button (Circular button for Macro, Timer, etc.)
+// MARK: - Mode Icon (small icon above button - only icon turns yellow when active)
+struct ModeIcon: View {
+    let icon: String
+    let isActive: Bool
+
+    var body: some View {
+        Image(systemName: icon)
+            .font(.system(size: 14, weight: .regular))
+            .foregroundColor(isActive ? DS.accent : Color(hex: "5e5e5e"))
+            .frame(width: 22, height: 18)  // Match button width for alignment
+    }
+}
+
+// MARK: - Mode Button (gray when off, lighter when on - NOT yellow)
+struct ModeButton: View {
+    let isActive: Bool
+    let action: () -> Void
+
+    // Figma size: approximately 22px diameter
+    private let size: CGFloat = 22
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                // Button background: darker gray when off, lighter when on
+                Circle()
+                    .fill(isActive ? Color(red: 0.25, green: 0.25, blue: 0.25) : Color(red: 0.17, green: 0.17, blue: 0.17))
+
+                // Inner stroke: lighter when active
+                Circle()
+                    .stroke(isActive ? Color(red: 0.38, green: 0.38, blue: 0.38) : Color(red: 0.27, green: 0.27, blue: 0.27), lineWidth: 0.5)
+                    .padding(0.5)
+            }
+            .frame(width: size, height: size)
+            // Subtle shadows for depth
+            .shadow(color: Color(red: 0.03, green: 0.03, blue: 0.03).opacity(0.25), radius: 1, x: 0, y: 0.8)
+            .shadow(color: .black.opacity(0.2), radius: 0.5, x: 0, y: -0.3)
+        }
+        .buttonStyle(ProButtonStyle())
+    }
+}
+
+// MARK: - Mode Icon Button (Combined for backwards compat)
 struct ModeIconButton: View {
     let icon: String
     let isActive: Bool
     let action: () -> Void
 
+    private let size: CGFloat = 22
+
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Outer dark frame
                 Circle()
-                    .fill(Color.black)
-                    .frame(width: 32, height: 32)
+                    .fill(Color(red: 0.17, green: 0.17, blue: 0.17))
 
-                // Inner frame
                 Circle()
-                    .fill(Color(hex: "2c2c2c"))
-                    .frame(width: 28, height: 28)
+                    .stroke(Color(red: 0.27, green: 0.27, blue: 0.27), lineWidth: 0.5)
+                    .padding(0.5)
 
-                // Inner stroke
-                Circle()
-                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
-                    .frame(width: 28, height: 28)
-
-                // Icon
-                Image(systemName: icon)
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(isActive ? DS.accent : Color(hex: "5e5e5e"))
+                if isActive {
+                    Circle()
+                        .fill(DS.accent.opacity(0.2))
+                        .padding(3)
+                }
             }
-            .frame(width: 32, height: 32)
+            .frame(width: size, height: size)
+            .shadow(color: Color(red: 0.03, green: 0.03, blue: 0.03).opacity(0.25), radius: 1, x: 0, y: 0.8)
+            .shadow(color: .black.opacity(0.2), radius: 0.5, x: 0, y: -0.3)
         }
         .buttonStyle(ProButtonStyle())
     }
@@ -2360,12 +2452,14 @@ struct ShutterScrubber: View {
                     .stroke(Color(hex: "444444"), lineWidth: 0.5)
                     .padding(2)
 
-                // Tick marks at bottom
+                // Tick marks at bottom with yellow center indicator
                 Canvas { ctx, size in
                     let tickCount = 16
                     let usableWidth = size.width - 24
                     let spacing = usableWidth / CGFloat(tickCount - 1)
                     let offset = dragOffset * 0.08
+                    let centerX = size.width / 2
+
                     for i in 0..<tickCount {
                         let x = 12 + CGFloat(i) * spacing + offset
                         guard x >= 6 && x <= size.width - 6 else { continue }
@@ -2374,37 +2468,52 @@ struct ShutterScrubber: View {
                         let rect = CGRect(x: x - 0.5, y: size.height - h - 4, width: 1, height: h)
                         ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.25 : 0.1)))
                     }
+
+                    // Yellow center indicator line (grows when dragging)
+                    let indicatorHeight: CGFloat = isDragging ? 14 : 10
+                    let indicatorWidth: CGFloat = isDragging ? 2.5 : 2
+                    let indicatorRect = CGRect(
+                        x: centerX - indicatorWidth / 2,
+                        y: size.height - indicatorHeight - 2,
+                        width: indicatorWidth,
+                        height: indicatorHeight
+                    )
+                    ctx.fill(Path(indicatorRect), with: .color(Color(red: 1.0, green: 0.85, blue: 0.35)))
                 }
 
-                // Content with prev/next values
+                // Content with prev/next values (fixed widths to prevent jumping)
                 HStack(spacing: 0) {
                     Text(prevSpeed)
-                        .font(DS.mono(9, weight: .medium))
+                        .font(DS.mono(8, weight: .medium))
                         .foregroundColor(DS.textSecondary)
-                        .frame(width: 32, alignment: .center)
+                        .frame(width: 40, alignment: .center)
+                        .lineLimit(1)
 
                     Spacer()
 
                     HStack(spacing: 2) {
                         Text("S")
                             .font(DS.mono(8, weight: .medium))
-                            .foregroundColor(DS.textSecondary)
+                            .foregroundColor(isDragging ? DS.accent : DS.textSecondary)
                         Text(speeds[shutterSpeed])
-                            .font(DS.mono(11, weight: .bold))
-                            .foregroundColor(.white)
-                            .frame(minWidth: 36, alignment: .center)
+                            .font(DS.mono(10, weight: .bold))
+                            .foregroundColor(isDragging ? DS.accent : .white)
+                            .frame(width: 44, alignment: .center)
+                            .lineLimit(1)
                     }
 
                     Spacer()
 
                     Text(nextSpeed)
-                        .font(DS.mono(9, weight: .medium))
+                        .font(DS.mono(8, weight: .medium))
                         .foregroundColor(DS.textSecondary)
-                        .frame(width: 32, alignment: .center)
+                        .frame(width: 40, alignment: .center)
+                        .lineLimit(1)
                 }
                 .padding(.horizontal, 4)
                 .padding(.bottom, 6)
             }
+            .animation(.easeOut(duration: 0.15), value: isDragging)
             .contentShape(Rectangle())
             .gesture(
                 DragGesture()
