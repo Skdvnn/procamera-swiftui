@@ -9,17 +9,19 @@ struct Haptics {
     static func click() { UIImpactFeedbackGenerator(style: .rigid).impactOccurred() }
 }
 
-// MARK: - Vulcanite Film Grain (Background texture)
+// MARK: - Vulcanite Film Grain (DSLR texture - darker and grainier)
 struct VulcaniteGrain: View {
     var body: some View {
-        TimelineView(.animation(minimumInterval: 0.15)) { _ in
+        TimelineView(.animation(minimumInterval: 0.12)) { _ in
             Canvas { ctx, size in
-                for _ in 0..<Int(size.width * size.height * 0.002) {
+                // Denser grain for DSLR feel
+                for _ in 0..<Int(size.width * size.height * 0.004) {
                     let x = CGFloat.random(in: 0..<size.width)
                     let y = CGFloat.random(in: 0..<size.height)
-                    let gray = CGFloat.random(in: 0.08...0.18)
-                    let rect = CGRect(x: x, y: y, width: 1, height: 1)
-                    ctx.fill(Path(rect), with: .color(Color(white: gray, opacity: 0.12)))
+                    let gray = CGFloat.random(in: 0.05...0.15)
+                    let particleSize = CGFloat.random(in: 0.8...1.5)
+                    let rect = CGRect(x: x, y: y, width: particleSize, height: particleSize)
+                    ctx.fill(Path(rect), with: .color(Color(white: gray, opacity: 0.18)))
                 }
             }
         }
@@ -30,8 +32,8 @@ struct VulcaniteGrain: View {
 
 // MARK: - Design System (matches Figma exactly)
 struct DS {
-    // Colors - from Figma design
-    static let pageBg = Color(hex: "171717")         // Figma Frame 1 background
+    // Colors - darker DSLR body feel
+    static let pageBg = Color(hex: "0d0d0d")         // Darker DSLR body
     static let controlBg = Color(hex: "2c2c2c")      // Figma control backgrounds
     static let controlBgLight = Color(hex: "3a3a3a") // lighter control bg for hover
     static let strokeOuter = Color(white: 0.22)      // outer stroke
@@ -139,10 +141,10 @@ struct ContentView: View {
             let safeTop = geo.safeAreaInsets.top
             let safeBottom = geo.safeAreaInsets.bottom
 
-            // Layout measurements - maximize viewport
+            // Layout measurements - maximize viewport (extend camera view)
             let topPanelHeight: CGFloat = 110
-            let bottomControlsHeight: CGFloat = 230  // Grid-like DSLR controls
-            let spacing: CGFloat = 6
+            let bottomControlsHeight: CGFloat = 210  // Compact controls, more viewport
+            let spacing: CGFloat = 4
             let bottomPadding: CGFloat = 0
 
             // Calculate viewfinder to fill remaining space
@@ -271,7 +273,7 @@ struct ContentView: View {
                         // Grain texture for controls area
                         ControlsGrain()
 
-                        VStack(spacing: 12) {
+                        VStack(spacing: 10) {
                             // ROW 1: Zoom control (full width)
                             LensRingControl(
                                 focalLength: $focalLength,
@@ -288,11 +290,11 @@ struct ContentView: View {
                                     camera.setISO(Float(iso))
                                 }
                             )
-                            .frame(height: 48)
+                            .frame(height: 44)
                             .padding(.horizontal, DS.pageMargin)
 
-                            // ROW 2: ISO & Shutter side by side (bigger scrubbers)
-                            HStack(spacing: 12) {
+                            // ROW 2: ISO & Shutter side by side
+                            HStack(spacing: 10) {
                                 ISOScrubberHorizontal(
                                     iso: $isoValue,
                                     onChanged: { iso in
@@ -309,13 +311,13 @@ struct ContentView: View {
                                     }
                                 )
                             }
-                            .frame(height: 48)
+                            .frame(height: 44)
                             .padding(.horizontal, DS.pageMargin)
 
-                            // ROW 3: Main capture row with proper spacing
+                            // ROW 3: Main capture row - all bottom elements share baseline
                             HStack(alignment: .bottom, spacing: 0) {
                                 // Left: Flash/Thumbnail stack
-                                VStack(spacing: 14) {
+                                VStack(spacing: 10) {
                                     FlashButtonPill(flashMode: camera.flashMode) {
                                         Haptics.click()
                                         camera.cycleFlash()
@@ -328,12 +330,11 @@ struct ContentView: View {
                                         }
                                     }
                                 }
-                                .padding(.trailing, 8)
 
                                 Spacer()
 
-                                // Center: Format toggle on top of shutter
-                                VStack(spacing: 8) {
+                                // Center: Format toggle on top of shutter (more spacing from mode buttons)
+                                VStack(spacing: 10) {
                                     FormatTogglePill(format: $captureFormat) { newFormat in
                                         // Hook up to CameraManager for actual capture format
                                     }
@@ -347,7 +348,7 @@ struct ContentView: View {
                                 Spacer()
 
                                 // Right: Mode controls + WB
-                                VStack(spacing: 14) {
+                                VStack(spacing: 10) {
                                     // Icons + Buttons combined for perfect alignment
                                     HStack(spacing: 16) {
                                         // Macro column
@@ -391,7 +392,7 @@ struct ContentView: View {
                             }
                             .padding(.horizontal, DS.pageMargin + 4)
                         }
-                        .padding(.top, 8)
+                        .padding(.top, 6)
                     }
                     .padding(.bottom, bottomPadding)
                 }
@@ -1277,7 +1278,7 @@ struct ShutterButton: View {
                         .frame(width: 64, height: 64)
                 }
             }
-            .shadow(color: Color.black.opacity(0.6), radius: isPressed ? 2 : 6, y: isPressed ? 1 : 3)
+            .shadow(color: Color.black.opacity(0.35), radius: isPressed ? 1 : 3, y: isPressed ? 0.5 : 2)
             .scaleEffect(isPressed ? 0.97 : 1.0)
             .animation(.easeOut(duration: 0.1), value: isPressed)
         }

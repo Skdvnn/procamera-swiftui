@@ -401,7 +401,7 @@ struct NeedleShape: Shape {
     }
 }
 
-// MARK: - Horizontal Exposure Meter (matches Figma design)
+// MARK: - Horizontal Exposure Meter (enhanced DSLR style with faded edges)
 struct HorizontalExposureMeter: View {
     let value: Float // -2 to +2
     let iso: Int
@@ -409,48 +409,68 @@ struct HorizontalExposureMeter: View {
     private let marks = ["+2", "+1", "0", "-1", "-2"]
 
     var body: some View {
-        VStack(spacing: 4) {
-            // Meter bar with ticks
-            HStack(spacing: 0) {
-                ForEach(0..<5, id: \.self) { i in
-                    HStack(spacing: 0) {
-                        // Major tick
-                        VStack(spacing: 2) {
-                            Rectangle()
-                                .fill(Color.white.opacity(i == 2 ? 0.8 : 0.4))
-                                .frame(width: i == 2 ? 2 : 1, height: i == 2 ? 10 : 6)
+        VStack(spacing: 6) {
+            // Meter bar with detailed ticks and faded edges
+            ZStack {
+                // Background bar
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.white.opacity(0.03))
+                    .frame(width: 100, height: 28)
 
-                            Text(marks[i])
-                                .font(.system(size: 7, weight: .medium, design: .monospaced))
-                                .foregroundColor(.white.opacity(i == 2 ? 0.8 : 0.4))
-                        }
+                // Tick marks with faded edges
+                HStack(spacing: 0) {
+                    ForEach(0..<5, id: \.self) { i in
+                        HStack(spacing: 0) {
+                            // Calculate fade opacity (edges are more transparent)
+                            let edgeFade = i == 0 || i == 4 ? 0.4 : (i == 1 || i == 3 ? 0.7 : 1.0)
 
-                        if i < 4 {
-                            Spacer()
-                            // Minor ticks between major ones
-                            Rectangle()
-                                .fill(Color.white.opacity(0.2))
-                                .frame(width: 1, height: 4)
-                            Spacer()
+                            // Major tick
+                            VStack(spacing: 2) {
+                                Rectangle()
+                                    .fill(Color.white.opacity((i == 2 ? 0.9 : 0.5) * edgeFade))
+                                    .frame(width: i == 2 ? 2 : 1, height: i == 2 ? 12 : 7)
+
+                                Text(marks[i])
+                                    .font(.system(size: 7, weight: i == 2 ? .bold : .medium, design: .monospaced))
+                                    .foregroundColor(.white.opacity((i == 2 ? 0.9 : 0.5) * edgeFade))
+                            }
+
+                            if i < 4 {
+                                Spacer()
+                                // Minor ticks between major ones (also faded)
+                                let minorFade = i == 0 || i == 3 ? 0.5 : 0.8
+                                VStack(spacing: 0) {
+                                    Rectangle()
+                                        .fill(Color.white.opacity(0.15 * minorFade))
+                                        .frame(width: 1, height: 4)
+                                    Spacer()
+                                }
+                                .frame(height: 12)
+                                Spacer()
+                            }
                         }
                     }
                 }
-            }
-            .frame(width: 80, height: 24)
-            .overlay(
-                // Indicator triangle
-                Triangle()
-                    .fill(Color.white)
-                    .frame(width: 6, height: 5)
-                    .offset(x: CGFloat(value) * -20) // Move based on EV value
-                    .offset(y: -14),
-                alignment: .center
-            )
+                .frame(width: 90, height: 24)
 
-            // ISO display
-            Text("\(iso)")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.6))
+                // Indicator triangle (accent color when not centered)
+                Triangle()
+                    .fill(abs(value) > 0.1 ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white)
+                    .frame(width: 6, height: 5)
+                    .offset(x: CGFloat(value) * -22.5) // Move based on EV value
+                    .offset(y: -12)
+            }
+            .frame(width: 100, height: 28)
+
+            // ISO display with label
+            HStack(spacing: 3) {
+                Text("ISO")
+                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.4))
+                Text("\(iso)")
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.7))
+            }
         }
     }
 }
@@ -519,48 +539,33 @@ struct AnalogDisplayPanel: View {
                 .fill(Color(hex: "0d0d0d"))
 
             // Content - centered vertically
-            VStack(spacing: 0) {
-                Spacer(minLength: 4)
+            HStack(spacing: 0) {
+                // Left: Focus dial
+                FocusDial(value: $focusPosition, onChanged: onFocusChanged)
+                    .frame(width: 98, height: 98)
 
-                HStack(spacing: 0) {
-                    // Left: Focus dial
-                    FocusDial(value: $focusPosition, onChanged: onFocusChanged)
-                        .frame(width: 100, height: 100)
+                Spacer()
 
-                    Spacer()
+                // Center: Exposure meter with enhanced detail
+                CenterDisplay(
+                    timerSeconds: timerSeconds,
+                    iso: iso,
+                    flashMode: flashMode,
+                    macroEnabled: macroEnabled,
+                    isAutoFocus: isAutoFocus,
+                    exposureValue: exposureValue,
+                    onTimerTap: onTimerTap,
+                    onMacroTap: onMacroTap
+                )
 
-                    // Center: AF badge, timer, AUTO/SV, exposure meter with ISO
-                    CenterDisplay(
-                        timerSeconds: timerSeconds,
-                        iso: iso,
-                        flashMode: flashMode,
-                        macroEnabled: macroEnabled,
-                        isAutoFocus: isAutoFocus,
-                        exposureValue: exposureValue,
-                        onTimerTap: onTimerTap,
-                        onMacroTap: onMacroTap
-                    )
+                Spacer()
 
-                    Spacer()
-
-                    // Right: Shutter Speed dial (real iOS control)
-                    ShutterSpeedDial(value: $shutterSpeedIndex, onChanged: onShutterSpeedChanged)
-                        .frame(width: 100, height: 100)
-                }
-                .padding(.horizontal, 12)
-
-                Spacer(minLength: 2)
-
-                // Bottom label
-                HStack(spacing: 4) {
-                    Circle().fill(Color.red).frame(width: 4, height: 4)
-                    Text("ANALOG DISPLAY SYSTEM")
-                        .font(.system(size: 6, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.3))
-                        .tracking(1)
-                }
-                .padding(.bottom, 4)
+                // Right: Shutter Speed dial
+                ShutterSpeedDial(value: $shutterSpeedIndex, onChanged: onShutterSpeedChanged)
+                    .frame(width: 98, height: 98)
             }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
 
             // Inner shadow overlay (top and left edges for inset depth)
             VStack(spacing: 0) {
