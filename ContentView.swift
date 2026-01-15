@@ -440,14 +440,34 @@ struct ContentView: View {
 
     private func captureNow() {
         Haptics.heavy()
-        withAnimation(.easeInOut(duration: 0.1)) { showFlash = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { showFlash = false }
-        camera.capturePhoto { img in
-            isCapturing = false
-            if let img = img {
-                lastCapturedImage = img
-                photoCount += 1
-                camera.saveToPhotoLibrary(img) { _ in }
+
+        // Check if this is a long exposure (shutter speed index 0-3 = 4s, 2s, 1s, 1/2s)
+        let isLongExposure = shutterSpeedIndex <= 3
+
+        if isLongExposure {
+            // Use computational long exposure for slow shutter speeds
+            let durations: [Double] = [4.0, 2.0, 1.0, 0.5]
+            let duration = durations[shutterSpeedIndex]
+
+            camera.captureLongExposure(durationSeconds: duration) { img in
+                isCapturing = false
+                if let img = img {
+                    lastCapturedImage = img
+                    photoCount += 1
+                    camera.saveToPhotoLibrary(img) { _ in }
+                }
+            }
+        } else {
+            // Normal capture with flash effect
+            withAnimation(.easeInOut(duration: 0.1)) { showFlash = true }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { showFlash = false }
+            camera.capturePhoto { img in
+                isCapturing = false
+                if let img = img {
+                    lastCapturedImage = img
+                    photoCount += 1
+                    camera.saveToPhotoLibrary(img) { _ in }
+                }
             }
         }
     }

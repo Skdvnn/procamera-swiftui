@@ -22,6 +22,14 @@ class CameraManager: NSObject, ObservableObject {
     @Published var zoomFactor: CGFloat = 1.0
     @Published var isManualExposure: Bool = false
     @Published var selectedFilmFilter: FilmFilter = .none
+    @Published var isLongExposureCapturing: Bool = false
+    @Published var longExposureProgress: Float = 0.0
+
+    // Long exposure support
+    private var videoDataOutput: AVCaptureVideoDataOutput?
+    private var longExposureFrames: [CIImage] = []
+    private var longExposureTargetFrames: Int = 0
+    private var longExposureCompletion: ((UIImage?) -> Void)?
 
     // Film filter types
     enum FilmFilter: Int, CaseIterable {
@@ -162,6 +170,18 @@ class CameraManager: NSObject, ObservableObject {
             return
         }
 
+        // Add video data output for long exposure frame capture
+        let videoOutput = AVCaptureVideoDataOutput()
+        videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "videoDataOutput"))
+        videoOutput.alwaysDiscardsLateVideoFrames = false
+        if session.canAddOutput(videoOutput) {
+            session.addOutput(videoOutput)
+            videoDataOutput = videoOutput
+        }
+
+        // Select best format for long exposure support
+        selectBestFormatForLongExposure(device: videoDevice)
+
         session.commitConfiguration()
         startSession()
     }
@@ -175,6 +195,176 @@ class CameraManager: NSObject, ObservableObject {
             self.minShutterDuration = device.activeFormat.minExposureDuration
             self.maxShutterDuration = device.activeFormat.maxExposureDuration
         }
+    }
+
+    // MARK: - Long Exposure Format Selection
+    private func selectBestFormatForLongExposure(device: AVCaptureDevice) {
+        // Find format with longest max exposure duration while maintaining good quality
+        var bestFormat: AVCaptureDevice.Format?
+        var longestDuration: CMTime = CMTime.zero
+
+        for format in device.formats {
+            let maxDuration = format.maxExposureDuration
+            let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+
+            // Prefer formats with at least 1080p resolution
+            guard dimensions.width >= 1920 else { continue }
+
+            // Check if this format supports longer exposure
+            if CMTimeCompare(maxDuration, longestDuration) > 0 {
+                longestDuration = maxDuration
+                bestFormat = format
+            }
+        }
+
+        // Apply the best format if found
+        if let format = bestFormat {
+            do {
+                try device.lockForConfiguration()
+                device.activeFormat = format
+                device.unlockForConfiguration()
+
+                // Update capabilities with new format
+                updateDeviceCapabilities(device: device)
+
+                let seconds = CMTimeGetSeconds(longestDuration)
+                print("Selected format with max exposure: \(seconds)s")
+            } catch {
+                print("Error selecting format: \(error)")
+            }
+        }
+    }
+
+    // MARK: - Computational Long Exposure
+    func captureLongExposure(durationSeconds: Double, completion: @escaping (UIImage?) -> Void) {
+        guard let device = videoDeviceInput?.device else {
+            completion(nil)
+            return
+        }
+
+        // Get device's actual max exposure duration
+        let maxHardwareDuration = CMTimeGetSeconds(device.activeFormat.maxExposureDuration)
+
+        // If hardware can handle it directly, use single capture
+        if durationSeconds <= maxHardwareDuration {
+            captureSingleLongExposure(duration: durationSeconds, completion: completion)
+        } else {
+            // Use computational long exposure (frame averaging)
+            captureComputationalLongExposure(targetDuration: durationSeconds, completion: completion)
+        }
+    }
+
+    private func captureSingleLongExposure(duration: Double, completion: @escaping (UIImage?) -> Void) {
+        guard let device = videoDeviceInput?.device else {
+            completion(nil)
+            return
+        }
+
+        let targetDuration = CMTime(seconds: duration, preferredTimescale: 1000000)
+
+        sessionQueue.async {
+            do {
+                try device.lockForConfiguration()
+
+                // Set to minimum ISO for long exposure (reduce noise)
+                let minISO = device.activeFormat.minISO
+                device.setExposureModeCustom(duration: targetDuration, iso: minISO) { _ in
+                    // Now capture the photo
+                    DispatchQueue.main.async {
+                        self.capturePhoto(completion: completion)
+                    }
+                }
+
+                device.unlockForConfiguration()
+            } catch {
+                print("Error setting long exposure: \(error)")
+                DispatchQueue.main.async { completion(nil) }
+            }
+        }
+    }
+
+    private func captureComputationalLongExposure(targetDuration: Double, completion: @escaping (UIImage?) -> Void) {
+        guard let device = videoDeviceInput?.device else {
+            completion(nil)
+            return
+        }
+
+        // Calculate how many frames we need at 30fps
+        let fps: Double = 30.0
+        let frameCount = Int(targetDuration * fps)
+
+        DispatchQueue.main.async {
+            self.isLongExposureCapturing = true
+            self.longExposureProgress = 0.0
+        }
+
+        longExposureFrames = []
+        longExposureTargetFrames = frameCount
+        longExposureCompletion = completion
+
+        // Set camera to max exposure per frame for best results
+        sessionQueue.async {
+            do {
+                try device.lockForConfiguration()
+
+                // Use a moderate exposure per frame (hardware max or 1/30)
+                let maxDuration = device.activeFormat.maxExposureDuration
+                let frameDuration = CMTime(seconds: 1.0/fps, preferredTimescale: 1000000)
+                let exposureDuration = CMTimeCompare(frameDuration, maxDuration) < 0 ? frameDuration : maxDuration
+
+                let minISO = device.activeFormat.minISO
+                device.setExposureModeCustom(duration: exposureDuration, iso: minISO) { _ in }
+
+                device.unlockForConfiguration()
+            } catch {
+                print("Error setting up computational long exposure: \(error)")
+                DispatchQueue.main.async {
+                    self.isLongExposureCapturing = false
+                    completion(nil)
+                }
+            }
+        }
+    }
+
+    private func processLongExposureFrames() -> UIImage? {
+        guard !longExposureFrames.isEmpty else { return nil }
+
+        let count = Float(longExposureFrames.count)
+
+        // Average all frames together
+        var accumulatedImage = longExposureFrames[0]
+
+        for i in 1..<longExposureFrames.count {
+            let frame = longExposureFrames[i]
+
+            // Blend frames using CIBlendWithAlphaMask or simple addition
+            let blend = CIFilter.additionCompositing()
+            blend.inputImage = frame
+            blend.backgroundImage = accumulatedImage
+
+            if let result = blend.outputImage {
+                accumulatedImage = result
+            }
+        }
+
+        // Normalize by dividing by frame count (multiply by 1/count)
+        let colorMatrix = CIFilter.colorMatrix()
+        colorMatrix.inputImage = accumulatedImage
+        let scale = 1.0 / count
+        colorMatrix.rVector = CIVector(x: CGFloat(scale), y: 0, z: 0, w: 0)
+        colorMatrix.gVector = CIVector(x: 0, y: CGFloat(scale), z: 0, w: 0)
+        colorMatrix.bVector = CIVector(x: 0, y: 0, z: CGFloat(scale), w: 0)
+        colorMatrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        colorMatrix.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+
+        guard let normalizedImage = colorMatrix.outputImage else { return nil }
+
+        // Render to UIImage
+        guard let cgImage = ciContext.createCGImage(normalizedImage, from: normalizedImage.extent) else {
+            return nil
+        }
+
+        return UIImage(cgImage: cgImage)
     }
 
     func startSession() {
@@ -648,5 +838,65 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
             return
         }
         photoCompletionHandler?(image)
+    }
+}
+
+// MARK: - Video Data Output Delegate (for computational long exposure)
+extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
+        // Only capture frames when doing long exposure
+        guard isLongExposureCapturing,
+              longExposureFrames.count < longExposureTargetFrames else {
+            // Check if we've collected enough frames
+            if isLongExposureCapturing && longExposureFrames.count >= longExposureTargetFrames {
+                finalizeLongExposure()
+            }
+            return
+        }
+
+        // Convert sample buffer to CIImage
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+
+        longExposureFrames.append(ciImage)
+
+        // Update progress
+        let progress = Float(longExposureFrames.count) / Float(longExposureTargetFrames)
+        DispatchQueue.main.async {
+            self.longExposureProgress = progress
+        }
+    }
+
+    private func finalizeLongExposure() {
+        guard isLongExposureCapturing else { return }
+
+        DispatchQueue.main.async {
+            self.isLongExposureCapturing = false
+        }
+
+        // Process frames on background queue
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else { return }
+
+            let resultImage = self.processLongExposureFrames()
+
+            // Apply film filter if selected
+            let finalImage: UIImage?
+            if let img = resultImage {
+                finalImage = self.applyFilmFilter(to: img)
+            } else {
+                finalImage = nil
+            }
+
+            // Clear frames
+            self.longExposureFrames = []
+
+            // Call completion
+            DispatchQueue.main.async {
+                self.longExposureCompletion?(finalImage)
+                self.longExposureCompletion = nil
+                self.longExposureProgress = 0.0
+            }
+        }
     }
 }
