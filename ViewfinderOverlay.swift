@@ -80,22 +80,11 @@ struct ViewfinderOverlay: View {
                 }
                 .position(x: inset + 20, y: inset + 20)
 
-                // Top right - Film filter menu
-                Menu {
-                    ForEach(FilmFilterMode.allCases, id: \.self) { filter in
-                        Button(action: {
-                            VFHaptics.click()
-                            filmFilter = filter
-                        }) {
-                            HStack {
-                                Text(filter.name)
-                                if filmFilter == filter {
-                                    Image(systemName: "checkmark")
-                                }
-                            }
-                        }
-                    }
-                } label: {
+                // Top right - Film filter button (Leica-style)
+                Button(action: {
+                    VFHaptics.click()
+                    showFilmMenu.toggle()
+                }) {
                     ZStack {
                         Circle()
                             .fill(Color.black.opacity(0.4))
@@ -106,6 +95,16 @@ struct ViewfinderOverlay: View {
                     }
                 }
                 .position(x: width - inset - 20, y: inset + 20)
+
+                // Leica-style film picker panel
+                if showFilmMenu {
+                    LeicaFilmPicker(
+                        selectedFilter: $filmFilter,
+                        isPresented: $showFilmMenu
+                    )
+                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
+                    .animation(.easeOut(duration: 0.15), value: showFilmMenu)
+                }
             }
         }
     }
@@ -430,5 +429,123 @@ struct InfoBar: View {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
         return formatter.string(from: NSNumber(value: num)) ?? "\(num)"
+    }
+}
+
+// MARK: - Leica-Style Film Picker
+struct LeicaFilmPicker: View {
+    @Binding var selectedFilter: FilmFilterMode
+    @Binding var isPresented: Bool
+
+    private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
+
+    var body: some View {
+        ZStack {
+            // Tap outside to dismiss
+            Color.black.opacity(0.3)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    VFHaptics.click()
+                    isPresented = false
+                }
+
+            // Film picker panel
+            VStack(spacing: 0) {
+                // Header
+                HStack {
+                    Text("FILM")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.5))
+                        .tracking(2)
+                    Spacer()
+                    Button(action: {
+                        VFHaptics.click()
+                        isPresented = false
+                    }) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundColor(.white.opacity(0.6))
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 12)
+
+                Divider()
+                    .background(Color.white.opacity(0.1))
+
+                // Film options
+                ForEach(FilmFilterMode.allCases, id: \.self) { filter in
+                    Button(action: {
+                        VFHaptics.click()
+                        selectedFilter = filter
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            isPresented = false
+                        }
+                    }) {
+                        HStack(spacing: 12) {
+                            // Color swatch
+                            RoundedRectangle(cornerRadius: 3)
+                                .fill(swatchColor(for: filter))
+                                .frame(width: 24, height: 16)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 3)
+                                        .stroke(Color.white.opacity(0.2), lineWidth: 0.5)
+                                )
+
+                            // Film name
+                            Text(filter.name)
+                                .font(.system(size: 14, weight: selectedFilter == filter ? .semibold : .regular, design: .default))
+                                .foregroundColor(selectedFilter == filter ? accent : .white)
+
+                            Spacer()
+
+                            // Selected indicator
+                            if selectedFilter == filter {
+                                Circle()
+                                    .fill(accent)
+                                    .frame(width: 6, height: 6)
+                            }
+                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 12)
+                        .background(selectedFilter == filter ? Color.white.opacity(0.05) : Color.clear)
+                    }
+                    .buttonStyle(.plain)
+
+                    if filter != FilmFilterMode.allCases.last {
+                        Divider()
+                            .background(Color.white.opacity(0.05))
+                            .padding(.leading, 52)
+                    }
+                }
+            }
+            .background(
+                RoundedRectangle(cornerRadius: 12)
+                    .fill(Color(red: 0.12, green: 0.12, blue: 0.12))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 12)
+                    .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
+            )
+            .frame(width: 200)
+            .shadow(color: .black.opacity(0.5), radius: 20, x: 0, y: 10)
+        }
+    }
+
+    private func swatchColor(for filter: FilmFilterMode) -> LinearGradient {
+        switch filter {
+        case .none:
+            return LinearGradient(colors: [.gray.opacity(0.3), .gray.opacity(0.5)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        case .portra400:
+            return LinearGradient(colors: [Color(red: 0.95, green: 0.85, blue: 0.75), Color(red: 0.85, green: 0.70, blue: 0.55)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        case .kodakGold:
+            return LinearGradient(colors: [Color(red: 1.0, green: 0.85, blue: 0.4), Color(red: 0.95, green: 0.65, blue: 0.2)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        case .trix400:
+            return LinearGradient(colors: [.white, .gray], startPoint: .topLeading, endPoint: .bottomTrailing)
+        case .velvia50:
+            return LinearGradient(colors: [Color(red: 0.2, green: 0.7, blue: 0.4), Color(red: 0.1, green: 0.4, blue: 0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        case .cinestill800:
+            return LinearGradient(colors: [Color(red: 0.3, green: 0.5, blue: 0.7), Color(red: 0.6, green: 0.3, blue: 0.5)], startPoint: .topLeading, endPoint: .bottomTrailing)
+        }
     }
 }

@@ -579,8 +579,8 @@ class CameraManager: NSObject, ObservableObject {
             }
         }
 
-        // Render the filtered image
-        guard let cgImage = ciContext.createCGImage(outputImage, from: ciImage.extent) else {
+        // Render the filtered image (use outputImage.extent in case filter changed bounds)
+        guard let cgImage = ciContext.createCGImage(outputImage, from: outputImage.extent) else {
             return image
         }
 

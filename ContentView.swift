@@ -80,6 +80,25 @@ extension Color {
 // Legacy alias
 let vulcaniteBlack = DS.pageBg
 
+// MARK: - Capture Format
+enum CaptureFormat: CaseIterable {
+    case heic, jpeg, raw
+
+    var label: String {
+        switch self {
+        case .heic: return "HEIC"
+        case .jpeg: return "JPG"
+        case .raw: return "RAW"
+        }
+    }
+
+    var next: CaptureFormat {
+        let all = CaptureFormat.allCases
+        let idx = all.firstIndex(of: self) ?? 0
+        return all[(idx + 1) % all.count]
+    }
+}
+
 struct ContentView: View {
     @StateObject private var camera = CameraManager()
 
@@ -107,6 +126,7 @@ struct ContentView: View {
     @State private var shutterSpeedIndex: Int = 9  // Default to 1/125
     @State private var aspectRatio: AspectRatioMode = .full
     @State private var filmFilter: FilmFilterMode = .none
+    @State private var captureFormat: CaptureFormat = .heic
 
     private let modes = ["P", "A", "T"]
     private let shutterSpeeds = ["4\"", "2\"", "1\"", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60", "1/125", "1/250", "1/500", "1/1000", "1/2000", "1/4000"]
@@ -213,7 +233,8 @@ struct ContentView: View {
                                 shutterSpeed: computeShutterSpeed(),
                                 aperture: apertureValue,
                                 photoCount: photoCount,
-                                exposureValue: exposureValue
+                                exposureValue: exposureValue,
+                                captureFormat: captureFormat
                             )
                             .padding(.horizontal, 12)
                             .padding(.bottom, 8)
@@ -279,14 +300,23 @@ struct ContentView: View {
                         ZStack {
                             // Background layer: Left stack + Right WB with icons
                             HStack(alignment: .bottom, spacing: 0) {
-                                // Left: Flash pill ABOVE Thumbnail pill
-                                VStack(spacing: 10) {
+                                // Left: Format toggle, Flash pill, Thumbnail pill (stacked)
+                                VStack(spacing: 8) {
+                                    FormatTogglePill(format: $captureFormat) { newFormat in
+                                        // Will hook up to CameraManager for actual capture format
+                                    }
+
                                     FlashButtonPill(flashMode: camera.flashMode) {
                                         Haptics.click()
                                         camera.cycleFlash()
                                     }
 
-                                    ThumbnailPill(image: lastCapturedImage)
+                                    ThumbnailPill(image: lastCapturedImage) {
+                                        Haptics.click()
+                                        if let url = URL(string: "photos-redirect://") {
+                                            UIApplication.shared.open(url)
+                                        }
+                                    }
                                 }
 
                                 Spacer()
@@ -450,6 +480,7 @@ struct RefractiveGlassInfoBar: View {
     let aperture: Float
     let photoCount: Int
     let exposureValue: Float
+    let captureFormat: CaptureFormat
 
     var body: some View {
         HStack(spacing: 10) {
@@ -460,8 +491,9 @@ struct RefractiveGlassInfoBar: View {
             // Format info
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
-                    Text("HEIC")
+                    Text(captureFormat.label)
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundColor(captureFormat == .raw ? DS.accent : .white)
                     Text("L")
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .padding(.horizontal, 3)
@@ -683,7 +715,7 @@ struct ISOScrubberHorizontal: View {
                         ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.25 : 0.1)))
                     }
 
-                    // Yellow center indicator line (grows when dragging)
+                    // Center indicator (white at rest, yellow when active)
                     let indicatorHeight: CGFloat = isDragging ? 14 : 10
                     let indicatorWidth: CGFloat = isDragging ? 2.5 : 2
                     let indicatorRect = CGRect(
@@ -692,7 +724,8 @@ struct ISOScrubberHorizontal: View {
                         width: indicatorWidth,
                         height: indicatorHeight
                     )
-                    ctx.fill(Path(indicatorRect), with: .color(Color(red: 1.0, green: 0.85, blue: 0.35)))
+                    let indicatorColor = isDragging ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white.opacity(0.7)
+                    ctx.fill(Path(indicatorRect), with: .color(indicatorColor))
                 }
 
                 // Content with prev/next values (yellow when active)
@@ -812,7 +845,7 @@ struct LensRingControl: View {
                         ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.25 : 0.1)))
                     }
 
-                    // Yellow center indicator (grows when dragging)
+                    // Center indicator (white at rest, yellow when active)
                     let indicatorHeight: CGFloat = isDragging ? 14 : 10
                     let indicatorWidth: CGFloat = isDragging ? 2.5 : 2
                     let indicatorRect = CGRect(
@@ -821,7 +854,8 @@ struct LensRingControl: View {
                         width: indicatorWidth,
                         height: indicatorHeight
                     )
-                    ctx.fill(Path(indicatorRect), with: .color(Color(red: 1.0, green: 0.85, blue: 0.35)))
+                    let indicatorColor = isDragging ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white.opacity(0.7)
+                    ctx.fill(Path(indicatorRect), with: .color(indicatorColor))
                 }
 
                 // Content with prev/next values (yellow when active)
@@ -1394,36 +1428,34 @@ struct ModeIcon: View {
 
     var body: some View {
         Image(systemName: icon)
-            .font(.system(size: 14, weight: .regular))
+            .font(.system(size: 13, weight: .regular))
             .foregroundColor(isActive ? DS.accent : Color(hex: "5e5e5e"))
-            .frame(width: 22, height: 18)  // Match button width for alignment
+            .frame(width: 16, height: 16)
     }
 }
 
-// MARK: - Mode Button (gray when off, lighter when on - NOT yellow)
+// MARK: - Mode Button (small dot - gray when off, lighter when on)
 struct ModeButton: View {
     let isActive: Bool
     let action: () -> Void
 
-    // Figma size: approximately 22px diameter
-    private let size: CGFloat = 22
+    // Smaller per Figma - approximately 16px diameter
+    private let size: CGFloat = 16
 
     var body: some View {
         Button(action: action) {
             ZStack {
                 // Button background: darker gray when off, lighter when on
                 Circle()
-                    .fill(isActive ? Color(red: 0.25, green: 0.25, blue: 0.25) : Color(red: 0.17, green: 0.17, blue: 0.17))
+                    .fill(isActive ? Color(red: 0.28, green: 0.28, blue: 0.28) : Color(red: 0.17, green: 0.17, blue: 0.17))
 
                 // Inner stroke: lighter when active
                 Circle()
-                    .stroke(isActive ? Color(red: 0.38, green: 0.38, blue: 0.38) : Color(red: 0.27, green: 0.27, blue: 0.27), lineWidth: 0.5)
-                    .padding(0.5)
+                    .stroke(isActive ? Color(red: 0.4, green: 0.4, blue: 0.4) : Color(red: 0.25, green: 0.25, blue: 0.25), lineWidth: 0.5)
+                    .padding(0.25)
             }
             .frame(width: size, height: size)
-            // Subtle shadows for depth
-            .shadow(color: Color(red: 0.03, green: 0.03, blue: 0.03).opacity(0.25), radius: 1, x: 0, y: 0.8)
-            .shadow(color: .black.opacity(0.2), radius: 0.5, x: 0, y: -0.3)
+            .shadow(color: Color(red: 0.03, green: 0.03, blue: 0.03).opacity(0.2), radius: 0.5, x: 0, y: 0.5)
         }
         .buttonStyle(ProButtonStyle())
     }
@@ -1464,38 +1496,80 @@ struct ModeIconButton: View {
 // MARK: - Thumbnail Pill (Figma: 80x42, cornerRadius 27 for rounded rect look)
 struct ThumbnailPill: View {
     let image: UIImage?
+    let action: () -> Void
 
     var body: some View {
-        ZStack {
-            // Outer dark frame (Figma: r=27)
-            RoundedRectangle(cornerRadius: 21)
-                .fill(Color.black)
-                .frame(width: 80, height: 42)
+        Button(action: action) {
+            ZStack {
+                // Outer dark frame (Figma: r=27)
+                RoundedRectangle(cornerRadius: 21)
+                    .fill(Color.black)
+                    .frame(width: 80, height: 42)
 
-            // Inner frame
-            RoundedRectangle(cornerRadius: 19)
-                .fill(Color(hex: "2c2c2c"))
-                .frame(width: 76, height: 38)
+                // Inner frame
+                RoundedRectangle(cornerRadius: 19)
+                    .fill(Color(hex: "2c2c2c"))
+                    .frame(width: 76, height: 38)
 
-            // Inner stroke
-            RoundedRectangle(cornerRadius: 19)
-                .stroke(Color(hex: "444444"), lineWidth: 0.5)
-                .frame(width: 76, height: 38)
+                // Inner stroke
+                RoundedRectangle(cornerRadius: 19)
+                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
+                    .frame(width: 76, height: 38)
 
-            // Image or placeholder
-            if let img = image {
-                Image(uiImage: img)
-                    .resizable()
-                    .aspectRatio(contentMode: .fill)
-                    .frame(width: 68, height: 30)
-                    .clipShape(RoundedRectangle(cornerRadius: 15))
-            } else {
-                Image(systemName: "photo.stack")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundColor(Color(hex: "5e5e5e"))
+                // Image or placeholder
+                if let img = image {
+                    Image(uiImage: img)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 68, height: 30)
+                        .clipShape(RoundedRectangle(cornerRadius: 15))
+                } else {
+                    Image(systemName: "photo.stack")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(Color(hex: "5e5e5e"))
+                }
             }
+            .frame(width: 80, height: 42)
         }
-        .frame(width: 80, height: 42)
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Format Toggle Pill (HEIC/JPG/RAW toggle)
+struct FormatTogglePill: View {
+    @Binding var format: CaptureFormat
+    let onChanged: (CaptureFormat) -> Void
+
+    var body: some View {
+        Button(action: {
+            Haptics.click()
+            format = format.next
+            onChanged(format)
+        }) {
+            ZStack {
+                // Outer dark frame
+                RoundedRectangle(cornerRadius: 16)
+                    .fill(Color.black)
+                    .frame(width: 56, height: 32)
+
+                // Inner frame
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color(hex: "2c2c2c"))
+                    .frame(width: 52, height: 28)
+
+                // Inner stroke
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
+                    .frame(width: 52, height: 28)
+
+                // Format label
+                Text(format.label)
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .foregroundColor(format == .raw ? DS.accent : .white)
+            }
+            .frame(width: 56, height: 32)
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -1676,6 +1750,8 @@ struct WBPill: View {
     let onChanged: (Int) -> Void
 
     private let wbModes = ["Auto", "Sun", "Cloud", "Shade", "Lamp", "Fluo"]
+    // Width to align flush with first/last mode button (3 * 16px + 2 * 16px spacing = 80px)
+    private let pillWidth: CGFloat = 80
 
     var body: some View {
         Button(action: {
@@ -1684,26 +1760,31 @@ struct WBPill: View {
             onChanged(whiteBalanceIndex)
         }) {
             ZStack {
-                // Outer shadow frame (Figma: stroke #000000 sw=2)
-                RoundedRectangle(cornerRadius: 5)
+                // Outer frame (pill shape)
+                Capsule()
                     .fill(Color.black)
-                    .frame(width: 80, height: 42)
+                    .frame(width: pillWidth, height: 38)
 
-                // Inner frame (Figma: fill #2c2c2c, r=5, stroke #444444 sw=0.5)
-                RoundedRectangle(cornerRadius: 5)
+                // Inner frame
+                Capsule()
                     .fill(Color(hex: "2c2c2c"))
-                    .frame(width: 76, height: 38)
+                    .frame(width: pillWidth - 4, height: 34)
 
-                RoundedRectangle(cornerRadius: 5)
+                Capsule()
                     .stroke(Color(hex: "444444"), lineWidth: 0.5)
-                    .frame(width: 76, height: 38)
+                    .frame(width: pillWidth - 4, height: 34)
 
-                // Text (Figma: "WB Auto" Inter 12px w400 white)
-                Text("WB \(wbModes[whiteBalanceIndex])")
-                    .font(.system(size: 12, weight: .regular))
-                    .foregroundColor(.white)
+                // Text
+                HStack(spacing: 4) {
+                    Text("WB")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundColor(.white)
+                    Text(wbModes[whiteBalanceIndex])
+                        .font(.system(size: 11, weight: .regular))
+                        .foregroundColor(.white.opacity(0.6))
+                }
             }
-            .frame(width: 80, height: 42)
+            .frame(width: pillWidth, height: 38)
         }
         .buttonStyle(.plain)
     }
@@ -2469,7 +2550,7 @@ struct ShutterScrubber: View {
                         ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.25 : 0.1)))
                     }
 
-                    // Yellow center indicator line (grows when dragging)
+                    // Center indicator (white at rest, yellow when active)
                     let indicatorHeight: CGFloat = isDragging ? 14 : 10
                     let indicatorWidth: CGFloat = isDragging ? 2.5 : 2
                     let indicatorRect = CGRect(
@@ -2478,7 +2559,8 @@ struct ShutterScrubber: View {
                         width: indicatorWidth,
                         height: indicatorHeight
                     )
-                    ctx.fill(Path(indicatorRect), with: .color(Color(red: 1.0, green: 0.85, blue: 0.35)))
+                    let indicatorColor = isDragging ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white.opacity(0.7)
+                    ctx.fill(Path(indicatorRect), with: .color(indicatorColor))
                 }
 
                 // Content with prev/next values (fixed widths to prevent jumping)
