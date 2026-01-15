@@ -509,28 +509,28 @@ struct LeicaFilmPicker: View {
             }
             .background(
                 ZStack {
-                    // Outer frame (inset look)
+                    // Dark background
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(Color(hex: "0a0a0a"))
+                        .fill(Color(hex: "0d0d0d"))
 
-                    // Inner shadow
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color.black, lineWidth: 2)
-                        .blur(radius: 1)
+                    // Inner shadow overlay (top and left edges for inset depth)
+                    VStack(spacing: 0) {
+                        LinearGradient(colors: [Color.black.opacity(0.5), Color.clear], startPoint: .top, endPoint: .bottom)
+                            .frame(height: 10)
+                        Spacer()
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                    HStack(spacing: 0) {
+                        LinearGradient(colors: [Color.black.opacity(0.4), Color.clear], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: 8)
+                        Spacer()
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
 
                     // Outer border
                     RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color(hex: "1a1a1a"), lineWidth: 1)
-
-                    // Inner content
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(Color(hex: "0d0d0d"))
-                        .padding(2)
-
-                    // Inner border
-                    RoundedRectangle(cornerRadius: 6)
-                        .stroke(Color(hex: "252525"), lineWidth: 0.5)
-                        .padding(2)
+                        .stroke(Color(hex: "1a1a1a"), lineWidth: 2)
                 }
             )
             .frame(width: 180)

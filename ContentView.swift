@@ -198,21 +198,7 @@ struct ContentView: View {
 
                     // VIEWFINDER - DSLR-style inset look
                     ZStack {
-                        // Outer inset frame (dark border for recessed look)
-                        RoundedRectangle(cornerRadius: 14)
-                            .fill(Color(hex: "0a0a0a"))
-
-                        // Inner shadow effect
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(Color.black, lineWidth: 3)
-                            .blur(radius: 2)
-                            .offset(y: 1)
-
-                        // Inner border
-                        RoundedRectangle(cornerRadius: 14)
-                            .stroke(Color(hex: "1a1a1a"), lineWidth: 1)
-
-                        // Actual viewfinder content
+                        // Camera preview content
                         ZStack {
                             CameraPreviewView(
                                 session: camera.session,
@@ -255,9 +241,24 @@ struct ContentView: View {
                                 .padding(.horizontal, 12)
                                 .padding(.bottom, 8)
                             }
+
+                            // Inner shadow overlay (top and left edges darker for inset depth)
+                            VStack(spacing: 0) {
+                                LinearGradient(colors: [Color.black.opacity(0.4), Color.clear], startPoint: .top, endPoint: .bottom)
+                                    .frame(height: 8)
+                                Spacer()
+                            }
+                            HStack(spacing: 0) {
+                                LinearGradient(colors: [Color.black.opacity(0.3), Color.clear], startPoint: .leading, endPoint: .trailing)
+                                    .frame(width: 6)
+                                Spacer()
+                            }
                         }
                         .clipShape(RoundedRectangle(cornerRadius: 10))
-                        .padding(4)
+
+                        // Outer border
+                        RoundedRectangle(cornerRadius: 10)
+                            .stroke(Color(hex: "1a1a1a"), lineWidth: 2)
                     }
                     .frame(height: viewfinderHeight)
                     .frame(maxWidth: .infinity)
@@ -315,86 +316,82 @@ struct ContentView: View {
                             Spacer().frame(height: 8)
 
                         // ROW 3: Main capture row with proper spacing
-                        ZStack {
-                            // Background layer: Left stack + Right WB with icons
-                            HStack(alignment: .bottom, spacing: 0) {
-                                // Left: Flash/Thumbnail stack + Format toggle
-                                HStack(alignment: .center, spacing: 12) {
-                                    VStack(spacing: 8) {
-                                        FlashButtonPill(flashMode: camera.flashMode) {
-                                            Haptics.click()
-                                            camera.cycleFlash()
-                                        }
-
-                                        ThumbnailPill(image: lastCapturedImage) {
-                                            Haptics.click()
-                                            if let url = URL(string: "photos-redirect://") {
-                                                UIApplication.shared.open(url)
-                                            }
-                                        }
-                                    }
-
-                                    // Format toggle (vertical, to right of flash/thumbnail)
-                                    FormatTogglePill(format: $captureFormat) { newFormat in
-                                        // Hook up to CameraManager for actual capture format
-                                    }
-                                    .rotationEffect(.degrees(-90))
-                                    .fixedSize()
+                        HStack(alignment: .bottom, spacing: 0) {
+                            // Left: Flash/Thumbnail stack
+                            VStack(spacing: 8) {
+                                FlashButtonPill(flashMode: camera.flashMode) {
+                                    Haptics.click()
+                                    camera.cycleFlash()
                                 }
 
-                                Spacer()
-
-                                // Right: Mode controls per Figma (icons centered above buttons)
-                                VStack(spacing: 10) {
-                                    // Icons + Buttons combined for perfect alignment
-                                    HStack(spacing: 16) {
-                                        // Macro column
-                                        VStack(spacing: 6) {
-                                            ModeIcon(icon: "camera.macro", isActive: macroEnabled)
-                                            ModeButton(isActive: macroEnabled) {
-                                                Haptics.click()
-                                                macroEnabled.toggle()
-                                            }
-                                        }
-
-                                        // Timer column
-                                        VStack(spacing: 6) {
-                                            ModeIcon(icon: "timer", isActive: timerSeconds > 0)
-                                            ModeButton(isActive: timerSeconds > 0) {
-                                                Haptics.click()
-                                                if timerSeconds == 0 { timerSeconds = 3 }
-                                                else if timerSeconds == 3 { timerSeconds = 10 }
-                                                else { timerSeconds = 0 }
-                                            }
-                                        }
-
-                                        // Grid column
-                                        VStack(spacing: 6) {
-                                            ModeIcon(icon: "rectangle.on.rectangle", isActive: showGrid)
-                                            ModeButton(isActive: showGrid) {
-                                                Haptics.click()
-                                                showGrid.toggle()
-                                            }
-                                        }
+                                ThumbnailPill(image: lastCapturedImage) {
+                                    Haptics.click()
+                                    if let url = URL(string: "photos-redirect://") {
+                                        UIApplication.shared.open(url)
                                     }
-
-                                    // WB pill below with spacing
-                                    WBPill(
-                                        whiteBalanceIndex: $whiteBalanceIndex,
-                                        onChanged: { mode in
-                                            camera.setWhiteBalance(mode: mode)
-                                        }
-                                    )
                                 }
                             }
-                            .padding(.horizontal, DS.pageMargin + 4)
 
-                            // Foreground: Shutter button (absolutely centered)
-                            ShutterButton(isCapturing: isCapturing) {
-                                Haptics.heavy()
-                                handleCapture()
+                            Spacer()
+
+                            // Center: Format toggle on top of shutter
+                            VStack(spacing: 6) {
+                                FormatTogglePill(format: $captureFormat) { newFormat in
+                                    // Hook up to CameraManager for actual capture format
+                                }
+
+                                ShutterButton(isCapturing: isCapturing) {
+                                    Haptics.heavy()
+                                    handleCapture()
+                                }
+                            }
+
+                            Spacer()
+
+                            // Right: Mode controls + WB
+                            VStack(spacing: 10) {
+                                // Icons + Buttons combined for perfect alignment
+                                HStack(spacing: 16) {
+                                    // Macro column
+                                    VStack(spacing: 6) {
+                                        ModeIcon(icon: "camera.macro", isActive: macroEnabled)
+                                        ModeButton(isActive: macroEnabled) {
+                                            Haptics.click()
+                                            macroEnabled.toggle()
+                                        }
+                                    }
+
+                                    // Timer column
+                                    VStack(spacing: 6) {
+                                        ModeIcon(icon: "timer", isActive: timerSeconds > 0)
+                                        ModeButton(isActive: timerSeconds > 0) {
+                                            Haptics.click()
+                                            if timerSeconds == 0 { timerSeconds = 3 }
+                                            else if timerSeconds == 3 { timerSeconds = 10 }
+                                            else { timerSeconds = 0 }
+                                        }
+                                    }
+
+                                    // Grid column
+                                    VStack(spacing: 6) {
+                                        ModeIcon(icon: "rectangle.on.rectangle", isActive: showGrid)
+                                        ModeButton(isActive: showGrid) {
+                                            Haptics.click()
+                                            showGrid.toggle()
+                                        }
+                                    }
+                                }
+
+                                // WB pill below
+                                WBPill(
+                                    whiteBalanceIndex: $whiteBalanceIndex,
+                                    onChanged: { mode in
+                                        camera.setWhiteBalance(mode: mode)
+                                    }
+                                )
                             }
                         }
+                        .padding(.horizontal, DS.pageMargin + 4)
                         }
                     }
                     .padding(.bottom, bottomPadding)

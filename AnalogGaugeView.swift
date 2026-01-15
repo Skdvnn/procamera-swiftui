@@ -514,60 +514,42 @@ struct AnalogDisplayPanel: View {
 
     var body: some View {
         ZStack {
-            // Outer dark frame (inset look like viewfinder)
+            // Dark background
             RoundedRectangle(cornerRadius: cornerRadius)
-                .fill(Color(hex: "0a0a0a"))
-
-            // Inner shadow for depth
-            RoundedRectangle(cornerRadius: cornerRadius)
-                .stroke(Color.black, lineWidth: 2)
-                .blur(radius: 1)
-                .offset(y: 0.5)
-
-            // Outer border (dark)
-            RoundedRectangle(cornerRadius: cornerRadius)
-                .stroke(Color(hex: "1a1a1a"), lineWidth: 1)
-
-            // Inner content area
-            RoundedRectangle(cornerRadius: cornerRadius - 2)
                 .fill(Color(hex: "0d0d0d"))
-                .padding(3)
 
-            // Inner border (subtle highlight)
-            RoundedRectangle(cornerRadius: cornerRadius - 2)
-                .stroke(Color(hex: "2a2a2a"), lineWidth: 0.5)
-                .padding(3)
+            // Content
+            VStack(spacing: 0) {
+                HStack(spacing: 0) {
+                    // Left: Focus dial
+                    FocusDial(value: $focusPosition, onChanged: onFocusChanged)
+                        .frame(width: 100, height: 100)
 
-            HStack(spacing: 0) {
-                // Left: Focus dial
-                FocusDial(value: $focusPosition, onChanged: onFocusChanged)
-                    .frame(width: 100, height: 100)
+                    Spacer()
+
+                    // Center: AF badge, timer, AUTO/SV, exposure meter with ISO
+                    CenterDisplay(
+                        timerSeconds: timerSeconds,
+                        iso: iso,
+                        flashMode: flashMode,
+                        macroEnabled: macroEnabled,
+                        isAutoFocus: isAutoFocus,
+                        exposureValue: exposureValue,
+                        onTimerTap: onTimerTap,
+                        onMacroTap: onMacroTap
+                    )
+
+                    Spacer()
+
+                    // Right: Shutter Speed dial (real iOS control)
+                    ShutterSpeedDial(value: $shutterSpeedIndex, onChanged: onShutterSpeedChanged)
+                        .frame(width: 100, height: 100)
+                }
+                .padding(.horizontal, 12)
 
                 Spacer()
 
-                // Center: AF badge, timer, AUTO/SV, exposure meter with ISO
-                CenterDisplay(
-                    timerSeconds: timerSeconds,
-                    iso: iso,
-                    flashMode: flashMode,
-                    macroEnabled: macroEnabled,
-                    isAutoFocus: isAutoFocus,
-                    exposureValue: exposureValue,
-                    onTimerTap: onTimerTap,
-                    onMacroTap: onMacroTap
-                )
-
-                Spacer()
-
-                // Right: Shutter Speed dial (real iOS control)
-                ShutterSpeedDial(value: $shutterSpeedIndex, onChanged: onShutterSpeedChanged)
-                    .frame(width: 100, height: 100)
-            }
-            .padding(.horizontal, 12)
-
-            // Bottom label
-            VStack {
-                Spacer()
+                // Bottom label
                 HStack(spacing: 4) {
                     Circle().fill(Color.red).frame(width: 4, height: 4)
                     Text("ANALOG DISPLAY SYSTEM")
@@ -577,6 +559,25 @@ struct AnalogDisplayPanel: View {
                 }
                 .padding(.bottom, 6)
             }
+
+            // Inner shadow overlay (top and left edges for inset depth)
+            VStack(spacing: 0) {
+                LinearGradient(colors: [Color.black.opacity(0.5), Color.clear], startPoint: .top, endPoint: .bottom)
+                    .frame(height: 10)
+                Spacer()
+            }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+
+            HStack(spacing: 0) {
+                LinearGradient(colors: [Color.black.opacity(0.4), Color.clear], startPoint: .leading, endPoint: .trailing)
+                    .frame(width: 8)
+                Spacer()
+            }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
+
+            // Outer border
+            RoundedRectangle(cornerRadius: cornerRadius)
+                .stroke(Color(hex: "1a1a1a"), lineWidth: 2)
         }
     }
 }
