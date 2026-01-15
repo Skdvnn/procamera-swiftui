@@ -432,103 +432,96 @@ struct InfoBar: View {
     }
 }
 
-// MARK: - Leica-Style Film Picker
+// MARK: - Film Picker (matches app design system)
 struct LeicaFilmPicker: View {
     @Binding var selectedFilter: FilmFilterMode
     @Binding var isPresented: Bool
 
+    // Match app design system colors
+    private let pageBg = Color(red: 0.09, green: 0.09, blue: 0.09)      // #171717
+    private let controlBg = Color(red: 0.17, green: 0.17, blue: 0.17)   // #2c2c2c
+    private let strokeColor = Color(red: 0.27, green: 0.27, blue: 0.27) // #444444
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
 
     var body: some View {
         ZStack {
             // Tap outside to dismiss
-            Color.black.opacity(0.3)
+            Color.black.opacity(0.5)
                 .ignoresSafeArea()
                 .onTapGesture {
                     VFHaptics.click()
                     isPresented = false
                 }
 
-            // Film picker panel
+            // Film picker panel - matches app control styling
             VStack(spacing: 0) {
                 // Header
                 HStack {
                     Text("FILM")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.5))
-                        .tracking(2)
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.4))
                     Spacer()
                     Button(action: {
                         VFHaptics.click()
                         isPresented = false
                     }) {
                         Image(systemName: "xmark")
-                            .font(.system(size: 12, weight: .medium))
-                            .foregroundColor(.white.opacity(0.6))
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundColor(.white.opacity(0.5))
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-
-                Divider()
-                    .background(Color.white.opacity(0.1))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
 
                 // Film options
                 ForEach(FilmFilterMode.allCases, id: \.self) { filter in
                     Button(action: {
                         VFHaptics.click()
                         selectedFilter = filter
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                             isPresented = false
                         }
                     }) {
-                        HStack(spacing: 12) {
-                            // Color swatch
-                            RoundedRectangle(cornerRadius: 3)
+                        HStack(spacing: 10) {
+                            // Color swatch - small rounded rect
+                            RoundedRectangle(cornerRadius: 2)
                                 .fill(swatchColor(for: filter))
-                                .frame(width: 24, height: 16)
+                                .frame(width: 20, height: 14)
                                 .overlay(
-                                    RoundedRectangle(cornerRadius: 3)
-                                        .stroke(Color.white.opacity(0.2), lineWidth: 0.5)
+                                    RoundedRectangle(cornerRadius: 2)
+                                        .stroke(strokeColor, lineWidth: 0.5)
                                 )
 
                             // Film name
                             Text(filter.name)
-                                .font(.system(size: 14, weight: selectedFilter == filter ? .semibold : .regular, design: .default))
-                                .foregroundColor(selectedFilter == filter ? accent : .white)
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(selectedFilter == filter ? .white : .white.opacity(0.7))
 
                             Spacer()
 
-                            // Selected indicator
+                            // Selected indicator dot
                             if selectedFilter == filter {
                                 Circle()
                                     .fill(accent)
-                                    .frame(width: 6, height: 6)
+                                    .frame(width: 5, height: 5)
                             }
                         }
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 12)
-                        .background(selectedFilter == filter ? Color.white.opacity(0.05) : Color.clear)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(selectedFilter == filter ? Color.white.opacity(0.08) : Color.clear)
                     }
                     .buttonStyle(.plain)
-
-                    if filter != FilmFilterMode.allCases.last {
-                        Divider()
-                            .background(Color.white.opacity(0.05))
-                            .padding(.leading, 52)
-                    }
                 }
             }
             .background(
-                RoundedRectangle(cornerRadius: 12)
-                    .fill(Color(red: 0.12, green: 0.12, blue: 0.12))
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(controlBg)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(strokeColor, lineWidth: 0.5)
             )
-            .frame(width: 200)
-            .shadow(color: .black.opacity(0.5), radius: 20, x: 0, y: 10)
+            .frame(width: 180)
         }
     }
 

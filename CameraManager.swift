@@ -874,6 +874,9 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             self.isLongExposureCapturing = false
         }
 
+        // Reset camera to auto exposure to prevent lag
+        resetToAutoExposure()
+
         // Process frames on background queue
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
@@ -896,6 +899,25 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 self.longExposureCompletion?(finalImage)
                 self.longExposureCompletion = nil
                 self.longExposureProgress = 0.0
+            }
+        }
+    }
+
+    private func resetToAutoExposure() {
+        guard let device = videoDeviceInput?.device else { return }
+
+        sessionQueue.async {
+            do {
+                try device.lockForConfiguration()
+                if device.isExposureModeSupported(.continuousAutoExposure) {
+                    device.exposureMode = .continuousAutoExposure
+                }
+                device.unlockForConfiguration()
+                DispatchQueue.main.async {
+                    self.isManualExposure = false
+                }
+            } catch {
+                print("Error resetting to auto exposure: \(error)")
             }
         }
     }

@@ -300,12 +300,8 @@ struct ContentView: View {
                         ZStack {
                             // Background layer: Left stack + Right WB with icons
                             HStack(alignment: .bottom, spacing: 0) {
-                                // Left: Format toggle, Flash pill, Thumbnail pill (stacked)
+                                // Left: Flash pill and Thumbnail pill (stacked)
                                 VStack(spacing: 8) {
-                                    FormatTogglePill(format: $captureFormat) { newFormat in
-                                        // Will hook up to CameraManager for actual capture format
-                                    }
-
                                     FlashButtonPill(flashMode: camera.flashMode) {
                                         Haptics.click()
                                         camera.cycleFlash()
@@ -318,6 +314,15 @@ struct ContentView: View {
                                         }
                                     }
                                 }
+
+                                // Format toggle between left controls and shutter
+                                Spacer()
+                                FormatTogglePill(format: $captureFormat) { newFormat in
+                                    // Hook up to CameraManager for actual capture format
+                                }
+                                .rotationEffect(.degrees(-90))
+                                .fixedSize()
+                                .padding(.trailing, 24)
 
                                 Spacer()
 

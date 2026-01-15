@@ -493,7 +493,7 @@ extension CenterDisplay {
     }
 }
 
-// MARK: - Analog Display Panel (Figma: 355x190, r=95 pill shape)
+// MARK: - Analog Display Panel (10px corner radius)
 struct AnalogDisplayPanel: View {
     @Binding var focusPosition: Float
     @Binding var exposureValue: Float
@@ -509,17 +509,17 @@ struct AnalogDisplayPanel: View {
     var onTimerTap: () -> Void = {}
     var onMacroTap: () -> Void = {}
 
-    // Figma pill radius
-    private let pillRadius: CGFloat = 60
+    // Corner radius for dials panel
+    private let cornerRadius: CGFloat = 10
 
     var body: some View {
         ZStack {
-            // Dark background (Figma: pill shape)
-            RoundedRectangle(cornerRadius: pillRadius)
+            // Dark background with 10px corners
+            RoundedRectangle(cornerRadius: cornerRadius)
                 .fill(Color(hex: "0d0d0d"))
 
             // Subtle border
-            RoundedRectangle(cornerRadius: pillRadius)
+            RoundedRectangle(cornerRadius: cornerRadius)
                 .stroke(
                     LinearGradient(
                         colors: [Color.white.opacity(0.1), Color.white.opacity(0.03)],
