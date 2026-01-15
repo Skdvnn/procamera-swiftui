@@ -3,7 +3,7 @@ import UIKit
 
 // Uses Haptics, Triangle, and Color(hex:) from ContentView.swift
 
-// MARK: - Focus Dial (Figma style - dark, clean)
+// MARK: - Focus Dial (cohesive with controls)
 struct FocusDial: View {
     @Binding var value: Float
     let onChanged: (Float) -> Void
@@ -19,33 +19,24 @@ struct FocusDial: View {
             let radius = size * 0.42
 
             ZStack {
-                // Outer ring (subtle gradient stroke)
+                // Outer dark frame (matches WB style)
                 Circle()
-                    .stroke(
-                        LinearGradient(
-                            colors: [Color.white.opacity(0.12), Color.white.opacity(0.03)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ),
-                        lineWidth: 1.5
-                    )
+                    .fill(Color.black)
 
-                // Dark background (Figma: very dark, almost black)
+                // Inner frame (matches controls #2c2c2c)
                 Circle()
-                    .fill(Color(hex: "0a0a0a"))
+                    .fill(Color(hex: "2c2c2c"))
                     .padding(2)
 
-                // Inner dial face (subtle gradient for depth)
+                // Inner stroke
                 Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [Color(hex: "1a1a1a"), Color(hex: "0d0d0d")],
-                            center: .init(x: 0.35, y: 0.35),
-                            startRadius: 0,
-                            endRadius: radius
-                        )
-                    )
-                    .padding(6)
+                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
+                    .padding(2)
+
+                // Dial face (subtle, not too dark)
+                Circle()
+                    .fill(Color(hex: "252525"))
+                    .padding(5)
 
                 // Tick marks (Figma style - clean white)
                 ForEach(0..<25, id: \.self) { i in
@@ -126,20 +117,19 @@ struct FocusDial: View {
     }
 }
 
-// MARK: - Aperture Dial (Figma style - dark, clean, f-stops)
-struct ApertureDial: View {
-    @Binding var value: Float  // f-stop value (2 to 16)
-    let onChanged: (Float) -> Void
+// MARK: - Shutter Speed Dial (real iOS control)
+struct ShutterSpeedDial: View {
+    @Binding var value: Int  // Index into shutter speeds array
+    let onChanged: (Int) -> Void
 
-    // f-stops as shown in Figma: 2, 2.8, 4, 5.6, 8, 11, 16
-    private let fStops: [Float] = [2.0, 2.8, 4.0, 5.6, 8.0, 11.0, 16.0]
+    // Shutter speeds: 1/4000 to 1/15 (index 0-7)
+    private let speeds = ["4k", "2k", "1k", "500", "250", "125", "60", "30"]
     private let marks: [(String, Float)] = [
-        ("2", 0.0), ("2.8", 0.167), ("4", 0.333), ("5.6", 0.5), ("8", 0.667), ("11", 0.833), ("16", 1.0)
+        ("4k", 0.0), ("2k", 0.143), ("1k", 0.286), ("500", 0.429), ("250", 0.571), ("125", 0.714), ("60", 0.857), ("30", 1.0)
     ]
 
     private var normalizedValue: Float {
-        guard let minF = fStops.first, let maxF = fStops.last else { return 0.5 }
-        return (value - minF) / (maxF - minF)
+        return Float(value) / Float(speeds.count - 1)
     }
 
     var body: some View {
@@ -149,37 +139,28 @@ struct ApertureDial: View {
             let radius = size * 0.42
 
             ZStack {
-                // Outer ring (subtle gradient stroke)
+                // Outer dark frame (matches WB style)
                 Circle()
-                    .stroke(
-                        LinearGradient(
-                            colors: [Color.white.opacity(0.12), Color.white.opacity(0.03)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ),
-                        lineWidth: 1.5
-                    )
+                    .fill(Color.black)
 
-                // Dark background (Figma: very dark)
+                // Inner frame (matches controls #2c2c2c)
                 Circle()
-                    .fill(Color(hex: "0a0a0a"))
+                    .fill(Color(hex: "2c2c2c"))
                     .padding(2)
 
-                // Inner dial face (subtle gradient)
+                // Inner stroke
                 Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [Color(hex: "1a1a1a"), Color(hex: "0d0d0d")],
-                            center: .init(x: 0.35, y: 0.35),
-                            startRadius: 0,
-                            endRadius: radius
-                        )
-                    )
-                    .padding(6)
+                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
+                    .padding(2)
 
-                // Tick marks - major for each f-stop
-                ForEach(0..<7, id: \.self) { i in
-                    let angle = -150.0 + Double(i) * 50
+                // Dial face (subtle, not too dark)
+                Circle()
+                    .fill(Color(hex: "252525"))
+                    .padding(5)
+
+                // Tick marks - 8 major for each shutter speed
+                ForEach(0..<8, id: \.self) { i in
+                    let angle = -150.0 + Double(i) * (300.0 / 7.0)
 
                     Rectangle()
                         .fill(Color.white.opacity(0.7))
@@ -188,25 +169,14 @@ struct ApertureDial: View {
                         .rotationEffect(.degrees(angle))
                 }
 
-                // Minor ticks
-                ForEach(0..<6, id: \.self) { i in
-                    let angle = -150.0 + Double(i) * 50 + 25
-
-                    Rectangle()
-                        .fill(Color.white.opacity(0.25))
-                        .frame(width: 1, height: 5)
-                        .offset(y: -radius + 2.5)
-                        .rotationEffect(.degrees(angle))
-                }
-
-                // Labels (Figma: white, monospace)
+                // Labels
                 ForEach(marks.indices, id: \.self) { i in
                     let mark = marks[i]
                     let angle = -150.0 + Double(mark.1) * 300.0
-                    let labelRadius = radius * 0.62
+                    let labelRadius = radius * 0.60
 
                     Text(mark.0)
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
                         .foregroundColor(.white.opacity(0.85))
                         .position(
                             x: center.x + labelRadius * cos(angle * .pi / 180),
@@ -214,13 +184,13 @@ struct ApertureDial: View {
                         )
                 }
 
-                // Needle (Figma: clean white)
+                // Needle
                 NeedleShape(length: radius * 0.7)
                     .fill(Color.white)
                     .shadow(color: .black.opacity(0.6), radius: 2, y: 1)
                     .rotationEffect(.degrees(-150 + Double(normalizedValue) * 300))
 
-                // Center hub (small, dark)
+                // Center hub
                 Circle()
                     .fill(Color(hex: "1a1a1a"))
                     .frame(width: 10, height: 10)
@@ -237,13 +207,12 @@ struct ApertureDial: View {
                         if angle < 0 { angle += 360 }
                         if angle > 300 { angle = angle > 330 ? 0 : 300 }
                         let normalized = Float(min(max(angle / 300, 0), 1))
-                        // Find closest f-stop
-                        let index = Int(round(normalized * Float(fStops.count - 1)))
-                        let clampedIndex = max(0, min(fStops.count - 1, index))
-                        let newValue = fStops[clampedIndex]
-                        if abs(newValue - value) > 0.1 {
-                            value = newValue
-                            onChanged(newValue)
+                        // Find closest shutter speed index
+                        let newIndex = Int(round(normalized * Float(speeds.count - 1)))
+                        let clampedIndex = max(0, min(speeds.count - 1, newIndex))
+                        if clampedIndex != value {
+                            value = clampedIndex
+                            onChanged(clampedIndex)
                             Haptics.light()
                         }
                     }
@@ -252,6 +221,9 @@ struct ApertureDial: View {
         .aspectRatio(1, contentMode: .fit)
     }
 }
+
+// Keep ApertureDial as alias for backward compatibility
+typealias ApertureDial = ShutterSpeedDial
 
 // MARK: - Rich Exposure Dial (keeping for backward compatibility)
 struct ExposureDial: View {
@@ -511,7 +483,7 @@ extension CenterDisplay {
 struct AnalogDisplayPanel: View {
     @Binding var focusPosition: Float
     @Binding var exposureValue: Float
-    @Binding var apertureValue: Float
+    @Binding var shutterSpeedIndex: Int  // Changed from apertureValue to shutter speed
     let timerSeconds: Int
     let iso: Int
     let flashMode: String
@@ -519,7 +491,7 @@ struct AnalogDisplayPanel: View {
     let isAutoFocus: Bool
     let onFocusChanged: (Float) -> Void
     let onExposureChanged: (Float) -> Void
-    let onApertureChanged: (Float) -> Void
+    let onShutterSpeedChanged: (Int) -> Void  // Changed from onApertureChanged
     var onTimerTap: () -> Void = {}
     var onMacroTap: () -> Void = {}
 
@@ -564,8 +536,8 @@ struct AnalogDisplayPanel: View {
 
                 Spacer()
 
-                // Right: Aperture dial (f-stop)
-                ApertureDial(value: $apertureValue, onChanged: onApertureChanged)
+                // Right: Shutter Speed dial (real iOS control)
+                ShutterSpeedDial(value: $shutterSpeedIndex, onChanged: onShutterSpeedChanged)
                     .frame(width: 100, height: 100)
             }
             .padding(.horizontal, 12)
@@ -586,7 +558,7 @@ struct AnalogDisplayPanel: View {
     }
 }
 
-// Legacy initializer for backward compatibility (without aperture)
+// Legacy initializer for backward compatibility (without shutter speed)
 extension AnalogDisplayPanel {
     init(
         focusPosition: Binding<Float>,
@@ -603,7 +575,7 @@ extension AnalogDisplayPanel {
     ) {
         self._focusPosition = focusPosition
         self._exposureValue = exposureValue
-        self._apertureValue = .constant(2.8)  // Default aperture
+        self._shutterSpeedIndex = .constant(4)  // Default to 1/250
         self.timerSeconds = timerSeconds
         self.iso = iso
         self.flashMode = flashMode
@@ -611,7 +583,7 @@ extension AnalogDisplayPanel {
         self.isAutoFocus = isAutoFocus
         self.onFocusChanged = onFocusChanged
         self.onExposureChanged = onExposureChanged
-        self.onApertureChanged = { _ in }
+        self.onShutterSpeedChanged = { _ in }
         self.onTimerTap = onTimerTap
         self.onMacroTap = onMacroTap
     }
@@ -639,7 +611,7 @@ struct ModeBadge: View {
 extension AnalogDisplayPanel {
     init(
         focusPosition: Float,
-        aperture: Float,
+        shutterSpeedIdx: Int = 4,
         ev: Float,
         isAutoFocus: Bool,
         timerSeconds: Int,
@@ -648,7 +620,7 @@ extension AnalogDisplayPanel {
     ) {
         self._focusPosition = .constant(focusPosition)
         self._exposureValue = .constant(ev)
-        self._apertureValue = .constant(aperture)
+        self._shutterSpeedIndex = .constant(shutterSpeedIdx)
         self.timerSeconds = timerSeconds
         self.iso = 100
         self.flashMode = flashMode
@@ -656,6 +628,6 @@ extension AnalogDisplayPanel {
         self.isAutoFocus = isAutoFocus
         self.onFocusChanged = { _ in }
         self.onExposureChanged = { _ in }
-        self.onApertureChanged = { _ in }
+        self.onShutterSpeedChanged = { _ in }
     }
 }

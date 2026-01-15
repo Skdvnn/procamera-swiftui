@@ -1,4 +1,12 @@
 import SwiftUI
+import UIKit
+
+// Simple haptics for this file
+private struct VFHaptics {
+    static func click() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+}
 
 // MARK: - Film Grain Overlay
 struct FilmGrainOverlay: View {
@@ -27,6 +35,9 @@ struct FilmGrainOverlay: View {
 // MARK: - Viewfinder Overlay (matches Figma design)
 struct ViewfinderOverlay: View {
     let showGrid: Bool
+    @Binding var aspectRatio: AspectRatioMode
+    @Binding var filmFilter: FilmFilterMode
+    @State private var showFilmMenu = false
 
     var body: some View {
         GeometryReader { geo in
@@ -48,33 +59,132 @@ struct ViewfinderOverlay: View {
                     GridLines()
                 }
 
-                // Top left - crop/grid icon (matches Figma)
-                Button(action: {}) {
+                // Aspect ratio crop mask
+                if aspectRatio != .full {
+                    AspectRatioMask(mode: aspectRatio, size: geo.size)
+                }
+
+                // Top left - Aspect ratio button (DSLR-style)
+                Button(action: {
+                    VFHaptics.click()
+                    aspectRatio = aspectRatio.next
+                }) {
                     ZStack {
                         Circle()
-                            .fill(Color.black.opacity(0.3))
+                            .fill(Color.black.opacity(0.4))
                             .frame(width: 32, height: 32)
-                        Image(systemName: "crop")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.white.opacity(0.8))
+                        Text(aspectRatio.label)
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.9))
                     }
                 }
                 .position(x: inset + 20, y: inset + 20)
-                .allowsHitTesting(true)
 
-                // Top right - settings gear icon (matches Figma)
-                Button(action: {}) {
+                // Top right - Film filter menu
+                Menu {
+                    ForEach(FilmFilterMode.allCases, id: \.self) { filter in
+                        Button(action: {
+                            VFHaptics.click()
+                            filmFilter = filter
+                        }) {
+                            HStack {
+                                Text(filter.name)
+                                if filmFilter == filter {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
+                } label: {
                     ZStack {
                         Circle()
-                            .fill(Color.black.opacity(0.3))
+                            .fill(Color.black.opacity(0.4))
                             .frame(width: 32, height: 32)
-                        Image(systemName: "gearshape")
-                            .font(.system(size: 14, weight: .medium))
-                            .foregroundColor(.white.opacity(0.8))
+                        Image(systemName: "film")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(filmFilter == .none ? .white.opacity(0.8) : .orange)
                     }
                 }
                 .position(x: width - inset - 20, y: inset + 20)
-                .allowsHitTesting(true)
+            }
+        }
+    }
+}
+
+// MARK: - Aspect Ratio Mode
+enum AspectRatioMode: CaseIterable {
+    case full, ratio4x3, ratio1x1, ratio16x9, ratio3x2
+
+    var label: String {
+        switch self {
+        case .full: return "FULL"
+        case .ratio4x3: return "4:3"
+        case .ratio1x1: return "1:1"
+        case .ratio16x9: return "16:9"
+        case .ratio3x2: return "3:2"
+        }
+    }
+
+    var next: AspectRatioMode {
+        let all = AspectRatioMode.allCases
+        let idx = all.firstIndex(of: self) ?? 0
+        return all[(idx + 1) % all.count]
+    }
+}
+
+// MARK: - Film Filter Mode
+enum FilmFilterMode: CaseIterable {
+    case none, portra400, kodakGold, trix400, velvia50, cinestill800
+
+    var name: String {
+        switch self {
+        case .none: return "None"
+        case .portra400: return "Portra 400"
+        case .kodakGold: return "Kodak Gold"
+        case .trix400: return "Tri-X 400"
+        case .velvia50: return "Velvia 50"
+        case .cinestill800: return "CineStill 800T"
+        }
+    }
+}
+
+// MARK: - Aspect Ratio Mask
+struct AspectRatioMask: View {
+    let mode: AspectRatioMode
+    let size: CGSize
+
+    var body: some View {
+        let targetRatio: CGFloat = {
+            switch mode {
+            case .full: return size.width / size.height
+            case .ratio4x3: return 4.0 / 3.0
+            case .ratio1x1: return 1.0
+            case .ratio16x9: return 16.0 / 9.0
+            case .ratio3x2: return 3.0 / 2.0
+            }
+        }()
+
+        let currentRatio = size.width / size.height
+
+        GeometryReader { geo in
+            if targetRatio > currentRatio {
+                // Letterbox (bars top/bottom)
+                let newHeight = size.width / targetRatio
+                let barHeight = (size.height - newHeight) / 2
+                VStack(spacing: 0) {
+                    Rectangle().fill(Color.black.opacity(0.7)).frame(height: barHeight)
+                    Spacer()
+                    Rectangle().fill(Color.black.opacity(0.7)).frame(height: barHeight)
+                }
+            } else {
+                // Pillarbox (bars left/right)
+                let newWidth = size.height * targetRatio
+                let barWidth = (size.width - newWidth) / 2
+                HStack(spacing: 0) {
+                    Rectangle().fill(Color.black.opacity(0.7)).frame(width: barWidth)
+                    Spacer()
+                    Rectangle().fill(Color.black.opacity(0.7)).frame(width: barWidth)
+                }
             }
         }
         .allowsHitTesting(false)
