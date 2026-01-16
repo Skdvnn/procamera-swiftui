@@ -257,15 +257,16 @@ struct ContentView: View {
                                 Spacer()
                             }
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 10, bottomTrailingRadius: 10, topTrailingRadius: 0))
 
-                        // Outer border
-                        RoundedRectangle(cornerRadius: 10)
+                        // Outer border (only bottom corners rounded)
+                        UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 10, bottomTrailingRadius: 10, topTrailingRadius: 0)
                             .stroke(Color(hex: "1a1a1a"), lineWidth: 2)
                     }
                     .frame(height: viewfinderHeight)
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, DS.pageMargin)
+                    .offset(y: -2)  // Overlap slightly with gauge panel
 
                     Spacer().frame(height: viewfinderToControlsSpacing)
 
@@ -315,86 +316,78 @@ struct ContentView: View {
                             .frame(height: 44)
                             .padding(.horizontal, DS.pageMargin)
 
-                            // ROW 3: Main capture row - all bottom elements share baseline
-                            HStack(alignment: .bottom, spacing: 0) {
-                                // Left: Flash/Thumbnail stack (spacing matches right side for baseline alignment)
-                                VStack(spacing: 12) {
-                                    FlashButtonPill(flashMode: camera.flashMode) {
-                                        Haptics.click()
-                                        camera.cycleFlash()
-                                    }
+                            // ROW 3: Flash | Format | Mode icons+buttons (aligned horizontally)
+                            HStack(alignment: .center, spacing: 0) {
+                                FlashButtonPill(flashMode: camera.flashMode) {
+                                    Haptics.click()
+                                    camera.cycleFlash()
+                                }
 
-                                    ThumbnailPill(image: lastCapturedImage) {
-                                        Haptics.click()
-                                        if let url = URL(string: "photos-redirect://") {
-                                            UIApplication.shared.open(url)
-                                        }
+                                Spacer()
+
+                                FormatTogglePill(format: $captureFormat) { newFormat in
+                                    switch newFormat {
+                                    case .heic: camera.captureFormat = .heic
+                                    case .jpeg: camera.captureFormat = .jpeg
+                                    case .raw: camera.captureFormat = .raw
                                     }
                                 }
 
                                 Spacer()
 
-                                // Center: Format toggle on top of shutter
-                                VStack(spacing: 10) {
-                                    FormatTogglePill(format: $captureFormat) { newFormat in
-                                        // Update camera's capture format
-                                        switch newFormat {
-                                        case .heic: camera.captureFormat = .heic
-                                        case .jpeg: camera.captureFormat = .jpeg
-                                        case .raw: camera.captureFormat = .raw
+                                // Mode icons + buttons
+                                HStack(spacing: 16) {
+                                    VStack(spacing: 6) {
+                                        ModeIcon(icon: "camera.macro", isActive: macroEnabled)
+                                        ModeButton(isActive: macroEnabled) {
+                                            Haptics.click()
+                                            macroEnabled.toggle()
                                         }
                                     }
+                                    VStack(spacing: 6) {
+                                        ModeIcon(icon: "timer", isActive: timerSeconds > 0)
+                                        ModeButton(isActive: timerSeconds > 0) {
+                                            Haptics.click()
+                                            if timerSeconds == 0 { timerSeconds = 3 }
+                                            else if timerSeconds == 3 { timerSeconds = 10 }
+                                            else { timerSeconds = 0 }
+                                        }
+                                    }
+                                    VStack(spacing: 6) {
+                                        ModeIcon(icon: "rectangle.on.rectangle", isActive: showGrid)
+                                        ModeButton(isActive: showGrid) {
+                                            Haptics.click()
+                                            showGrid.toggle()
+                                        }
+                                    }
+                                }
+                            }
+                            .padding(.horizontal, DS.pageMargin + 4)
 
-                                    ShutterButton(isCapturing: isCapturing) {
-                                        Haptics.heavy()
-                                        handleCapture()
+                            // ROW 4: Thumbnail | Shutter | WB (aligned horizontally)
+                            HStack(alignment: .center, spacing: 0) {
+                                ThumbnailPill(image: lastCapturedImage) {
+                                    Haptics.click()
+                                    if let url = URL(string: "photos-redirect://") {
+                                        UIApplication.shared.open(url)
                                     }
                                 }
 
                                 Spacer()
 
-                                // Right: Mode controls + WB (spacing matches left for baseline alignment)
-                                VStack(spacing: 12) {
-                                    // Icons + Buttons combined for perfect alignment
-                                    HStack(spacing: 16) {
-                                        // Macro column
-                                        VStack(spacing: 6) {
-                                            ModeIcon(icon: "camera.macro", isActive: macroEnabled)
-                                            ModeButton(isActive: macroEnabled) {
-                                                Haptics.click()
-                                                macroEnabled.toggle()
-                                            }
-                                        }
-
-                                        // Timer column
-                                        VStack(spacing: 6) {
-                                            ModeIcon(icon: "timer", isActive: timerSeconds > 0)
-                                            ModeButton(isActive: timerSeconds > 0) {
-                                                Haptics.click()
-                                                if timerSeconds == 0 { timerSeconds = 3 }
-                                                else if timerSeconds == 3 { timerSeconds = 10 }
-                                                else { timerSeconds = 0 }
-                                            }
-                                        }
-
-                                        // Grid column
-                                        VStack(spacing: 6) {
-                                            ModeIcon(icon: "rectangle.on.rectangle", isActive: showGrid)
-                                            ModeButton(isActive: showGrid) {
-                                                Haptics.click()
-                                                showGrid.toggle()
-                                            }
-                                        }
-                                    }
-
-                                    // WB pill below
-                                    WBPill(
-                                        whiteBalanceIndex: $whiteBalanceIndex,
-                                        onChanged: { mode in
-                                            camera.setWhiteBalance(mode: mode)
-                                        }
-                                    )
+                                ShutterButton(isCapturing: isCapturing) {
+                                    Haptics.heavy()
+                                    handleCapture()
                                 }
+
+                                Spacer()
+
+                                WBPill(
+                                    whiteBalanceIndex: $whiteBalanceIndex,
+                                    onChanged: { mode in
+                                        camera.setWhiteBalance(mode: mode)
+                                    }
+                                )
                             }
                             .padding(.horizontal, DS.pageMargin + 4)
                         }
