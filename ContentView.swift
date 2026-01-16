@@ -144,7 +144,7 @@ struct ContentView: View {
             // Layout measurements - maximize viewport (extend camera view)
             let topPanelHeight: CGFloat = 110
             let bottomControlsHeight: CGFloat = 210  // Compact controls, more viewport
-            let gaugeToViewfinderSpacing: CGFloat = 0  // No gap - viewfinder extends to gauges
+            let gaugeToViewfinderSpacing: CGFloat = 4  // Small gap for visual separation from dials
             let viewfinderToControlsSpacing: CGFloat = 0  // No gap - viewfinder extends to controls
             let bottomPadding: CGFloat = 0
 
@@ -257,16 +257,15 @@ struct ContentView: View {
                                 Spacer()
                             }
                         }
-                        .clipShape(UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 10, bottomTrailingRadius: 10, topTrailingRadius: 0))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
 
-                        // Outer border (only bottom corners rounded)
-                        UnevenRoundedRectangle(topLeadingRadius: 0, bottomLeadingRadius: 10, bottomTrailingRadius: 10, topTrailingRadius: 0)
+                        // Outer border
+                        RoundedRectangle(cornerRadius: 10)
                             .stroke(Color(hex: "1a1a1a"), lineWidth: 2)
                     }
                     .frame(height: viewfinderHeight)
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, DS.pageMargin)
-                    .offset(y: -2)  // Overlap slightly with gauge panel
 
                     Spacer().frame(height: viewfinderToControlsSpacing)
 
@@ -275,7 +274,7 @@ struct ContentView: View {
                         // Grain texture for controls area
                         ControlsGrain()
 
-                        VStack(spacing: 10) {
+                        VStack(spacing: 0) {
                             // ROW 1: Zoom control (full width)
                             LensRingControl(
                                 focalLength: $focalLength,
@@ -294,6 +293,8 @@ struct ContentView: View {
                             )
                             .frame(height: 44)
                             .padding(.horizontal, DS.pageMargin)
+
+                            Spacer().frame(height: 8)
 
                             // ROW 2: ISO & Shutter side by side
                             HStack(spacing: 10) {
@@ -315,6 +316,8 @@ struct ContentView: View {
                             }
                             .frame(height: 44)
                             .padding(.horizontal, DS.pageMargin)
+
+                            Spacer().frame(height: 14)  // More space before button rows
 
                             // ROW 3: Flash | Format | Mode icons+buttons (aligned horizontally)
                             HStack(alignment: .center, spacing: 0) {
@@ -364,6 +367,8 @@ struct ContentView: View {
                             }
                             .padding(.horizontal, DS.pageMargin + 4)
 
+                            Spacer().frame(height: 6)  // Tighter spacing between button rows
+
                             // ROW 4: Thumbnail | Shutter | WB (aligned horizontally)
                             HStack(alignment: .center, spacing: 0) {
                                 ThumbnailPill(image: lastCapturedImage) {
@@ -391,7 +396,7 @@ struct ContentView: View {
                             }
                             .padding(.horizontal, DS.pageMargin + 4)
                         }
-                        .padding(.top, 6)
+                        .padding(.top, 4)
                     }
                     .padding(.bottom, bottomPadding)
                 }
