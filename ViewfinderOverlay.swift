@@ -96,14 +96,13 @@ struct ViewfinderOverlay: View {
                 }
                 .position(x: width - inset - 20, y: inset + 20)
 
-                // Leica-style film picker panel
+                // Leica-style film picker panel - positioned near trigger (top right)
                 if showFilmMenu {
                     LeicaFilmPicker(
                         selectedFilter: $filmFilter,
                         isPresented: $showFilmMenu
                     )
-                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                    .animation(.easeOut(duration: 0.15), value: showFilmMenu)
+                    .position(x: width - 110, y: inset + 140)  // Near the trigger button
                 }
             }
         }

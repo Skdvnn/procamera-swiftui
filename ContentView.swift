@@ -145,7 +145,7 @@ struct ContentView: View {
             let topPanelHeight: CGFloat = 110
             let bottomControlsHeight: CGFloat = 210  // Compact controls, more viewport
             let gaugeToViewfinderSpacing: CGFloat = 5  // Tight gap from gauge
-            let viewfinderToControlsSpacing: CGFloat = 10  // Gap to scrubbers
+            let viewfinderToControlsSpacing: CGFloat = 5  // Match gauge gap for consistency
             let bottomPadding: CGFloat = 0
 
             // Calculate viewfinder to fill remaining space
@@ -337,7 +337,12 @@ struct ContentView: View {
                                 // Center: Format toggle on top of shutter
                                 VStack(spacing: 10) {
                                     FormatTogglePill(format: $captureFormat) { newFormat in
-                                        // Hook up to CameraManager for actual capture format
+                                        // Update camera's capture format
+                                        switch newFormat {
+                                        case .heic: camera.captureFormat = .heic
+                                        case .jpeg: camera.captureFormat = .jpeg
+                                        case .raw: camera.captureFormat = .raw
+                                        }
                                     }
 
                                     ShutterButton(isCapturing: isCapturing) {
@@ -1211,16 +1216,16 @@ struct ShutterButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Outer ring (Figma: dark circle with gradient)
+                // Outer ring (brighter for visibility)
                 Circle()
-                    .fill(Color(hex: "1a1a1a"))
+                    .fill(Color(hex: "252525"))
                     .frame(width: 72, height: 72)
 
                 // Subtle top highlight
                 Circle()
                     .stroke(
                         LinearGradient(
-                            colors: [Color.white.opacity(0.15), Color.white.opacity(0.02)],
+                            colors: [Color.white.opacity(0.2), Color.white.opacity(0.03)],
                             startPoint: .top,
                             endPoint: .bottom
                         ),
@@ -1228,14 +1233,14 @@ struct ShutterButton: View {
                     )
                     .frame(width: 72, height: 72)
 
-                // Inner button face with subtle 3D effect
+                // Inner button face with subtle 3D effect (brightened)
                 Circle()
                     .fill(
                         RadialGradient(
                             colors: [
+                                Color(hex: isPressed ? "222222" : "2e2e2e"),
                                 Color(hex: isPressed ? "181818" : "222222"),
-                                Color(hex: isPressed ? "0f0f0f" : "151515"),
-                                Color(hex: isPressed ? "0a0a0a" : "101010")
+                                Color(hex: isPressed ? "141414" : "1a1a1a")
                             ],
                             center: UnitPoint(x: 0.4, y: 0.35),
                             startRadius: 0,
@@ -1244,9 +1249,9 @@ struct ShutterButton: View {
                     )
                     .frame(width: 64, height: 64)
 
-                // Inner stroke
+                // Inner stroke (brighter)
                 Circle()
-                    .stroke(Color(hex: "333333"), lineWidth: 0.5)
+                    .stroke(Color(hex: "404040"), lineWidth: 0.5)
                     .frame(width: 64, height: 64)
 
                 // Concentric detail circles (Figma shows subtle rings)
@@ -1411,6 +1416,7 @@ struct FlashButtonPill: View {
     // Uniform size for flash/thumbnail/WB
     private let pillWidth: CGFloat = 88
     private let pillHeight: CGFloat = 48
+    @State private var isPressed = false
 
     private var iconColor: Color {
         switch flashMode {
@@ -1429,14 +1435,27 @@ struct FlashButtonPill: View {
                     .fill(Color.black)
                     .frame(width: pillWidth, height: pillHeight)
 
-                // Inner frame (Figma: #2c2c2c fill)
+                // Inner frame - darker when pressed for inset effect
                 Capsule()
-                    .fill(Color(hex: "2c2c2c"))
+                    .fill(Color(hex: isPressed ? "1e1e1e" : "2c2c2c"))
                     .frame(width: pillWidth - 4, height: pillHeight - 4)
+
+                // Inner shadow when pressed (inset look)
+                if isPressed {
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.black.opacity(0.3), Color.clear],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(width: pillWidth - 4, height: pillHeight - 4)
+                }
 
                 // Inner stroke (Figma: #444444)
                 Capsule()
-                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
+                    .stroke(Color(hex: isPressed ? "333333" : "444444"), lineWidth: 0.5)
                     .frame(width: pillWidth - 4, height: pillHeight - 4)
 
                 // Lightning bolt icon
@@ -1445,8 +1464,15 @@ struct FlashButtonPill: View {
                     .foregroundColor(iconColor)
             }
             .frame(width: pillWidth, height: pillHeight)
+            .scaleEffect(isPressed ? 0.96 : 1.0)
+            .animation(.easeOut(duration: 0.1), value: isPressed)
         }
-        .buttonStyle(ProButtonStyle())
+        .buttonStyle(.plain)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { _ in isPressed = false }
+        )
     }
 }
 
@@ -1530,6 +1556,7 @@ struct ThumbnailPill: View {
     // Uniform size for flash/thumbnail/WB
     private let pillWidth: CGFloat = 88
     private let pillHeight: CGFloat = 48
+    @State private var isPressed = false
 
     var body: some View {
         Button(action: action) {
@@ -1539,14 +1566,27 @@ struct ThumbnailPill: View {
                     .fill(Color.black)
                     .frame(width: pillWidth, height: pillHeight)
 
-                // Inner frame
+                // Inner frame - darker when pressed
                 RoundedRectangle(cornerRadius: 22)
-                    .fill(Color(hex: "2c2c2c"))
+                    .fill(Color(hex: isPressed ? "1e1e1e" : "2c2c2c"))
                     .frame(width: pillWidth - 4, height: pillHeight - 4)
+
+                // Inner shadow when pressed
+                if isPressed {
+                    RoundedRectangle(cornerRadius: 22)
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.black.opacity(0.3), Color.clear],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(width: pillWidth - 4, height: pillHeight - 4)
+                }
 
                 // Inner stroke
                 RoundedRectangle(cornerRadius: 22)
-                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
+                    .stroke(Color(hex: isPressed ? "333333" : "444444"), lineWidth: 0.5)
                     .frame(width: pillWidth - 4, height: pillHeight - 4)
 
                 // Image or placeholder
@@ -1563,8 +1603,15 @@ struct ThumbnailPill: View {
                 }
             }
             .frame(width: pillWidth, height: pillHeight)
+            .scaleEffect(isPressed ? 0.96 : 1.0)
+            .animation(.easeOut(duration: 0.1), value: isPressed)
         }
         .buttonStyle(.plain)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { _ in isPressed = false }
+        )
     }
 }
 
@@ -1790,6 +1837,7 @@ struct WBPill: View {
     // Uniform size for flash/thumbnail/WB
     private let pillWidth: CGFloat = 88
     private let pillHeight: CGFloat = 48
+    @State private var isPressed = false
 
     var body: some View {
         Button(action: {
@@ -1803,13 +1851,26 @@ struct WBPill: View {
                     .fill(Color.black)
                     .frame(width: pillWidth, height: pillHeight)
 
-                // Inner frame
+                // Inner frame - darker when pressed
                 Capsule()
-                    .fill(Color(hex: "2c2c2c"))
+                    .fill(Color(hex: isPressed ? "1e1e1e" : "2c2c2c"))
                     .frame(width: pillWidth - 4, height: pillHeight - 4)
 
+                // Inner shadow when pressed
+                if isPressed {
+                    Capsule()
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.black.opacity(0.3), Color.clear],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                        .frame(width: pillWidth - 4, height: pillHeight - 4)
+                }
+
                 Capsule()
-                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
+                    .stroke(Color(hex: isPressed ? "333333" : "444444"), lineWidth: 0.5)
                     .frame(width: pillWidth - 4, height: pillHeight - 4)
 
                 // Text
@@ -1823,8 +1884,15 @@ struct WBPill: View {
                 }
             }
             .frame(width: pillWidth, height: pillHeight)
+            .scaleEffect(isPressed ? 0.96 : 1.0)
+            .animation(.easeOut(duration: 0.1), value: isPressed)
         }
         .buttonStyle(.plain)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in isPressed = true }
+                .onEnded { _ in isPressed = false }
+        )
     }
 }
 

@@ -24,6 +24,22 @@ class CameraManager: NSObject, ObservableObject {
     @Published var selectedFilmFilter: FilmFilter = .none
     @Published var isLongExposureCapturing: Bool = false
     @Published var longExposureProgress: Float = 0.0
+    @Published var captureFormat: CaptureFormatType = .heic
+
+    // Capture format types
+    enum CaptureFormatType: Int, CaseIterable {
+        case heic = 0
+        case jpeg
+        case raw
+
+        var label: String {
+            switch self {
+            case .heic: return "HEIC"
+            case .jpeg: return "JPG"
+            case .raw: return "RAW"
+            }
+        }
+    }
 
     // Long exposure support
     private var videoDataOutput: AVCaptureVideoDataOutput?
@@ -786,15 +802,35 @@ class CameraManager: NSObject, ObservableObject {
                 completion(nil)
                 return
             }
-            // Apply film filter before returning
-            let filteredImage = self.applyFilmFilter(to: image)
+            // Apply film filter before returning (skip for RAW)
+            let filteredImage = self.captureFormat == .raw ? image : self.applyFilmFilter(to: image)
             completion(filteredImage)
         }
 
-        var settings = AVCapturePhotoSettings()
+        var settings: AVCapturePhotoSettings
 
-        if photoOutput.availablePhotoCodecTypes.contains(.hevc) {
-            settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.hevc])
+        switch captureFormat {
+        case .heic:
+            if photoOutput.availablePhotoCodecTypes.contains(.hevc) {
+                settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.hevc])
+            } else {
+                settings = AVCapturePhotoSettings()
+            }
+        case .jpeg:
+            settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
+        case .raw:
+            // Check if RAW is supported
+            if let rawFormat = photoOutput.availableRawPhotoPixelFormatTypes.first {
+                settings = AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
+            } else {
+                // Fallback to HEIC if RAW not supported
+                print("RAW not supported, falling back to HEIC")
+                if photoOutput.availablePhotoCodecTypes.contains(.hevc) {
+                    settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.hevc])
+                } else {
+                    settings = AVCapturePhotoSettings()
+                }
+            }
         }
 
         settings.flashMode = flashMode

@@ -401,75 +401,88 @@ struct NeedleShape: Shape {
     }
 }
 
-// MARK: - Horizontal Exposure Meter (enhanced DSLR style with faded edges)
+// MARK: - Horizontal Exposure Meter (Nikon-style accurate scale)
+// Based on real camera meters: -2 to +2 scale with 1/3 stop increments
 struct HorizontalExposureMeter: View {
     let value: Float // -2 to +2
     let iso: Int
 
-    private let marks = ["+2", "+1", "0", "-1", "-2"]
+    // Major marks at full stops, minor marks at 1/3 stops
+    private let majorMarks = ["-2", "-1", "0", "+1", "+2"]
 
     var body: some View {
-        VStack(spacing: 6) {
-            // Meter bar with detailed ticks and faded edges
+        VStack(spacing: 8) {
+            // Meter scale - larger and more detailed
             ZStack {
-                // Background bar
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.white.opacity(0.03))
-                    .frame(width: 100, height: 28)
+                // Dark background panel
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(Color(hex: "0a0a0a"))
+                    .frame(width: 120, height: 36)
 
-                // Tick marks with faded edges
-                HStack(spacing: 0) {
-                    ForEach(0..<5, id: \.self) { i in
-                        HStack(spacing: 0) {
-                            // Calculate fade opacity (edges are more transparent)
-                            let edgeFade = i == 0 || i == 4 ? 0.4 : (i == 1 || i == 3 ? 0.7 : 1.0)
+                // Inner border
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(Color(hex: "2a2a2a"), lineWidth: 0.5)
+                    .frame(width: 120, height: 36)
 
-                            // Major tick
-                            VStack(spacing: 2) {
+                // Scale with ticks
+                VStack(spacing: 0) {
+                    // Tick marks row
+                    HStack(spacing: 0) {
+                        ForEach(0..<13, id: \.self) { i in
+                            let isMajor = i % 3 == 0
+                            let stopIndex = i / 3
+                            let edgeFade: Double = {
+                                if stopIndex == 0 || stopIndex == 4 { return 0.5 }
+                                if stopIndex == 1 || stopIndex == 3 { return 0.75 }
+                                return 1.0
+                            }()
+
+                            VStack(spacing: 1) {
                                 Rectangle()
-                                    .fill(Color.white.opacity((i == 2 ? 0.9 : 0.5) * edgeFade))
-                                    .frame(width: i == 2 ? 2 : 1, height: i == 2 ? 12 : 7)
+                                    .fill(Color.white.opacity((isMajor ? 0.8 : 0.35) * edgeFade))
+                                    .frame(width: isMajor ? 1.5 : 1, height: isMajor ? 10 : 5)
 
-                                Text(marks[i])
-                                    .font(.system(size: 7, weight: i == 2 ? .bold : .medium, design: .monospaced))
-                                    .foregroundColor(.white.opacity((i == 2 ? 0.9 : 0.5) * edgeFade))
-                            }
-
-                            if i < 4 {
-                                Spacer()
-                                // Minor ticks between major ones (also faded)
-                                let minorFade = i == 0 || i == 3 ? 0.5 : 0.8
-                                VStack(spacing: 0) {
-                                    Rectangle()
-                                        .fill(Color.white.opacity(0.15 * minorFade))
-                                        .frame(width: 1, height: 4)
-                                    Spacer()
+                                if isMajor {
+                                    Text(majorMarks[stopIndex])
+                                        .font(.system(size: 7, weight: stopIndex == 2 ? .bold : .medium, design: .monospaced))
+                                        .foregroundColor(.white.opacity(0.7 * edgeFade))
                                 }
-                                .frame(height: 12)
-                                Spacer()
                             }
+                            .frame(width: 8.5)
                         }
                     }
+
+                    // Moving indicator needle
+                    ZStack {
+                        // Needle position: value of -2 to +2 maps to full width
+                        let needleOffset = CGFloat(value) * 25.5 // 102px / 4 stops = 25.5px per stop
+
+                        // Needle shadow for depth
+                        Capsule()
+                            .fill(Color.black.opacity(0.5))
+                            .frame(width: 4, height: 8)
+                            .offset(x: needleOffset, y: 1)
+
+                        // Indicator needle (accent when off-center)
+                        Capsule()
+                            .fill(abs(value) > 0.15 ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white)
+                            .frame(width: 3, height: 7)
+                            .offset(x: needleOffset)
+                    }
+                    .frame(height: 10)
+                    .offset(y: -2)
                 }
-                .frame(width: 90, height: 24)
-
-                // Indicator triangle (accent color when not centered)
-                Triangle()
-                    .fill(abs(value) > 0.1 ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white)
-                    .frame(width: 6, height: 5)
-                    .offset(x: CGFloat(value) * -22.5) // Move based on EV value
-                    .offset(y: -12)
             }
-            .frame(width: 100, height: 28)
+            .frame(width: 120, height: 36)
 
-            // ISO display with label
-            HStack(spacing: 3) {
+            // ISO display - cleaner
+            HStack(spacing: 4) {
                 Text("ISO")
-                    .font(.system(size: 8, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.4))
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.5))
                 Text("\(iso)")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.7))
+                    .font(.system(size: 13, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.8))
             }
         }
     }
