@@ -909,15 +909,29 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     private func resetToAutoExposure() {
         guard let device = videoDeviceInput?.device else { return }
 
+        // Immediately clear any pending frames to free memory
+        longExposureFrames.removeAll()
+        longExposureTargetFrames = 0
+
         sessionQueue.async {
             do {
                 try device.lockForConfiguration()
+
+                // Reset to auto exposure
                 if device.isExposureModeSupported(.continuousAutoExposure) {
                     device.exposureMode = .continuousAutoExposure
                 }
+
+                // Reset exposure duration to auto
+                if device.isExposureModeSupported(.autoExpose) {
+                    device.exposureMode = .autoExpose
+                }
+
                 device.unlockForConfiguration()
+
                 DispatchQueue.main.async {
                     self.isManualExposure = false
+                    self.longExposureProgress = 0.0
                 }
             } catch {
                 print("Error resetting to auto exposure: \(error)")

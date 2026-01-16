@@ -32,8 +32,8 @@ struct VulcaniteGrain: View {
 
 // MARK: - Design System (matches Figma exactly)
 struct DS {
-    // Colors - darker DSLR body feel
-    static let pageBg = Color(hex: "0d0d0d")         // Darker DSLR body
+    // Colors - DSLR body feel
+    static let pageBg = Color(hex: "131313")         // DSLR body (balanced darkness)
     static let controlBg = Color(hex: "2c2c2c")      // Figma control backgrounds
     static let controlBgLight = Color(hex: "3a3a3a") // lighter control bg for hover
     static let strokeOuter = Color(white: 0.22)      // outer stroke
@@ -144,11 +144,12 @@ struct ContentView: View {
             // Layout measurements - maximize viewport (extend camera view)
             let topPanelHeight: CGFloat = 110
             let bottomControlsHeight: CGFloat = 210  // Compact controls, more viewport
-            let spacing: CGFloat = 4
+            let gaugeToViewfinderSpacing: CGFloat = 5  // Tight gap from gauge
+            let viewfinderToControlsSpacing: CGFloat = 10  // Gap to scrubbers
             let bottomPadding: CGFloat = 0
 
             // Calculate viewfinder to fill remaining space
-            let availableHeight = geo.size.height - topPanelHeight - bottomControlsHeight - spacing * 2 - bottomPadding - safeTop
+            let availableHeight = geo.size.height - topPanelHeight - bottomControlsHeight - gaugeToViewfinderSpacing - viewfinderToControlsSpacing - bottomPadding - safeTop
             let viewfinderHeight = availableHeight
 
             ZStack {
@@ -196,7 +197,7 @@ struct ContentView: View {
                     .frame(height: topPanelHeight)
                     .padding(.horizontal, DS.pageMargin)
 
-                    Spacer().frame(height: spacing)
+                    Spacer().frame(height: gaugeToViewfinderSpacing)
 
                     // VIEWFINDER - DSLR-style inset look
                     ZStack {
@@ -240,7 +241,7 @@ struct ContentView: View {
                                     exposureValue: exposureValue,
                                     captureFormat: captureFormat
                                 )
-                                .padding(.horizontal, 12)
+                                .padding(.horizontal, 8)
                                 .padding(.bottom, 8)
                             }
 
@@ -266,7 +267,7 @@ struct ContentView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.horizontal, DS.pageMargin)
 
-                    Spacer().frame(height: spacing)
+                    Spacer().frame(height: viewfinderToControlsSpacing)
 
                     // BOTTOM CONTROLS - grid-like DSLR layout with equidistant spacing
                     ZStack {
@@ -316,8 +317,8 @@ struct ContentView: View {
 
                             // ROW 3: Main capture row - all bottom elements share baseline
                             HStack(alignment: .bottom, spacing: 0) {
-                                // Left: Flash/Thumbnail stack
-                                VStack(spacing: 10) {
+                                // Left: Flash/Thumbnail stack (spacing matches right side for baseline alignment)
+                                VStack(spacing: 12) {
                                     FlashButtonPill(flashMode: camera.flashMode) {
                                         Haptics.click()
                                         camera.cycleFlash()
@@ -333,7 +334,7 @@ struct ContentView: View {
 
                                 Spacer()
 
-                                // Center: Format toggle on top of shutter (more spacing from mode buttons)
+                                // Center: Format toggle on top of shutter
                                 VStack(spacing: 10) {
                                     FormatTogglePill(format: $captureFormat) { newFormat in
                                         // Hook up to CameraManager for actual capture format
@@ -347,8 +348,8 @@ struct ContentView: View {
 
                                 Spacer()
 
-                                // Right: Mode controls + WB
-                                VStack(spacing: 10) {
+                                // Right: Mode controls + WB (spacing matches left for baseline alignment)
+                                VStack(spacing: 12) {
                                     // Icons + Buttons combined for perfect alignment
                                     HStack(spacing: 16) {
                                         // Macro column
@@ -573,13 +574,9 @@ struct RefractiveGlassInfoBar: View {
             }
             .foregroundColor(.white)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 10)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
-        .overlay(
-            RoundedRectangle(cornerRadius: 10)
-                .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
-        )
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 8))
         .environment(\.colorScheme, .dark)
     }
 
@@ -590,27 +587,15 @@ struct RefractiveGlassInfoBar: View {
     }
 }
 
-// MARK: - Glass Histogram (Refractive Container)
+// MARK: - Glass Histogram (Clean container)
 struct GlassHistogram: View {
     let exposureValue: Float
 
     var body: some View {
         ZStack {
-            // Glass container
+            // Clean dark container (no liquid glass borders)
             RoundedRectangle(cornerRadius: 6)
-                .fill(Color.black.opacity(0.4))
-
-            // Inner highlight
-            RoundedRectangle(cornerRadius: 6)
-                .stroke(
-                    LinearGradient(
-                        colors: [Color.white.opacity(0.2), Color.clear, Color.clear, Color.black.opacity(0.2)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1
-                )
-                .padding(0.5)
+                .fill(Color.black.opacity(0.5))
 
             // Histogram bars
             Canvas { ctx, size in

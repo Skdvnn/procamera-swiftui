@@ -438,18 +438,19 @@ struct LeicaFilmPicker: View {
     @Binding var isPresented: Bool
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
+    @State private var animateIn = false
 
     var body: some View {
         ZStack {
             // Tap outside to dismiss
-            Color.black.opacity(0.6)
+            Color.black.opacity(animateIn ? 0.5 : 0)
                 .ignoresSafeArea()
                 .onTapGesture {
-                    VFHaptics.click()
-                    isPresented = false
+                    dismissWithAnimation()
                 }
+                .animation(.easeOut(duration: 0.2), value: animateIn)
 
-            // DSLR-style inset panel
+            // DSLR-style inset panel with context menu animation
             VStack(spacing: 0) {
                 // Header with inset style
                 HStack {
@@ -473,9 +474,7 @@ struct LeicaFilmPicker: View {
                     Button(action: {
                         VFHaptics.click()
                         selectedFilter = filter
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                            isPresented = false
-                        }
+                        dismissWithAnimation()
                     }) {
                         HStack(spacing: 8) {
                             // Selection indicator bracket
@@ -534,6 +533,23 @@ struct LeicaFilmPicker: View {
                 }
             )
             .frame(width: 180)
+            .scaleEffect(animateIn ? 1.0 : 0.8)
+            .opacity(animateIn ? 1.0 : 0)
+            .animation(.spring(response: 0.25, dampingFraction: 0.8), value: animateIn)
+        }
+        .onAppear {
+            withAnimation {
+                animateIn = true
+            }
+        }
+    }
+
+    private func dismissWithAnimation() {
+        withAnimation(.easeOut(duration: 0.15)) {
+            animateIn = false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            isPresented = false
         }
     }
 
