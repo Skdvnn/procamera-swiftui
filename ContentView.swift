@@ -145,7 +145,7 @@ struct ContentView: View {
             let topPanelHeight: CGFloat = 110
             let bottomControlsHeight: CGFloat = 210  // Compact controls, more viewport
             let gaugeToViewfinderSpacing: CGFloat = 4  // Small gap for visual separation from dials
-            let viewfinderToControlsSpacing: CGFloat = 0  // No gap - viewfinder extends to controls
+            let viewfinderToControlsSpacing: CGFloat = 4  // Match top spacing for symmetry
             let bottomPadding: CGFloat = 0
 
             // Calculate viewfinder to fill remaining space
@@ -245,23 +245,34 @@ struct ContentView: View {
                                 .padding(.bottom, 8)
                             }
 
-                            // Inner shadow overlay (top and left edges darker for inset depth)
+                            // Inner shadow overlay (deeper inset effect like DSLR viewfinder)
                             VStack(spacing: 0) {
-                                LinearGradient(colors: [Color.black.opacity(0.4), Color.clear], startPoint: .top, endPoint: .bottom)
-                                    .frame(height: 8)
+                                LinearGradient(colors: [Color.black.opacity(0.6), Color.clear], startPoint: .top, endPoint: .bottom)
+                                    .frame(height: 12)
                                 Spacer()
                             }
                             HStack(spacing: 0) {
-                                LinearGradient(colors: [Color.black.opacity(0.3), Color.clear], startPoint: .leading, endPoint: .trailing)
-                                    .frame(width: 6)
+                                LinearGradient(colors: [Color.black.opacity(0.5), Color.clear], startPoint: .leading, endPoint: .trailing)
+                                    .frame(width: 10)
                                 Spacer()
                             }
+                            // Bottom and right subtle highlight (light hitting from top-left)
+                            VStack(spacing: 0) {
+                                Spacer()
+                                LinearGradient(colors: [Color.clear, Color.white.opacity(0.03)], startPoint: .top, endPoint: .bottom)
+                                    .frame(height: 6)
+                            }
+                            HStack(spacing: 0) {
+                                Spacer()
+                                LinearGradient(colors: [Color.clear, Color.white.opacity(0.02)], startPoint: .leading, endPoint: .trailing)
+                                    .frame(width: 4)
+                            }
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                        .clipShape(RoundedRectangle(cornerRadius: 16))
 
-                        // Outer border
-                        RoundedRectangle(cornerRadius: 10)
-                            .stroke(Color(hex: "1a1a1a"), lineWidth: 2)
+                        // Inner stroke (inset border for DSLR look)
+                        RoundedRectangle(cornerRadius: 16)
+                            .strokeBorder(Color(hex: "1a1a1a"), lineWidth: 3)
                     }
                     .frame(height: viewfinderHeight)
                     .frame(maxWidth: .infinity)
@@ -319,8 +330,8 @@ struct ContentView: View {
 
                             Spacer().frame(height: 14)  // More space before button rows
 
-                            // ROW 3: Flash | Format | Mode icons+buttons (aligned horizontally)
-                            HStack(alignment: .center, spacing: 0) {
+                            // ROW 3: Flash | Format | Mode icons+buttons (bottom-aligned)
+                            HStack(alignment: .bottom, spacing: 0) {
                                 FlashButtonPill(flashMode: camera.flashMode) {
                                     Haptics.click()
                                     camera.cycleFlash()

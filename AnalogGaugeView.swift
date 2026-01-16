@@ -569,24 +569,9 @@ struct AnalogDisplayPanel: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
 
-            // Inner shadow overlay (top and left edges for inset depth)
-            VStack(spacing: 0) {
-                LinearGradient(colors: [Color.black.opacity(0.5), Color.clear], startPoint: .top, endPoint: .bottom)
-                    .frame(height: 10)
-                Spacer()
-            }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-
-            HStack(spacing: 0) {
-                LinearGradient(colors: [Color.black.opacity(0.4), Color.clear], startPoint: .leading, endPoint: .trailing)
-                    .frame(width: 8)
-                Spacer()
-            }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
-
-            // Outer border
+            // Simple border (no inner shadow - only viewfinder needs inset effect)
             RoundedRectangle(cornerRadius: cornerRadius)
-                .stroke(Color(hex: "1a1a1a"), lineWidth: 2)
+                .stroke(Color(hex: "1a1a1a"), lineWidth: 1.5)
         }
     }
 }
