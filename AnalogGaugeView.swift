@@ -83,12 +83,6 @@ struct FocusDial: View {
                     .fill(Color(hex: "0a0a0a"))
                     .frame(width: 10, height: 10)
                     .overlay(Circle().stroke(Color.white.opacity(0.15), lineWidth: 0.5))
-
-                // Red indicator dot at bottom
-                Circle()
-                    .fill(Color.red)
-                    .frame(width: 5, height: 5)
-                    .offset(y: radius - 8)
             }
             .position(center)
             .contentShape(Circle().scale(1.3)) // Larger touch target
@@ -452,25 +446,20 @@ struct HorizontalExposureMeter: View {
                         }
                     }
 
-                    // Moving indicator needle
+                    // Moving indicator triangle (yellow/accent color)
                     ZStack {
-                        // Needle position: value of -2 to +2 maps to full width
-                        let needleOffset = CGFloat(value) * 25.5 // 102px / 4 stops = 25.5px per stop
+                        // Triangle position: value of -2 to +2 maps to full width
+                        let indicatorOffset = CGFloat(value) * 25.5 // 102px / 4 stops = 25.5px per stop
 
-                        // Needle shadow for depth
-                        Capsule()
-                            .fill(Color.black.opacity(0.5))
-                            .frame(width: 4, height: 8)
-                            .offset(x: needleOffset, y: 1)
-
-                        // Indicator needle (accent when off-center)
-                        Capsule()
-                            .fill(abs(value) > 0.15 ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white)
-                            .frame(width: 3, height: 7)
-                            .offset(x: needleOffset)
+                        // Yellow triangle indicator pointing up at the scale
+                        Triangle()
+                            .fill(Color(red: 1.0, green: 0.85, blue: 0.35))  // Always yellow/accent
+                            .frame(width: 8, height: 6)
+                            .rotationEffect(.degrees(180))  // Point upward
+                            .offset(x: indicatorOffset)
                     }
-                    .frame(height: 10)
-                    .offset(y: -2)
+                    .frame(height: 8)
+                    .offset(y: -1)
                 }
             }
             .frame(width: 120, height: 36)

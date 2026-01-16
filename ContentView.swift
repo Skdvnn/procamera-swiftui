@@ -144,8 +144,8 @@ struct ContentView: View {
             // Layout measurements - maximize viewport (extend camera view)
             let topPanelHeight: CGFloat = 110
             let bottomControlsHeight: CGFloat = 210  // Compact controls, more viewport
-            let gaugeToViewfinderSpacing: CGFloat = 5  // Tight gap from gauge
-            let viewfinderToControlsSpacing: CGFloat = 5  // Match gauge gap for consistency
+            let gaugeToViewfinderSpacing: CGFloat = 0  // No gap - viewfinder extends to gauges
+            let viewfinderToControlsSpacing: CGFloat = 0  // No gap - viewfinder extends to controls
             let bottomPadding: CGFloat = 0
 
             // Calculate viewfinder to fill remaining space
@@ -1269,7 +1269,6 @@ struct ShutterButton: View {
                 }
             }
             .shadow(color: Color.black.opacity(0.35), radius: isPressed ? 1 : 3, y: isPressed ? 0.5 : 2)
-            .scaleEffect(isPressed ? 0.97 : 1.0)
             .animation(.easeOut(duration: 0.1), value: isPressed)
         }
         .buttonStyle(PlainButtonStyle())
@@ -1354,7 +1353,6 @@ struct RecordButton: View {
                 }
             }
             .shadow(color: Color.black.opacity(0.4), radius: 4, y: 2)
-            .scaleEffect(isPressed ? 0.96 : 1.0)
             .animation(.easeOut(duration: 0.1), value: isPressed)
         }
         .buttonStyle(PlainButtonStyle())
@@ -1464,8 +1462,6 @@ struct FlashButtonPill: View {
                     .foregroundColor(iconColor)
             }
             .frame(width: pillWidth, height: pillHeight)
-            .scaleEffect(isPressed ? 0.96 : 1.0)
-            .animation(.easeOut(duration: 0.1), value: isPressed)
         }
         .buttonStyle(.plain)
         .simultaneousGesture(
@@ -1603,8 +1599,6 @@ struct ThumbnailPill: View {
                 }
             }
             .frame(width: pillWidth, height: pillHeight)
-            .scaleEffect(isPressed ? 0.96 : 1.0)
-            .animation(.easeOut(duration: 0.1), value: isPressed)
         }
         .buttonStyle(.plain)
         .simultaneousGesture(
@@ -1884,8 +1878,6 @@ struct WBPill: View {
                 }
             }
             .frame(width: pillWidth, height: pillHeight)
-            .scaleEffect(isPressed ? 0.96 : 1.0)
-            .animation(.easeOut(duration: 0.1), value: isPressed)
         }
         .buttonStyle(.plain)
         .simultaneousGesture(
