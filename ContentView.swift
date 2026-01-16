@@ -330,8 +330,8 @@ struct ContentView: View {
 
                             Spacer().frame(height: 14)  // More space before button rows
 
-                            // ROW 3: Flash | Format | Mode icons+buttons (bottom-aligned)
-                            HStack(alignment: .bottom, spacing: 0) {
+                            // ROW 3: Flash | Format | Mode icons+buttons (center-aligned for visual balance)
+                            HStack(alignment: .center, spacing: 0) {
                                 FlashButtonPill(flashMode: camera.flashMode) {
                                     Haptics.click()
                                     camera.cycleFlash()
@@ -407,7 +407,6 @@ struct ContentView: View {
                             }
                             .padding(.horizontal, DS.pageMargin + 4)
                         }
-                        .padding(.top, 4)
                     }
                     .padding(.bottom, bottomPadding)
                 }
