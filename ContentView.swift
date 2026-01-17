@@ -328,17 +328,20 @@ struct ContentView: View {
                             .frame(height: 44)
                             .padding(.horizontal, DS.pageMargin)
 
-                            Spacer().frame(height: 10)  // Space before button rows
+                            Spacer().frame(height: 16)  // More space before button rows
 
-                            // ROW 3: Flash | Format | Mode icons+buttons (top-aligned with format toggle)
-                            HStack(alignment: .top, spacing: 0) {
+                            // ROW 3: Flash | Format | Mode icons+buttons
+                            HStack(alignment: .center, spacing: 0) {
+                                // Left: Flash button (88px wide)
                                 FlashButtonPill(flashMode: camera.flashMode) {
                                     Haptics.click()
                                     camera.cycleFlash()
                                 }
+                                .frame(width: 88)
 
                                 Spacer()
 
+                                // Center: Format toggle (centered between flash and mode buttons)
                                 FormatTogglePill(format: $captureFormat) { newFormat in
                                     switch newFormat {
                                     case .heic: camera.captureFormat = .heic
@@ -349,16 +352,16 @@ struct ContentView: View {
 
                                 Spacer()
 
-                                // Mode icons + buttons
-                                HStack(spacing: 16) {
-                                    VStack(spacing: 6) {
+                                // Right: Mode icons + buttons (same width as flash for centering)
+                                HStack(spacing: 12) {
+                                    VStack(spacing: 8) {
                                         ModeIcon(icon: "camera.macro", isActive: macroEnabled)
                                         ModeButton(isActive: macroEnabled) {
                                             Haptics.click()
                                             macroEnabled.toggle()
                                         }
                                     }
-                                    VStack(spacing: 6) {
+                                    VStack(spacing: 8) {
                                         ModeIcon(icon: "timer", isActive: timerSeconds > 0)
                                         ModeButton(isActive: timerSeconds > 0) {
                                             Haptics.click()
@@ -367,7 +370,7 @@ struct ContentView: View {
                                             else { timerSeconds = 0 }
                                         }
                                     }
-                                    VStack(spacing: 6) {
+                                    VStack(spacing: 8) {
                                         ModeIcon(icon: "rectangle.on.rectangle", isActive: showGrid)
                                         ModeButton(isActive: showGrid) {
                                             Haptics.click()
@@ -375,6 +378,7 @@ struct ContentView: View {
                                         }
                                     }
                                 }
+                                .frame(width: 88, height: 48)  // Match flash button dimensions
                             }
                             .padding(.horizontal, DS.pageMargin + 4)
 
