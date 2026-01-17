@@ -19,20 +19,20 @@ struct FocusDial: View {
             let radius = size * 0.42
 
             ZStack {
-                // Outer bezel (pure black, premium)
+                // Outer bezel (slightly lighter than pure black)
                 Circle()
-                    .fill(Color.black)
+                    .fill(Color(hex: "0a0a0a"))
 
                 // Knurled grip texture ring
                 Circle()
-                    .stroke(Color(hex: "0f0f0f"), lineWidth: 2)
+                    .stroke(Color(hex: "222222"), lineWidth: 2)
                     .padding(1)
 
                 // Inner bezel highlight
                 Circle()
                     .stroke(
                         LinearGradient(
-                            colors: [Color.white.opacity(0.08), Color.black],
+                            colors: [Color.white.opacity(0.1), Color(hex: "0a0a0a")],
                             startPoint: .top,
                             endPoint: .bottom
                         ),
@@ -40,9 +40,9 @@ struct FocusDial: View {
                     )
                     .padding(3)
 
-                // Dial face (pure black)
+                // Dial face (slightly lighter)
                 Circle()
-                    .fill(Color.black)
+                    .fill(Color(hex: "0f0f0f"))
                     .padding(4)
 
                 // Tick marks (Leica-style - crisp white)
@@ -140,20 +140,20 @@ struct ShutterSpeedDial: View {
             let radius = size * 0.42
 
             ZStack {
-                // Outer bezel (pure black, premium)
+                // Outer bezel (slightly lighter than pure black)
                 Circle()
-                    .fill(Color.black)
+                    .fill(Color(hex: "0a0a0a"))
 
                 // Knurled grip texture ring
                 Circle()
-                    .stroke(Color(hex: "0f0f0f"), lineWidth: 2)
+                    .stroke(Color(hex: "222222"), lineWidth: 2)
                     .padding(1)
 
                 // Inner bezel highlight
                 Circle()
                     .stroke(
                         LinearGradient(
-                            colors: [Color.white.opacity(0.08), Color.black],
+                            colors: [Color.white.opacity(0.1), Color(hex: "0a0a0a")],
                             startPoint: .top,
                             endPoint: .bottom
                         ),
@@ -161,9 +161,9 @@ struct ShutterSpeedDial: View {
                     )
                     .padding(3)
 
-                // Dial face (pure black)
+                // Dial face (slightly lighter)
                 Circle()
-                    .fill(Color.black)
+                    .fill(Color(hex: "0f0f0f"))
                     .padding(4)
 
                 // Tick marks - 8 major for each shutter speed (crisp white)
@@ -536,9 +536,19 @@ struct AnalogDisplayPanel: View {
 
     var body: some View {
         ZStack {
-            // Dark background
+            // Outer black frame (matches scrubbers/buttons)
             RoundedRectangle(cornerRadius: cornerRadius)
-                .fill(Color(hex: "0d0d0d"))
+                .fill(Color.black)
+
+            // Inner frame (cohesive with controls)
+            RoundedRectangle(cornerRadius: cornerRadius - 2)
+                .fill(Color(hex: "1a1a1a"))
+                .padding(2)
+
+            // Inner stroke
+            RoundedRectangle(cornerRadius: cornerRadius - 2)
+                .stroke(Color(hex: "333333"), lineWidth: 0.5)
+                .padding(2)
 
             // Content - centered vertically
             HStack(spacing: 0) {
@@ -569,9 +579,15 @@ struct AnalogDisplayPanel: View {
             .padding(.horizontal, 10)
             .padding(.vertical, 6)
 
-            // Simple border (no inner shadow - only viewfinder needs inset effect)
-            RoundedRectangle(cornerRadius: cornerRadius)
-                .stroke(Color(hex: "1a1a1a"), lineWidth: 1.5)
+            // Leica-style engraved branding (bottom center)
+            VStack {
+                Spacer()
+                Text("PRO CAMERA")
+                    .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                    .tracking(3)
+                    .foregroundColor(Color.white.opacity(0.25))
+                    .padding(.bottom, 6)
+            }
         }
     }
 }

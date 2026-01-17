@@ -26,6 +26,11 @@ class CameraManager: NSObject, ObservableObject {
     @Published var longExposureProgress: Float = 0.0
     @Published var captureFormat: CaptureFormatType = .heic
 
+    // Live preview filtering
+    @Published var filteredPreviewImage: CIImage?
+    private var lastPreviewFrameTime: CFAbsoluteTime = 0
+    private let previewFrameInterval: CFAbsoluteTime = 1.0 / 30.0  // 30fps max
+
     // Capture format types
     enum CaptureFormatType: Int, CaseIterable {
         case heic = 0
@@ -675,6 +680,91 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     // MARK: - Film Filter Processing
+
+    // Apply filter to CIImage (for live preview)
+    func applyFilmFilter(to ciImage: CIImage) -> CIImage {
+        guard selectedFilmFilter != .none else { return ciImage }
+
+        var outputImage = ciImage
+
+        switch selectedFilmFilter {
+        case .none:
+            break
+
+        case .portra400:
+            let colorControls = CIFilter.colorControls()
+            colorControls.inputImage = outputImage
+            colorControls.saturation = 0.9
+            colorControls.contrast = 0.95
+            colorControls.brightness = 0.02
+            if let result = colorControls.outputImage { outputImage = result }
+
+            let tempTint = CIFilter.temperatureAndTint()
+            tempTint.inputImage = outputImage
+            tempTint.neutral = CIVector(x: 6500, y: 0)
+            tempTint.targetNeutral = CIVector(x: 5800, y: 10)
+            if let result = tempTint.outputImage { outputImage = result }
+
+        case .ektar100:
+            let colorControls = CIFilter.colorControls()
+            colorControls.inputImage = outputImage
+            colorControls.saturation = 1.3
+            colorControls.contrast = 1.1
+            colorControls.brightness = 0.0
+            if let result = colorControls.outputImage { outputImage = result }
+
+            let vibrance = CIFilter.vibrance()
+            vibrance.inputImage = outputImage
+            vibrance.amount = 0.3
+            if let result = vibrance.outputImage { outputImage = result }
+
+        case .trix400:
+            let noir = CIFilter.photoEffectNoir()
+            noir.inputImage = outputImage
+            if let result = noir.outputImage { outputImage = result }
+
+            let colorControls = CIFilter.colorControls()
+            colorControls.inputImage = outputImage
+            colorControls.contrast = 1.15
+            if let result = colorControls.outputImage { outputImage = result }
+
+        case .cinestill800:
+            let colorControls = CIFilter.colorControls()
+            colorControls.inputImage = outputImage
+            colorControls.saturation = 0.95
+            colorControls.contrast = 1.05
+            if let result = colorControls.outputImage { outputImage = result }
+
+            let tempTint = CIFilter.temperatureAndTint()
+            tempTint.inputImage = outputImage
+            tempTint.neutral = CIVector(x: 6500, y: 0)
+            tempTint.targetNeutral = CIVector(x: 5200, y: 15)
+            if let result = tempTint.outputImage { outputImage = result }
+
+            // Skip bloom for preview performance
+            // let bloom = CIFilter.bloom()
+            // bloom.inputImage = outputImage
+            // bloom.radius = 5
+            // bloom.intensity = 0.3
+            // if let result = bloom.outputImage { outputImage = result }
+
+        case .velvia50:
+            let colorControls = CIFilter.colorControls()
+            colorControls.inputImage = outputImage
+            colorControls.saturation = 1.5
+            colorControls.contrast = 1.15
+            colorControls.brightness = -0.02
+            if let result = colorControls.outputImage { outputImage = result }
+
+            let vibrance = CIFilter.vibrance()
+            vibrance.inputImage = outputImage
+            vibrance.amount = 0.4
+            if let result = vibrance.outputImage { outputImage = result }
+        }
+
+        return outputImage
+    }
+
     func applyFilmFilter(to image: UIImage) -> UIImage {
         guard selectedFilmFilter != .none else { return image }
         guard let ciImage = CIImage(image: image) else { return image }
@@ -880,10 +970,36 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
     }
 }
 
-// MARK: - Video Data Output Delegate (for computational long exposure)
+// MARK: - Video Data Output Delegate (for computational long exposure + live preview)
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        // Only capture frames when doing long exposure
+        // Convert sample buffer to CIImage
+        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+
+        // Handle live preview filtering (when filter is selected and not doing long exposure)
+        if selectedFilmFilter != .none && !isLongExposureCapturing {
+            let currentTime = CFAbsoluteTimeGetCurrent()
+            if currentTime - lastPreviewFrameTime >= previewFrameInterval {
+                lastPreviewFrameTime = currentTime
+
+                // Apply filter on background queue
+                let filtered = applyFilmFilter(to: ciImage)
+
+                DispatchQueue.main.async {
+                    self.filteredPreviewImage = filtered
+                }
+            }
+        } else if selectedFilmFilter == .none {
+            // Clear filtered preview when no filter selected
+            DispatchQueue.main.async {
+                if self.filteredPreviewImage != nil {
+                    self.filteredPreviewImage = nil
+                }
+            }
+        }
+
+        // Handle long exposure frame capture
         guard isLongExposureCapturing,
               longExposureFrames.count < longExposureTargetFrames else {
             // Check if we've collected enough frames
@@ -892,10 +1008,6 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             }
             return
         }
-
-        // Convert sample buffer to CIImage
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
-        let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
 
         longExposureFrames.append(ciImage)
 

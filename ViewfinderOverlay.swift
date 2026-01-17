@@ -98,6 +98,13 @@ struct ViewfinderOverlay: View {
 
                 // Leica-style film picker panel - positioned near trigger (top right)
                 if showFilmMenu {
+                    // Invisible tap catcher to dismiss menu
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            showFilmMenu = false
+                        }
+
                     LeicaFilmPicker(
                         selectedFilter: $filmFilter,
                         isPresented: $showFilmMenu
@@ -440,102 +447,92 @@ struct LeicaFilmPicker: View {
     @State private var animateIn = false
 
     var body: some View {
-        ZStack {
-            // Tap outside to dismiss
-            Color.black.opacity(animateIn ? 0.5 : 0)
-                .ignoresSafeArea()
-                .onTapGesture {
-                    dismissWithAnimation()
-                }
-                .animation(.easeOut(duration: 0.2), value: animateIn)
+        // DSLR-style inset panel with context menu animation
+        VStack(spacing: 0) {
+            // Header with inset style
+            HStack {
+                Text("FILM SIMULATION")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.5))
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
 
-            // DSLR-style inset panel with context menu animation
-            VStack(spacing: 0) {
-                // Header with inset style
-                HStack {
-                    Text("FILM SIMULATION")
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.5))
+            // Separator line
+            Rectangle()
+                .fill(Color(hex: "2a2a2a"))
+                .frame(height: 1)
+                .padding(.horizontal, 8)
+
+            // Film options - DSLR list style
+            ForEach(FilmFilterMode.allCases, id: \.self) { filter in
+                Button(action: {
+                    VFHaptics.click()
+                    selectedFilter = filter
+                    dismissWithAnimation()
+                }) {
+                    HStack(spacing: 8) {
+                        // Selection indicator bracket
+                        Text(selectedFilter == filter ? ">" : " ")
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundColor(accent)
+                            .frame(width: 12)
+
+                        // Film name
+                        Text(filter.name.uppercased())
+                            .font(.system(size: 11, weight: selectedFilter == filter ? .semibold : .regular, design: .monospaced))
+                            .foregroundColor(selectedFilter == filter ? .white : .white.opacity(0.6))
+
+                        Spacer()
+
+                        // ISO indicator for film types
+                        if filter != .none {
+                            Text(isoLabel(for: filter))
+                                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.3))
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(selectedFilter == filter ? Color.white.opacity(0.05) : Color.clear)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer().frame(height: 6)
+        }
+        .background(
+            ZStack {
+                // Dark background
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(hex: "0d0d0d"))
+
+                // Inner shadow overlay (top and left edges for inset depth)
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [Color.black.opacity(0.5), Color.clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 10)
                     Spacer()
                 }
-                .padding(.horizontal, 12)
-                .padding(.top, 10)
-                .padding(.bottom, 6)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
 
-                // Separator line
-                Rectangle()
-                    .fill(Color(hex: "2a2a2a"))
-                    .frame(height: 1)
-                    .padding(.horizontal, 8)
-
-                // Film options - DSLR list style
-                ForEach(FilmFilterMode.allCases, id: \.self) { filter in
-                    Button(action: {
-                        VFHaptics.click()
-                        selectedFilter = filter
-                        dismissWithAnimation()
-                    }) {
-                        HStack(spacing: 8) {
-                            // Selection indicator bracket
-                            Text(selectedFilter == filter ? ">" : " ")
-                                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                .foregroundColor(accent)
-                                .frame(width: 12)
-
-                            // Film name
-                            Text(filter.name.uppercased())
-                                .font(.system(size: 11, weight: selectedFilter == filter ? .semibold : .regular, design: .monospaced))
-                                .foregroundColor(selectedFilter == filter ? .white : .white.opacity(0.6))
-
-                            Spacer()
-
-                            // ISO indicator for film types
-                            if filter != .none {
-                                Text(isoLabel(for: filter))
-                                    .font(.system(size: 9, weight: .regular, design: .monospaced))
-                                    .foregroundColor(.white.opacity(0.3))
-                            }
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(selectedFilter == filter ? Color.white.opacity(0.05) : Color.clear)
-                    }
-                    .buttonStyle(.plain)
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [Color.black.opacity(0.4), Color.clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: 8)
+                    Spacer()
                 }
+                .clipShape(RoundedRectangle(cornerRadius: 8))
 
-                Spacer().frame(height: 6)
+                // Outer border
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(hex: "1a1a1a"), lineWidth: 2)
             }
-            .background(
-                ZStack {
-                    // Dark background
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color(hex: "0d0d0d"))
-
-                    // Inner shadow overlay (top and left edges for inset depth)
-                    VStack(spacing: 0) {
-                        LinearGradient(colors: [Color.black.opacity(0.5), Color.clear], startPoint: .top, endPoint: .bottom)
-                            .frame(height: 10)
-                        Spacer()
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                    HStack(spacing: 0) {
-                        LinearGradient(colors: [Color.black.opacity(0.4), Color.clear], startPoint: .leading, endPoint: .trailing)
-                            .frame(width: 8)
-                        Spacer()
-                    }
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                    // Outer border
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(Color(hex: "1a1a1a"), lineWidth: 2)
-                }
-            )
-            .frame(width: 180)
-            .scaleEffect(animateIn ? 1.0 : 0.8)
-            .opacity(animateIn ? 1.0 : 0)
-            .animation(.spring(response: 0.25, dampingFraction: 0.8), value: animateIn)
-        }
+        )
+        .frame(width: 180)
+        .scaleEffect(animateIn ? 1.0 : 0.8)
+        .opacity(animateIn ? 1.0 : 0)
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: animateIn)
         .onAppear {
             withAnimation {
                 animateIn = true

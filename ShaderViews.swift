@@ -295,3 +295,26 @@ extension View {
         modifier(GlassPanelModifier(cornerRadius: cornerRadius))
     }
 }
+
+// MARK: - Leica Vulcanite Texture (Metal Shader)
+struct LeicaVulcaniteTexture: View {
+    let scale: CGFloat
+    let intensity: CGFloat
+
+    init(scale: CGFloat = 400, intensity: CGFloat = 1.0) {
+        self.scale = scale
+        self.intensity = intensity
+    }
+
+    var body: some View {
+        Rectangle()
+            .fill(Color(white: 0.075))  // Dark vulcanite base
+            .colorEffect(
+                ShaderLibrary.vulcaniteTexture(
+                    .float(scale),
+                    .float(intensity)
+                )
+            )
+            .allowsHitTesting(false)
+    }
+}

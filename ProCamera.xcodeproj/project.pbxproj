@@ -16,6 +16,7 @@
 		A100000FAAAAAAAA0000000F /* ControlComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000011AAAAAAAA00000011 /* ControlComponents.swift */; };
 		A1000012AAAAAAAA00000012 /* ShaderViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000013AAAAAAAA00000013 /* ShaderViews.swift */; };
 		A1000014AAAAAAAA00000014 /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = A1000015AAAAAAAA00000015 /* Shaders.metal */; };
+		A1000016BBBBBBBB00000016 /* FilteredCameraPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000017BBBBBBBB00000017 /* FilteredCameraPreview.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -30,6 +31,7 @@
 		A1000011AAAAAAAA00000011 /* ControlComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ControlComponents.swift; sourceTree = "<group>"; };
 		A1000013AAAAAAAA00000013 /* ShaderViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShaderViews.swift; sourceTree = "<group>"; };
 		A1000015AAAAAAAA00000015 /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
+		A1000017BBBBBBBB00000017 /* FilteredCameraPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilteredCameraPreview.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -58,6 +60,7 @@
 				A1000004AAAAAAAA00000004 /* ContentView.swift */,
 				A1000006AAAAAAAA00000006 /* CameraManager.swift */,
 				A1000008AAAAAAAA00000008 /* CameraPreviewView.swift */,
+				A1000017BBBBBBBB00000017 /* FilteredCameraPreview.swift */,
 				A100000CAAAAAAAA0000000C /* AnalogGaugeView.swift */,
 				A100000EAAAAAAAA0000000E /* ViewfinderOverlay.swift */,
 				A1000011AAAAAAAA00000011 /* ControlComponents.swift */,
@@ -148,6 +151,7 @@
 				A1000003AAAAAAAA00000003 /* ContentView.swift in Sources */,
 				A1000005AAAAAAAA00000005 /* CameraManager.swift in Sources */,
 				A1000007AAAAAAAA00000007 /* CameraPreviewView.swift in Sources */,
+				A1000016BBBBBBBB00000016 /* FilteredCameraPreview.swift in Sources */,
 				A100000BAAAAAAAA0000000B /* AnalogGaugeView.swift in Sources */,
 				A100000DAAAAAAAA0000000D /* ViewfinderOverlay.swift in Sources */,
 				A100000FAAAAAAAA0000000F /* ControlComponents.swift in Sources */,

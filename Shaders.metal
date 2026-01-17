@@ -162,3 +162,46 @@ float noise(float2 st) {
 
     return half4(color.rgb * scanline, color.a);
 }
+
+// MARK: - Leica Vulcanite Texture Shader
+// Creates realistic diamond/crosshatch pattern like Leica M camera body grip
+[[ stitchable ]] half4 vulcaniteTexture(
+    float2 position,
+    half4 color,
+    float scale,
+    float intensity
+) {
+    // Scale UV for diamond pattern size (smaller scale = larger diamonds)
+    float2 uv = position / scale;
+
+    // Create diamond grid pattern
+    // Rotate 45 degrees to get diamond orientation
+    float2 rotated = float2(uv.x + uv.y, uv.x - uv.y) * 0.707;
+
+    // Create repeating diamond cells
+    float2 cell = fract(rotated * 8.0);  // 8.0 controls diamond density
+
+    // Distance from center of each diamond cell creates the raised pyramid effect
+    float2 centered = cell - 0.5;
+    float diamond = 1.0 - (abs(centered.x) + abs(centered.y)) * 2.0;
+    diamond = clamp(diamond, 0.0, 1.0);
+
+    // Create the beveled edge effect (light on top-left, shadow on bottom-right)
+    float highlight = smoothstep(0.3, 0.5, cell.x + cell.y);
+    float shadow = smoothstep(0.3, 0.5, 2.0 - cell.x - cell.y);
+    float bevel = (highlight - shadow) * 0.5;
+
+    // Combine diamond shape with bevel for 3D effect
+    float pattern = diamond * 0.3 + bevel * 0.7;
+
+    // Add very subtle micro-texture for realism
+    float microTexture = noise(uv * 200.0) * 0.1;
+
+    // Apply pattern with intensity control
+    float combined = (pattern + microTexture) * intensity;
+
+    // Apply as visible light/shadow on the base color
+    half3 result = color.rgb + half3(combined * 0.15);
+
+    return half4(result, color.a);
+}
