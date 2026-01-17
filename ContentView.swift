@@ -1082,6 +1082,7 @@ struct LiquidGlassZoomControl: View {
     @State private var startIndex: Int = 0
     @State private var tickerOffset: CGFloat = 0
     @State private var displayIndex: Int = 0
+    @State private var valueScale: CGFloat = 1.0
 
     private var currentIndex: Int {
         focalLengths.firstIndex(of: focalLength) ?? 0
@@ -1124,14 +1125,13 @@ struct LiquidGlassZoomControl: View {
 
                 // Center: Ticker value with MM suffix
                 HStack(spacing: 3) {
-                    // Animated focal length value
+                    // Animated focal length value with pop effect
                     Text(displayValue)
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundColor(isDragging ? DS.accent : .white)
-                        .scaleEffect(isDragging ? 1.15 : 1.0)
-                        .contentTransition(.numericText())
+                        .scaleEffect((isDragging ? 1.15 : 1.0) * valueScale)
                         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isDragging)
-                        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: displayValue)
+                        .animation(.spring(response: 0.15, dampingFraction: 0.6), value: valueScale)
 
                     Text("MM")
                         .font(DS.mono(9, weight: .medium))
@@ -1171,11 +1171,14 @@ struct LiquidGlassZoomControl: View {
                         let newIndex = max(0, min(focalLengths.count - 1, startIndex + steps))
                         if newIndex != displayIndex {
                             Haptics.light()
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                                displayIndex = newIndex
-                            }
+                            displayIndex = newIndex
                             focalLength = focalLengths[newIndex]
                             onFocalLengthChanged(focalLength)
+                            // Pop animation on value change
+                            valueScale = 1.2
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                valueScale = 1.0
+                            }
                         }
                     }
                     .onEnded { _ in
