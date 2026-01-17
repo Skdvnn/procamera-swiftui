@@ -319,9 +319,11 @@ struct ContentView: View {
                                 ShutterScrubber(
                                     shutterSpeed: $shutterSpeedIndex,
                                     onChanged: { idx in
+                                        // Actually set the shutter speed on the camera
+                                        camera.setShutterSpeed(index: idx)
+                                        // Also update exposure meter to reflect the change
                                         let evShift = Float(idx - 9) * 0.5
                                         exposureValue = max(-2, min(2, evShift))
-                                        camera.setExposure(exposureValue)
                                     }
                                 )
                             }
