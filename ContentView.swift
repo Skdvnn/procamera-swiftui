@@ -1087,6 +1087,11 @@ struct LiquidGlassZoomControl: View {
         focalLengths.firstIndex(of: focalLength) ?? 0
     }
 
+    private var displayValue: String {
+        guard displayIndex >= 0 && displayIndex < focalLengths.count else { return "" }
+        return "\(focalLengths[displayIndex])"
+    }
+
     var body: some View {
         GeometryReader { geo in
             let _ = geo.size.width // Used for future layout
@@ -1120,13 +1125,13 @@ struct LiquidGlassZoomControl: View {
                 // Center: Ticker value with MM suffix
                 HStack(spacing: 3) {
                     // Animated focal length value
-                    Text("\(focalLengths[displayIndex])")
+                    Text(displayValue)
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
                         .foregroundColor(isDragging ? DS.accent : .white)
                         .scaleEffect(isDragging ? 1.15 : 1.0)
                         .contentTransition(.numericText())
                         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isDragging)
-                        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: displayIndex)
+                        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: displayValue)
 
                     Text("MM")
                         .font(DS.mono(9, weight: .medium))
