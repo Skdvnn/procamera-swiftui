@@ -145,7 +145,7 @@ struct ContentView: View {
             let topPanelHeight: CGFloat = 110
             let bottomControlsHeight: CGFloat = 210  // Compact controls, more viewport
             let gaugeToViewfinderSpacing: CGFloat = 4  // Small gap for visual separation from dials
-            let viewfinderToControlsSpacing: CGFloat = 4  // Match top spacing for symmetry
+            let viewfinderToControlsSpacing: CGFloat = 5  // Tight gap to lens ring
             let bottomPadding: CGFloat = 0
 
             // Calculate viewfinder to fill remaining space
@@ -305,7 +305,7 @@ struct ContentView: View {
                             .frame(height: 44)
                             .padding(.horizontal, DS.pageMargin)
 
-                            Spacer().frame(height: 8)
+                            Spacer().frame(height: 6)
 
                             // ROW 2: ISO & Shutter side by side
                             HStack(spacing: 10) {
@@ -328,10 +328,10 @@ struct ContentView: View {
                             .frame(height: 44)
                             .padding(.horizontal, DS.pageMargin)
 
-                            Spacer().frame(height: 14)  // More space before button rows
+                            Spacer().frame(height: 10)  // Space before button rows
 
-                            // ROW 3: Flash | Format | Mode icons+buttons (center-aligned for visual balance)
-                            HStack(alignment: .center, spacing: 0) {
+                            // ROW 3: Flash | Format | Mode icons+buttons (top-aligned with format toggle)
+                            HStack(alignment: .top, spacing: 0) {
                                 FlashButtonPill(flashMode: camera.flashMode) {
                                     Haptics.click()
                                     camera.cycleFlash()
