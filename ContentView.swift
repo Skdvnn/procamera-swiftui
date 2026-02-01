@@ -357,14 +357,10 @@ struct ContentView: View {
                                 focalLength: $focalLength,
                                 isoValue: $isoValue,
                                 onFocalLengthChanged: { fl in
-                                    // Exact hardware zoom factors for iPhone 15 Pro Max
+                                    // Switch to the actual physical camera lens
+                                    camera.switchToLens(focalLength: fl)
                                     let zoomMap: [Int: CGFloat] = [13: 0.5, 24: 1.0, 48: 2.0, 120: 5.0]
-                                    let zoom = zoomMap[fl] ?? CGFloat(fl) / 24.0
-                                    zoomValue = zoom
-                                    camera.setZoom(zoom)
-                                    if !isManualFocusEnabled {
-                                        focusPosition = Float(zoom - 1) / 4.0
-                                    }
+                                    zoomValue = zoomMap[fl] ?? CGFloat(fl) / 24.0
                                 },
                                 onISOChanged: { iso in
                                     camera.setISO(Float(iso))

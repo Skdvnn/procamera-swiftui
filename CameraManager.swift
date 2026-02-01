@@ -48,7 +48,8 @@ class CameraManager: NSObject, ObservableObject {
 
     // Long exposure support
     private var videoDataOutput: AVCaptureVideoDataOutput?
-    private var longExposureFrames: [CIImage] = []
+    private var longExposureAccumulator: CIImage?
+    private var longExposureFrameCount: Int = 0
     private var longExposureTargetFrames: Int = 0
     private var longExposureCompletion: ((UIImage?) -> Void)?
 
@@ -195,7 +196,7 @@ class CameraManager: NSObject, ObservableObject {
         // Add video data output for long exposure frame capture
         let videoOutput = AVCaptureVideoDataOutput()
         videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "videoDataOutput"))
-        videoOutput.alwaysDiscardsLateVideoFrames = false
+        videoOutput.alwaysDiscardsLateVideoFrames = true
         if session.canAddOutput(videoOutput) {
             session.addOutput(videoOutput)
             videoDataOutput = videoOutput
@@ -221,50 +222,43 @@ class CameraManager: NSObject, ObservableObject {
 
     // MARK: - Long Exposure Format Selection
     private func selectBestFormatForLongExposure(device: AVCaptureDevice) {
-        // Find format with longest max exposure duration that also supports custom exposure mode
+        // Find format with longest max exposure duration at >= 1080p resolution.
+        // On builtInWideAngleCamera all standard formats support .custom exposure.
         var bestFormat: AVCaptureDevice.Format?
         var longestDuration: CMTime = CMTime.zero
-
-        // Save current format to test custom exposure support
-        let originalFormat = device.activeFormat
 
         for format in device.formats {
             let maxDuration = format.maxExposureDuration
             let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
 
-            // Require at least 1080p resolution
             guard dimensions.width >= 1920 else { continue }
 
-            // Test if this format supports custom exposure by temporarily applying it
-            do {
-                try device.lockForConfiguration()
-                device.activeFormat = format
-                let supportsCustom = device.isExposureModeSupported(.custom)
-                device.activeFormat = originalFormat
-                device.unlockForConfiguration()
-
-                guard supportsCustom else { continue }
-            } catch {
-                continue
-            }
-
-            // Pick the format with the longest exposure duration
             if CMTimeCompare(maxDuration, longestDuration) > 0 {
                 longestDuration = maxDuration
                 bestFormat = format
             }
         }
 
-        // Apply the best format if found
-        if let format = bestFormat {
-            do {
+        guard let format = bestFormat else { return }
+
+        do {
+            try device.lockForConfiguration()
+            device.activeFormat = format
+            device.unlockForConfiguration()
+
+            // Verify custom exposure still works with this format; revert if not
+            if !device.isExposureModeSupported(.custom) {
+                print("Selected format does not support custom exposure, reverting")
                 try device.lockForConfiguration()
-                device.activeFormat = format
+                device.activeFormat = device.formats.first(where: {
+                    CMVideoFormatDescriptionGetDimensions($0.formatDescription).width >= 1920
+                }) ?? device.formats[0]
                 device.unlockForConfiguration()
-                updateDeviceCapabilities(device: device)
-            } catch {
-                print("Error selecting format: \(error)")
             }
+
+            updateDeviceCapabilities(device: device)
+        } catch {
+            print("Error selecting format: \(error)")
         }
     }
 
@@ -331,7 +325,8 @@ class CameraManager: NSObject, ObservableObject {
             self.longExposureProgress = 0.0
         }
 
-        longExposureFrames = []
+        longExposureAccumulator = nil
+        longExposureFrameCount = 0
         longExposureTargetFrames = frameCount
         longExposureCompletion = completion
 
@@ -362,30 +357,14 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    private func processLongExposureFrames() -> UIImage? {
-        guard !longExposureFrames.isEmpty else { return nil }
+    private func normalizeAccumulator() -> UIImage? {
+        guard let accumulator = longExposureAccumulator, longExposureFrameCount > 0 else { return nil }
 
-        let count = Float(longExposureFrames.count)
+        let count = Float(longExposureFrameCount)
 
-        // Average all frames together
-        var accumulatedImage = longExposureFrames[0]
-
-        for i in 1..<longExposureFrames.count {
-            let frame = longExposureFrames[i]
-
-            // Blend frames using CIBlendWithAlphaMask or simple addition
-            let blend = CIFilter.additionCompositing()
-            blend.inputImage = frame
-            blend.backgroundImage = accumulatedImage
-
-            if let result = blend.outputImage {
-                accumulatedImage = result
-            }
-        }
-
-        // Normalize by dividing by frame count (multiply by 1/count)
+        // Normalize by dividing by frame count
         let colorMatrix = CIFilter.colorMatrix()
-        colorMatrix.inputImage = accumulatedImage
+        colorMatrix.inputImage = accumulator
         let scale = 1.0 / count
         colorMatrix.rVector = CIVector(x: CGFloat(scale), y: 0, z: 0, w: 0)
         colorMatrix.gVector = CIVector(x: 0, y: CGFloat(scale), z: 0, w: 0)
@@ -393,10 +372,8 @@ class CameraManager: NSObject, ObservableObject {
         colorMatrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
         colorMatrix.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
 
-        guard let normalizedImage = colorMatrix.outputImage else { return nil }
-
-        // Render to UIImage
-        guard let cgImage = ciContext.createCGImage(normalizedImage, from: normalizedImage.extent) else {
+        guard let normalizedImage = colorMatrix.outputImage,
+              let cgImage = ciContext.createCGImage(normalizedImage, from: normalizedImage.extent) else {
             return nil
         }
 
@@ -433,9 +410,8 @@ class CameraManager: NSObject, ObservableObject {
 
             let newPosition: AVCaptureDevice.Position = self.currentCamera == .back ? .front : .back
 
-            guard let newDevice = AVCaptureDevice.default(.builtInTripleCamera, for: .video, position: newPosition)
-                    ?? AVCaptureDevice.default(.builtInDualWideCamera, for: .video, position: newPosition)
-                    ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: newPosition) else { return }
+            // Use physical camera devices (not virtual) to maintain .custom exposure support
+            guard let newDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: newPosition) else { return }
 
             do {
                 let newInput = try AVCaptureDeviceInput(device: newDevice)
@@ -618,6 +594,107 @@ class CameraManager: NSObject, ObservableObject {
                 }
             } catch {
                 print("Error setting zoom: \(error)")
+            }
+        }
+    }
+
+    /// Switch to the physical camera lens matching the focal length.
+    /// iPhone 15 Pro Max: 13mm ultra-wide, 24mm wide, 48mm (2x crop on wide), 120mm telephoto
+    func switchToLens(focalLength: Int) {
+        let deviceType: AVCaptureDevice.DeviceType
+        let zoomWithinLens: CGFloat
+
+        switch focalLength {
+        case 13:
+            deviceType = .builtInUltraWideCamera
+            zoomWithinLens = 1.0
+        case 24:
+            deviceType = .builtInWideAngleCamera
+            zoomWithinLens = 1.0
+        case 48:
+            // 48mm = 2x crop on the wide 24mm sensor
+            deviceType = .builtInWideAngleCamera
+            zoomWithinLens = 2.0
+        case 120:
+            deviceType = .builtInTelephotoCamera
+            zoomWithinLens = 1.0
+        default:
+            deviceType = .builtInWideAngleCamera
+            zoomWithinLens = CGFloat(focalLength) / 24.0
+        }
+
+        sessionQueue.async { [weak self] in
+            guard let self = self else { return }
+
+            // If already on the right device, just adjust zoom
+            if let currentDevice = self.videoDeviceInput?.device,
+               currentDevice.deviceType == deviceType {
+                do {
+                    try currentDevice.lockForConfiguration()
+                    currentDevice.videoZoomFactor = max(currentDevice.minAvailableVideoZoomFactor,
+                                                        min(zoomWithinLens, currentDevice.activeFormat.videoMaxZoomFactor))
+                    currentDevice.unlockForConfiguration()
+                    DispatchQueue.main.async { self.zoomFactor = zoomWithinLens }
+                } catch {
+                    print("Error setting zoom: \(error)")
+                }
+                return
+            }
+
+            // Need to switch to a different physical camera
+            guard let newDevice = AVCaptureDevice.default(deviceType, for: .video, position: self.currentCamera) else {
+                // Fallback: stay on current device and use digital zoom
+                if let device = self.videoDeviceInput?.device {
+                    let fallbackZoom: CGFloat
+                    switch focalLength {
+                    case 13: fallbackZoom = 0.5
+                    case 48: fallbackZoom = 2.0
+                    case 120: fallbackZoom = 5.0
+                    default: fallbackZoom = CGFloat(focalLength) / 24.0
+                    }
+                    do {
+                        try device.lockForConfiguration()
+                        device.videoZoomFactor = max(device.minAvailableVideoZoomFactor,
+                                                     min(fallbackZoom, device.activeFormat.videoMaxZoomFactor))
+                        device.unlockForConfiguration()
+                        DispatchQueue.main.async { self.zoomFactor = fallbackZoom }
+                    } catch {}
+                }
+                return
+            }
+
+            do {
+                let newInput = try AVCaptureDeviceInput(device: newDevice)
+
+                self.session.beginConfiguration()
+
+                if let currentInput = self.videoDeviceInput {
+                    self.session.removeInput(currentInput)
+                }
+
+                if self.session.canAddInput(newInput) {
+                    self.session.addInput(newInput)
+                    self.videoDeviceInput = newInput
+                    self.updateDeviceCapabilities(device: newDevice)
+
+                    // Select best format for this lens
+                    self.selectBestFormatForLongExposure(device: newDevice)
+
+                    // Apply zoom within this lens
+                    try newDevice.lockForConfiguration()
+                    newDevice.videoZoomFactor = max(newDevice.minAvailableVideoZoomFactor,
+                                                    min(zoomWithinLens, newDevice.activeFormat.videoMaxZoomFactor))
+                    newDevice.unlockForConfiguration()
+                }
+
+                self.session.commitConfiguration()
+
+                DispatchQueue.main.async {
+                    self.zoomFactor = zoomWithinLens
+                    self.isManualExposure = false
+                }
+            } catch {
+                print("Error switching lens: \(error)")
             }
         }
     }
@@ -1016,18 +1093,32 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 
         // Handle long exposure frame capture
         guard isLongExposureCapturing,
-              longExposureFrames.count < longExposureTargetFrames else {
-            // Check if we've collected enough frames
-            if isLongExposureCapturing && longExposureFrames.count >= longExposureTargetFrames {
+              longExposureFrameCount < longExposureTargetFrames else {
+            if isLongExposureCapturing && longExposureFrameCount >= longExposureTargetFrames {
                 finalizeLongExposure()
             }
             return
         }
 
-        longExposureFrames.append(ciImage)
+        // Running accumulation — add frame to accumulator
+        if let acc = longExposureAccumulator {
+            let blend = CIFilter.additionCompositing()
+            blend.inputImage = ciImage
+            blend.backgroundImage = acc
+            longExposureAccumulator = blend.outputImage
+        } else {
+            longExposureAccumulator = ciImage
+        }
+        longExposureFrameCount += 1
 
-        // Update progress
-        let progress = Float(longExposureFrames.count) / Float(longExposureTargetFrames)
+        // Render intermediate result every 30 frames to keep CIFilter chain shallow
+        if longExposureFrameCount % 30 == 0, let acc = longExposureAccumulator {
+            if let rendered = ciContext.createCGImage(acc, from: acc.extent) {
+                longExposureAccumulator = CIImage(cgImage: rendered)
+            }
+        }
+
+        let progress = Float(longExposureFrameCount) / Float(longExposureTargetFrames)
         DispatchQueue.main.async {
             self.longExposureProgress = progress
         }
@@ -1040,16 +1131,13 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             self.isLongExposureCapturing = false
         }
 
-        // Reset camera to auto exposure to prevent lag
         resetToAutoExposure()
 
-        // Process frames on background queue
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
-            let resultImage = self.processLongExposureFrames()
+            let resultImage = self.normalizeAccumulator()
 
-            // Apply film filter if selected
             let finalImage: UIImage?
             if let img = resultImage {
                 finalImage = self.applyFilmFilter(to: img)
@@ -1057,10 +1145,9 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 finalImage = nil
             }
 
-            // Clear frames
-            self.longExposureFrames = []
+            self.longExposureAccumulator = nil
+            self.longExposureFrameCount = 0
 
-            // Call completion
             DispatchQueue.main.async {
                 self.longExposureCompletion?(finalImage)
                 self.longExposureCompletion = nil
@@ -1072,8 +1159,8 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     private func resetToAutoExposure() {
         guard let device = videoDeviceInput?.device else { return }
 
-        // Immediately clear any pending frames to free memory
-        longExposureFrames.removeAll()
+        longExposureAccumulator = nil
+        longExposureFrameCount = 0
         longExposureTargetFrames = 0
 
         sessionQueue.async {
