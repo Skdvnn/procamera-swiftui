@@ -467,8 +467,11 @@ class CameraManager: NSObject, ObservableObject {
                 try device.lockForConfiguration()
                 device.setExposureModeCustom(duration: AVCaptureDevice.currentExposureDuration, iso: clampedISO) { _ in }
                 device.unlockForConfiguration()
+                // Sync stored values so other code (e.g. long exposure) has accurate state
+                let currentDuration = device.exposureDuration
                 DispatchQueue.main.async {
                     self.isoValue = clampedISO
+                    self.shutterSpeed = currentDuration
                     self.isManualExposure = true
                 }
             } catch {
@@ -501,8 +504,11 @@ class CameraManager: NSObject, ObservableObject {
                 try device.lockForConfiguration()
                 device.setExposureModeCustom(duration: clampedDuration, iso: AVCaptureDevice.currentISO) { _ in }
                 device.unlockForConfiguration()
+                // Sync stored values so other code (e.g. long exposure) has accurate state
+                let currentISO = device.iso
                 DispatchQueue.main.async {
                     self.shutterSpeed = clampedDuration
+                    self.isoValue = currentISO
                     self.isManualExposure = true
                 }
             } catch {
