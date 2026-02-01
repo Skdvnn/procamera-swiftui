@@ -90,7 +90,7 @@ struct DS {
     static let accent = Color(red: 1.0, green: 0.85, blue: 0.35) // golden yellow for indicators
 
     // Spacing
-    static let pageMargin: CGFloat = 16
+    static let pageMargin: CGFloat = 10
 
     // Radius (from Figma measurements)
     static let radiusSmall: CGFloat = 5    // Figma r=5
@@ -445,7 +445,7 @@ struct ContentView: View {
                                 }
                                 .frame(width: 88, height: 48)  // Match flash button dimensions
                             }
-                            .padding(.horizontal, DS.pageMargin + 4)
+                            .padding(.horizontal, DS.pageMargin)
 
                             // ROW 4: Thumbnail | Shutter | WB
                             HStack(alignment: .center, spacing: 0) {
@@ -472,7 +472,7 @@ struct ContentView: View {
                                     }
                                 )
                             }
-                            .padding(.horizontal, DS.pageMargin + 4)
+                            .padding(.horizontal, DS.pageMargin)
                     }
                     .background {
                         ControlsGrain()
