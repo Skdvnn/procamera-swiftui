@@ -471,17 +471,10 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     func setISO(_ value: Float) {
-        guard let device = videoDeviceInput?.device else {
-            print("[Camera] setISO: no device")
-            return
-        }
-        guard device.isExposureModeSupported(.custom) else {
-            print("[Camera] setISO: custom exposure not supported")
-            return
-        }
+        guard let device = videoDeviceInput?.device else { return }
+        guard device.isExposureModeSupported(.custom) else { return }
 
         let clampedISO = max(device.activeFormat.minISO, min(value, device.activeFormat.maxISO))
-        print("[Camera] setISO: \(value) -> clamped \(clampedISO), range [\(device.activeFormat.minISO)-\(device.activeFormat.maxISO)]")
 
         sessionQueue.async {
             do {
@@ -489,30 +482,23 @@ class CameraManager: NSObject, ObservableObject {
                 // Keep current shutter speed, only change ISO
                 device.setExposureModeCustom(duration: AVCaptureDevice.currentExposureDuration, iso: clampedISO) { _ in }
                 device.unlockForConfiguration()
-                print("[Camera] setISO: success")
+                // Sync stored values so other code (e.g. long exposure) has accurate state
+                let currentDuration = device.exposureDuration
                 DispatchQueue.main.async {
                     self.isoValue = clampedISO
+                    self.shutterSpeed = currentDuration
                     self.isManualExposure = true
                 }
             } catch {
-                print("[Camera] setISO error: \(error)")
+                print("Error setting ISO: \(error)")
             }
         }
     }
 
     func setShutterSpeed(index: Int) {
-        guard let device = videoDeviceInput?.device else {
-            print("[Camera] setShutterSpeed: no device")
-            return
-        }
-        guard index >= 0 && index < CameraManager.shutterSpeedValues.count else {
-            print("[Camera] setShutterSpeed: index \(index) out of range")
-            return
-        }
-        guard device.isExposureModeSupported(.custom) else {
-            print("[Camera] setShutterSpeed: custom exposure not supported")
-            return
-        }
+        guard let device = videoDeviceInput?.device else { return }
+        guard index >= 0 && index < CameraManager.shutterSpeedValues.count else { return }
+        guard device.isExposureModeSupported(.custom) else { return }
 
         let targetDuration = CameraManager.shutterSpeedValues[index]
 
@@ -528,21 +514,21 @@ class CameraManager: NSObject, ObservableObject {
             clampedDuration = maxDuration
         }
 
-        print("[Camera] setShutterSpeed: index \(index), duration \(CMTimeGetSeconds(clampedDuration))s")
-
         sessionQueue.async {
             do {
                 try device.lockForConfiguration()
                 // Keep current ISO, only change shutter speed
                 device.setExposureModeCustom(duration: clampedDuration, iso: AVCaptureDevice.currentISO) { _ in }
                 device.unlockForConfiguration()
-                print("[Camera] setShutterSpeed: success")
+                // Sync stored values so other code (e.g. long exposure) has accurate state
+                let currentISO = device.iso
                 DispatchQueue.main.async {
                     self.shutterSpeed = clampedDuration
+                    self.isoValue = currentISO
                     self.isManualExposure = true
                 }
             } catch {
-                print("[Camera] setShutterSpeed error: \(error)")
+                print("Error setting shutter speed: \(error)")
             }
         }
     }
