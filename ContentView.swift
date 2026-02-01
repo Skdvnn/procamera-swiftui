@@ -936,10 +936,11 @@ struct ISOScrubberHorizontal: View {
                         let newIndex = max(0, min(isoValues.count - 1, startIndex + steps))
                         if newIndex != currentIndex {
                             Haptics.light()
+                            let newISO = isoValues[newIndex]
                             withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                                iso = isoValues[newIndex]
+                                iso = newISO
                             }
-                            onChanged(iso)
+                            onChanged(newISO)
                         }
                     }
                     .onEnded { _ in
@@ -2930,7 +2931,7 @@ struct ShutterScrubber: View {
                             withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
                                 shutterSpeed = newIndex
                             }
-                            onChanged(shutterSpeed)
+                            onChanged(newIndex)
                         }
                     }
                     .onEnded { _ in
