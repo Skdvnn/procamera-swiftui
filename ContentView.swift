@@ -373,7 +373,7 @@ struct ContentView: View {
                             .frame(height: 44)
                             .padding(.horizontal, DS.pageMargin)
 
-                            Spacer().frame(height: 4)
+                            Spacer().frame(height: 2)
 
                             // ROW 2: ISO & Shutter side by side
                             HStack(spacing: 4) {
@@ -398,7 +398,7 @@ struct ContentView: View {
                             .frame(height: 44)
                             .padding(.horizontal, DS.pageMargin)
 
-                            Spacer().frame(height: 12)
+                            Spacer().frame(height: 6)
 
                             // ROW 3: Flash | Format | Mode icons+buttons
                             HStack(alignment: .center, spacing: 0) {
@@ -484,7 +484,7 @@ struct ContentView: View {
                     }
                 }
                 .padding(.top, safeTop)
-                .padding(.bottom, safeBottom / 2)
+                .padding(.bottom, safeBottom * 0.7)
 
                 if showFlash {
                     Color.white.ignoresSafeArea()
@@ -1393,7 +1393,7 @@ struct ShutterButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Collar - knurled chrome ring
+                // Collar - knurled chrome ring (stays fixed)
                 Circle()
                     .fill(
                         AngularGradient(
@@ -1415,25 +1415,31 @@ struct ShutterButton: View {
                     .stroke(Color(hex: "151515"), lineWidth: 1)
                     .frame(width: 74, height: 74)
 
-                // Collar inner edge
+                // Collar inner shadow - darkens when button sinks in
                 Circle()
-                    .stroke(Color(hex: "1a1a1a"), lineWidth: 0.5)
+                    .stroke(
+                        Color.black.opacity(isPressed ? 0.6 : 0.15),
+                        lineWidth: isPressed ? 2 : 0.5
+                    )
                     .frame(width: 65, height: 65)
 
-                // Metal shader button face (concave brushed chrome)
-                MetalShutterSurface(size: 64, isPressed: isPressed)
-                    .clipShape(Circle())
+                // Button face - this is what moves when pressed
+                ZStack {
+                    MetalShutterSurface(size: 64, isPressed: isPressed)
+                        .clipShape(Circle())
 
-                // Capturing flash
-                if isCapturing {
-                    Circle()
-                        .fill(Color.white.opacity(0.12))
-                        .frame(width: 64, height: 64)
+                    // Capturing flash
+                    if isCapturing {
+                        Circle()
+                            .fill(Color.white.opacity(0.12))
+                            .frame(width: 64, height: 64)
+                    }
                 }
+                .scaleEffect(isPressed ? 0.96 : 1.0)
+                .shadow(color: Color.black.opacity(isPressed ? 0.1 : 0.5), radius: isPressed ? 0.5 : 3, y: isPressed ? 0 : 2)
             }
-            .scaleEffect(isPressed ? 0.93 : 1.0)
-            .shadow(color: Color.black.opacity(isPressed ? 0.3 : 0.6), radius: isPressed ? 1 : 6, y: isPressed ? 0.5 : 4)
-            .animation(.spring(response: 0.15, dampingFraction: 0.55), value: isPressed)
+            .shadow(color: Color.black.opacity(0.5), radius: 5, y: 3)
+            .animation(.spring(response: 0.12, dampingFraction: 0.65), value: isPressed)
         }
         .buttonStyle(PlainButtonStyle())
         .simultaneousGesture(
@@ -1441,14 +1447,14 @@ struct ShutterButton: View {
                 .onChanged { _ in
                     if !isPressed {
                         isPressed = true
-                        let impact = UIImpactFeedbackGenerator(style: .medium)
-                        impact.impactOccurred()
+                        let impact = UIImpactFeedbackGenerator(style: .heavy)
+                        impact.impactOccurred(intensity: 0.8)
                     }
                 }
                 .onEnded { _ in
                     isPressed = false
-                    let impact = UIImpactFeedbackGenerator(style: .light)
-                    impact.impactOccurred(intensity: 0.5)
+                    let impact = UIImpactFeedbackGenerator(style: .rigid)
+                    impact.impactOccurred(intensity: 0.6)
                 }
         )
         .disabled(isCapturing)
@@ -1648,6 +1654,8 @@ struct FlashButtonPill: View {
             }
             .frame(width: pillWidth, height: pillHeight)
         }
+        .frame(width: pillWidth, height: pillHeight + 4)
+        .contentShape(Rectangle())
         .buttonStyle(.plain)
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
@@ -1785,6 +1793,8 @@ struct ThumbnailPill: View {
             }
             .frame(width: pillWidth, height: pillHeight)
         }
+        .frame(width: pillWidth, height: pillHeight + 4)
+        .contentShape(Rectangle())
         .buttonStyle(.plain)
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)

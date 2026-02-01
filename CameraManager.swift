@@ -559,7 +559,7 @@ class CameraManager: NSObject, ObservableObject {
                     device.focusMode = .autoFocus
                 }
 
-                if device.isExposurePointOfInterestSupported {
+                if device.isExposurePointOfInterestSupported && !self.isManualExposure {
                     device.exposurePointOfInterest = point
                     device.exposureMode = .autoExpose
                 }

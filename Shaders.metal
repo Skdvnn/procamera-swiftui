@@ -190,7 +190,7 @@ float metalNoise(float2 p) {
     // ==========================================================
     // Gentle dome: center is highest, edges slope away.
     // When pressed, dome flattens.
-    float dome = mix(0.30, 0.15, pressed);
+    float dome = mix(0.30, 0.08, pressed); // nearly flat when fully pressed
     float height = dome * (1.0 - r * r);
 
     // Surface normal - dome normals tilt INWARD (toward center) at edges.
@@ -199,38 +199,38 @@ float metalNoise(float2 p) {
     float3 N = normalize(float3(radDir * r * dome * 2.0, 1.0));
 
     // ==========================================================
-    // LATHE LINES - fine concentric machining marks
+    // LATHE TEXTURE - felt through lighting, not seen as rings
     // ==========================================================
-    // Real turned metal has very fine concentric lines from the lathe.
-    // Visible as subtle texture, not bold rings. High frequency sine
-    // modulated by noise so they're irregular like real tool marks.
-    float gp = dist * size.x; // pixel-space radial distance
+    // High frequency so individual lines merge into texture.
+    // The effect comes from how they scatter specular highlights,
+    // not from seeing individual bright/dark bands.
+    float gp = dist * size.x; // 0 to 32 for 64px button
 
-    // Fine concentric lines - multiple close frequencies that beat
-    // against each other for organic irregularity
-    float lathe1 = sin(gp * 4.0) * 0.5 + 0.5;  // ~32 lines across button
-    float lathe2 = sin(gp * 4.7) * 0.5 + 0.5;  // slightly different freq
-    float lathe3 = sin(gp * 9.5) * 0.5 + 0.5;  // finer detail
+    // Dense concentric grooves - many frequencies layered
+    float lathe = sin(gp * 2.8) * 0.35
+                + sin(gp * 3.5 + 0.7) * 0.25
+                + sin(gp * 5.2) * 0.20
+                + sin(gp * 8.0 + 1.3) * 0.20;
 
-    // Noise to break up regularity - varies intensity around circumference
-    float latheNoise = metalNoise(float2(angle * 8.0, dist * 40.0));
-    float latheNoise2 = metalNoise(float2(angle * 20.0, dist * 80.0));
+    // Circumferential noise breaks up any visible pattern
+    float latheNoise = metalNoise(float2(angle * 10.0, dist * 30.0));
+    lathe *= mix(0.4, 1.0, latheNoise);
 
-    // Combined lathe texture - lines modulated by noise
-    float latheLines = (lathe1 * 0.45 + lathe2 * 0.35 + lathe3 * 0.20);
-    latheLines = (latheLines - 0.5) * mix(0.6, 1.0, latheNoise); // noise varies depth
-    latheLines += (latheNoise2 - 0.5) * 0.15; // extra irregularity
+    // Derivative for normal perturbation
+    float latheDeriv = cos(gp * 2.8) * 0.35
+                     + cos(gp * 3.5 + 0.7) * 0.25
+                     + cos(gp * 5.2) * 0.20
+                     + cos(gp * 8.0 + 1.3) * 0.20;
+    latheDeriv *= mix(0.4, 1.0, latheNoise);
 
-    // Normal perturbation from lathe lines (radial direction)
-    float grainR = metalNoise(float2(dist * 80.0, angle * 0.5)) * 0.5
-                 + metalNoise(float2(dist * 160.0, angle * 1.0)) * 0.3
-                 + metalNoise(float2(dist * 320.0, angle * 2.0)) * 0.2;
-    grainR = (grainR - 0.5);
+    // Additional noise-based micro grain
+    float microGrain = metalNoise(float2(dist * 100.0, angle * 3.0));
+    microGrain += metalNoise(float2(dist * 200.0, angle * 6.0)) * 0.5;
+    microGrain = (microGrain / 1.5 - 0.5);
 
     float3 Ng = N;
-    Ng.xy += radDir * grainR * 0.08;
-    // Lathe lines also perturb normal slightly
-    Ng.xy += radDir * latheLines * 0.06;
+    // Moderate normal perturbation - enough to break up specular
+    Ng.xy += radDir * (latheDeriv * 0.14 + microGrain * 0.05);
     Ng = normalize(Ng);
 
     // ==========================================================
@@ -260,12 +260,12 @@ float metalNoise(float2 p) {
         float3 H = normalize(L1 + V);
         float NdH = max(dot(Ng, H), 0.0);
 
-        // Soft broad highlight + tighter core
-        float soft = pow(NdH, 6.0) * 0.55;
-        float tight = pow(NdH, 40.0) * 0.35;
+        // Broad glow + sharp metallic peak
+        float soft = pow(NdH, 5.0) * 0.40;
+        float tight = pow(NdH, 64.0) * 0.55;
         float spec = (soft + tight) * NdL;
 
-        specTotal += spec * float3(1.0, 0.97, 0.92) * 1.3;
+        specTotal += spec * float3(1.0, 0.97, 0.92) * 1.5;
         diffTotal += NdL * 0.65;
     }
 
@@ -275,11 +275,11 @@ float metalNoise(float2 p) {
         float3 H = normalize(L2 + V);
         float NdH = max(dot(Ng, H), 0.0);
 
-        float soft = pow(NdH, 6.0) * 0.55;
-        float tight = pow(NdH, 40.0) * 0.35;
+        float soft = pow(NdH, 5.0) * 0.40;
+        float tight = pow(NdH, 64.0) * 0.55;
         float spec = (soft + tight) * NdL;
 
-        specTotal += spec * float3(0.90, 0.93, 1.0) * 0.55;
+        specTotal += spec * float3(0.90, 0.93, 1.0) * 0.65;
         diffTotal += NdL * 0.25;
     }
 
@@ -297,13 +297,14 @@ float metalNoise(float2 p) {
     // ==========================================================
     // CHROME MATERIAL
     // ==========================================================
-    float3 F0 = float3(0.55, 0.53, 0.50);
-    F0 *= mix(1.0, 0.78, pressed);
+    float3 F0 = float3(0.60, 0.58, 0.55);
+    F0 *= mix(1.0, 0.65, pressed);
 
     float NdV = max(dot(N, V), 0.0);
     float3 fresnel = F0 + (1.0 - F0) * pow(1.0 - NdV, 5.0);
 
-    float3 chromeBase = mix(float3(0.09, 0.09, 0.10), float3(0.06, 0.06, 0.07), pressed);
+    // Very dark base - metal reads as dark with bright reflections
+    float3 chromeBase = mix(float3(0.06, 0.06, 0.07), float3(0.03, 0.03, 0.04), pressed);
 
     // ==========================================================
     // ENVIRONMENT REFLECTION - the key to looking real
@@ -315,27 +316,27 @@ float metalNoise(float2 p) {
     // Broad sky/ground
     float skyMix = smoothstep(-0.15, 0.45, reflDir.y);
     float3 envColor = mix(
-        float3(0.02, 0.02, 0.03),  // dark (camera body / surroundings)
-        float3(0.28, 0.28, 0.32),  // overhead light / sky
+        float3(0.01, 0.01, 0.02),  // near-black (camera body)
+        float3(0.32, 0.32, 0.36),  // bright overhead
         skyMix
     );
 
-    // Organic variation - breaks up the perfect gradient
+    // Organic variation
     float env1 = metalNoise(reflDir.xy * 2.5 + 0.7);
     float env2 = metalNoise(reflDir.xy * 5.0 + 2.3);
-    envColor *= (0.85 + (env1 * 0.55 + env2 * 0.35) * 0.4);
+    envColor *= (0.80 + (env1 * 0.55 + env2 * 0.35) * 0.5);
 
-    // Soft warm light source reflection (not a sharp hotspot)
+    // Warm light source reflection
     float warmZone = smoothstep(0.8, 0.0, length(reflDir.xy - float2(-0.25, 0.35)));
-    envColor += float3(0.18, 0.15, 0.11) * warmZone * warmZone;
+    envColor += float3(0.25, 0.20, 0.14) * warmZone * warmZone;
 
     // ==========================================================
     // COMPOSE
     // ==========================================================
     float3 result = float3(0);
 
-    // Ambient (very dark for chrome)
-    result += chromeBase * 0.20;
+    // Ambient (nearly black for chrome - all light comes from reflections)
+    result += chromeBase * 0.15;
 
     // Diffuse (minimal for chrome)
     result += chromeBase * diffTotal * 0.10;
@@ -343,19 +344,12 @@ float metalNoise(float2 p) {
     // Specular (broad, natural arcs from bowl geometry)
     result += fresnel * specTotal;
 
-    // Environment reflection
-    result += fresnel * envColor * 0.40;
+    // Environment reflection (chrome is a mirror)
+    result += fresnel * envColor * 0.50;
 
-    // Micro surface grain
-    result += grainR * 0.008;
-
-    // ==========================================================
-    // LATHE LINE MODULATION - visible machining texture
-    // ==========================================================
-    // Fine concentric lines subtly modulate surface brightness.
-    // Brighter where a line catches light, darker in the troughs.
-    // This is what makes it read as "machined metal" vs smooth plastic.
-    result *= (1.0 + latheLines * 0.045);
+    // Lathe texture - very subtle brightness modulation,
+    // the real effect is through the normal perturbation above
+    result *= (1.0 + lathe * 0.03 + microGrain * 0.015);
 
     // ==========================================================
     // DOME SHADING - center catches most light, edges fall off
