@@ -156,8 +156,10 @@ class CameraManager: NSObject, ObservableObject {
         session.beginConfiguration()
         session.sessionPreset = .photo
 
-        // Add video input
-        guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: currentCamera) else {
+        // Add video input - prefer triple/dual wide camera for ultra-wide support
+        guard let videoDevice = AVCaptureDevice.default(.builtInTripleCamera, for: .video, position: currentCamera)
+                ?? AVCaptureDevice.default(.builtInDualWideCamera, for: .video, position: currentCamera)
+                ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: currentCamera) else {
             DispatchQueue.main.async { self.error = .cameraUnavailable }
             session.commitConfiguration()
             return
@@ -421,7 +423,9 @@ class CameraManager: NSObject, ObservableObject {
 
             let newPosition: AVCaptureDevice.Position = self.currentCamera == .back ? .front : .back
 
-            guard let newDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: newPosition) else { return }
+            guard let newDevice = AVCaptureDevice.default(.builtInTripleCamera, for: .video, position: newPosition)
+                    ?? AVCaptureDevice.default(.builtInDualWideCamera, for: .video, position: newPosition)
+                    ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: newPosition) else { return }
 
             do {
                 let newInput = try AVCaptureDeviceInput(device: newDevice)
@@ -468,6 +472,7 @@ class CameraManager: NSObject, ObservableObject {
 
     func setISO(_ value: Float) {
         guard let device = videoDeviceInput?.device else { return }
+        guard device.isExposureModeSupported(.custom) else { return }
 
         let clampedISO = max(device.activeFormat.minISO, min(value, device.activeFormat.maxISO))
 
@@ -490,6 +495,7 @@ class CameraManager: NSObject, ObservableObject {
     func setShutterSpeed(index: Int) {
         guard let device = videoDeviceInput?.device else { return }
         guard index >= 0 && index < CameraManager.shutterSpeedValues.count else { return }
+        guard device.isExposureModeSupported(.custom) else { return }
 
         let targetDuration = CameraManager.shutterSpeedValues[index]
 
@@ -571,6 +577,7 @@ class CameraManager: NSObject, ObservableObject {
 
     func setManualFocus(_ position: Float) {
         guard let device = videoDeviceInput?.device else { return }
+        guard device.isFocusModeSupported(.locked) else { return }
 
         sessionQueue.async {
             do {
@@ -591,7 +598,8 @@ class CameraManager: NSObject, ObservableObject {
         guard let device = videoDeviceInput?.device else { return }
 
         let maxZoom = min(device.activeFormat.videoMaxZoomFactor, 10.0)
-        let clampedZoom = max(1.0, min(factor, maxZoom))
+        let minZoom = device.minAvailableVideoZoomFactor
+        let clampedZoom = max(minZoom, min(factor, maxZoom))
 
         sessionQueue.async {
             do {

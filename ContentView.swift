@@ -49,16 +49,44 @@ struct VulcaniteGrain: View {
     }
 }
 
-// MARK: - Design System (matches Figma exactly)
+// MARK: - Design System (matches Figma exactly, adaptive light/dark)
 struct DS {
-    // Colors - DSLR body feel
-    static let pageBg = Color(hex: "131313")         // DSLR body (balanced darkness)
-    static let controlBg = Color(hex: "242424")      // Darker control backgrounds
-    static let controlBgLight = Color(hex: "3a3a3a") // lighter control bg for hover
-    static let strokeOuter = Color(white: 0.22)      // outer stroke
-    static let strokeInner = Color(white: 0.12)      // inner stroke
-    static let textPrimary = Color.white
-    static let textSecondary = Color(hex: "5e5e5e")  // Figma icon gray
+    // Colors - Adaptive for light/dark mode (DSLR body feel, inverted tones)
+    static var pageBg: Color {
+        Color(uiColor: UIColor(dynamicProvider: { traits in
+            traits.userInterfaceStyle == .dark ? UIColor(hex: "131313") : UIColor(hex: "ececec")
+        }))
+    }
+    static var controlBg: Color {
+        Color(uiColor: UIColor(dynamicProvider: { traits in
+            traits.userInterfaceStyle == .dark ? UIColor(hex: "242424") : UIColor(hex: "dbdbdb")
+        }))
+    }
+    static var controlBgLight: Color {
+        Color(uiColor: UIColor(dynamicProvider: { traits in
+            traits.userInterfaceStyle == .dark ? UIColor(hex: "3a3a3a") : UIColor(hex: "c5c5c5")
+        }))
+    }
+    static var strokeOuter: Color {
+        Color(uiColor: UIColor(dynamicProvider: { traits in
+            traits.userInterfaceStyle == .dark ? UIColor(white: 0.22, alpha: 1) : UIColor(white: 0.78, alpha: 1)
+        }))
+    }
+    static var strokeInner: Color {
+        Color(uiColor: UIColor(dynamicProvider: { traits in
+            traits.userInterfaceStyle == .dark ? UIColor(white: 0.12, alpha: 1) : UIColor(white: 0.88, alpha: 1)
+        }))
+    }
+    static var textPrimary: Color {
+        Color(uiColor: UIColor(dynamicProvider: { traits in
+            traits.userInterfaceStyle == .dark ? .white : UIColor(hex: "131313")
+        }))
+    }
+    static var textSecondary: Color {
+        Color(uiColor: UIColor(dynamicProvider: { traits in
+            traits.userInterfaceStyle == .dark ? UIColor(hex: "5e5e5e") : UIColor(hex: "a1a1a1")
+        }))
+    }
     static let accent = Color(red: 1.0, green: 0.85, blue: 0.35) // golden yellow for indicators
 
     // Spacing
@@ -73,6 +101,28 @@ struct DS {
     // Font
     static func mono(_ size: CGFloat, weight: Font.Weight = .medium) -> Font {
         .system(size: size, weight: weight, design: .monospaced)
+    }
+}
+
+// UIColor hex extension for adaptive colors
+extension UIColor {
+    convenience init(hex: String) {
+        let hex = hex.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        var int: UInt64 = 0
+        Scanner(string: hex).scanHexInt64(&int)
+        let r, g, b: UInt64
+        switch hex.count {
+        case 6:
+            (r, g, b) = ((int >> 16) & 0xFF, (int >> 8) & 0xFF, int & 0xFF)
+        default:
+            (r, g, b) = (0, 0, 0)
+        }
+        self.init(
+            red: CGFloat(r) / 255,
+            green: CGFloat(g) / 255,
+            blue: CGFloat(b) / 255,
+            alpha: 1
+        )
     }
 }
 
@@ -122,6 +172,7 @@ enum CaptureFormat: CaseIterable {
 
 struct ContentView: View {
     @StateObject private var camera = CameraManager()
+    @Environment(\.colorScheme) var colorScheme  // Track color scheme changes
 
     @State private var showGrid = true
     @State private var timerSeconds = 0
@@ -152,7 +203,7 @@ struct ContentView: View {
     private let modes = ["P", "A", "T"]
     private let shutterSpeeds = ["4\"", "2\"", "1\"", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60", "1/125", "1/250", "1/500", "1/1000", "1/2000", "1/4000"]
     private let isoValues = [100, 200, 400, 800, 1600, 3200]
-    private let focalLengths = [24, 28, 35, 50, 70, 85, 105]
+    private let focalLengths = [13, 24, 48, 120]
 
     var body: some View {
         GeometryReader { geo in
@@ -160,18 +211,12 @@ struct ContentView: View {
             let safeTop = geo.safeAreaInsets.top
             let safeBottom = geo.safeAreaInsets.bottom
 
-            // Layout measurements - maximize viewport (extend camera view)
+            // Layout measurements
             let topPanelHeight: CGFloat = 110
-            let bottomControlsHeight: CGFloat = 175  // Tighter controls, taller viewfinder
-            let gaugeToViewfinderSpacing: CGFloat = 5  // Consistent gap
-            let viewfinderToControlsSpacing: CGFloat = 5  // Consistent gap (matches top)
-            let bottomPadding: CGFloat = 0
+            let gaugeToViewfinderSpacing: CGFloat = 5
+            let viewfinderToControlsSpacing: CGFloat = 5
 
-            // Calculate viewfinder to fill remaining space
-            let availableHeight = geo.size.height - topPanelHeight - bottomControlsHeight - gaugeToViewfinderSpacing - viewfinderToControlsSpacing - bottomPadding - safeTop
-            let viewfinderHeight = availableHeight
-
-            ZStack {
+            ZStack(alignment: .top) {
                 // Diamond/crosshatch texture background like Leica camera grip
                 LeicaVulcaniteTexture(scale: 20, intensity: 0.8).ignoresSafeArea()
 
@@ -233,7 +278,7 @@ struct ContentView: View {
                                     guard !isLocked else { return }
                                     Haptics.light()
                                     let newZoom = zoomValue * scale
-                                    zoomValue = min(max(newZoom, 1.0), 5.0)
+                                    zoomValue = min(max(newZoom, 0.5), 10.0)
                                     camera.setZoom(zoomValue)
                                     if !isManualFocusEnabled {
                                         focusPosition = Float(zoomValue - 1) / 4.0
@@ -299,24 +344,22 @@ struct ContentView: View {
                             .stroke(Color(hex: "333333"), lineWidth: 0.5)
                             .padding(2)
                     }
-                    .frame(height: viewfinderHeight)
-                    .frame(maxWidth: .infinity)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(1)
                     .padding(.horizontal, DS.pageMargin)
 
                     Spacer().frame(height: viewfinderToControlsSpacing)
 
                     // BOTTOM CONTROLS - grid-like DSLR layout with equidistant spacing
-                    ZStack(alignment: .top) {
-                        // Grain texture for controls area
-                        ControlsGrain()
-
-                        VStack(spacing: 0) {
-                            // ROW 1: Zoom control (full width) - no top padding
-                            LensRingControl(
+                    VStack(spacing: 0) {
+                        // ROW 1: Zoom control (full width) - no top padding
+                        LensRingControl(
                                 focalLength: $focalLength,
                                 isoValue: $isoValue,
                                 onFocalLengthChanged: { fl in
-                                    let zoom = CGFloat(fl) / 24.0
+                                    // Exact hardware zoom factors for iPhone 15 Pro Max
+                                    let zoomMap: [Int: CGFloat] = [13: 0.5, 24: 1.0, 48: 2.0, 120: 5.0]
+                                    let zoom = zoomMap[fl] ?? CGFloat(fl) / 24.0
                                     zoomValue = zoom
                                     camera.setZoom(zoom)
                                     if !isManualFocusEnabled {
@@ -355,7 +398,7 @@ struct ContentView: View {
                             .frame(height: 44)
                             .padding(.horizontal, DS.pageMargin)
 
-                            Spacer().frame(height: 16)  // Larger gap before button rows
+                            Spacer().frame(height: 12)
 
                             // ROW 3: Flash | Format | Mode icons+buttons
                             HStack(alignment: .center, spacing: 0) {
@@ -409,9 +452,7 @@ struct ContentView: View {
                             }
                             .padding(.horizontal, DS.pageMargin + 4)
 
-                            Spacer().frame(height: 4)  // Tighter spacing between button rows
-
-                            // ROW 4: Thumbnail | Shutter | WB (aligned horizontally)
+                            // ROW 4: Thumbnail | Shutter | WB
                             HStack(alignment: .center, spacing: 0) {
                                 ThumbnailPill(image: lastCapturedImage) {
                                     Haptics.click()
@@ -437,11 +478,13 @@ struct ContentView: View {
                                 )
                             }
                             .padding(.horizontal, DS.pageMargin + 4)
-                        }
                     }
-                    .padding(.bottom, bottomPadding)
+                    .background {
+                        ControlsGrain()
+                    }
                 }
                 .padding(.top, safeTop)
+                .padding(.bottom, safeBottom / 2)
 
                 if showFlash {
                     Color.white.ignoresSafeArea()
@@ -449,19 +492,26 @@ struct ContentView: View {
             }
             .ignoresSafeArea()
         }
-        .preferredColorScheme(.dark)
         .statusBarHidden(false)
-        .onAppear { camera.checkPermissions() }
+        .id(colorScheme)  // Force redraw on color scheme change
+        .onAppear {
+            camera.checkPermissions()
+            // Sync initial filter state
+            syncFilmFilter(filmFilter)
+        }
         .onChange(of: filmFilter) { newFilter in
-            // Sync UI film filter to CameraManager
-            switch newFilter {
-            case .none: camera.selectedFilmFilter = .none
-            case .portra400: camera.selectedFilmFilter = .portra400
-            case .kodakGold: camera.selectedFilmFilter = .ektar100  // Map to similar
-            case .trix400: camera.selectedFilmFilter = .trix400
-            case .velvia50: camera.selectedFilmFilter = .velvia50
-            case .cinestill800: camera.selectedFilmFilter = .cinestill800
-            }
+            syncFilmFilter(newFilter)
+        }
+    }
+
+    private func syncFilmFilter(_ filter: FilmFilterMode) {
+        switch filter {
+        case .none: camera.selectedFilmFilter = .none
+        case .portra400: camera.selectedFilmFilter = .portra400
+        case .kodakGold: camera.selectedFilmFilter = .ektar100
+        case .trix400: camera.selectedFilmFilter = .trix400
+        case .velvia50: camera.selectedFilmFilter = .velvia50
+        case .cinestill800: camera.selectedFilmFilter = .cinestill800
         }
     }
 
@@ -624,7 +674,6 @@ struct RefractiveGlassInfoBar: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(.ultraThinMaterial)
-                    .environment(\.colorScheme, .dark)
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.black.opacity(0.3))
                 RoundedRectangle(cornerRadius: 8)
@@ -843,7 +892,7 @@ struct ISOScrubberHorizontal: View {
                     Spacer()
 
                     // Center: Label + Ticker Value
-                    HStack(spacing: 4) {
+                    HStack(spacing: 2) {
                         Text("ISO")
                             .font(DS.mono(9, weight: .medium))
                             .foregroundColor(isDragging ? DS.accent : DS.textSecondary)
@@ -912,7 +961,7 @@ struct LensRingControl: View {
     let onFocalLengthChanged: (Int) -> Void
     let onISOChanged: (Int) -> Void
 
-    private let focalLengths = [24, 28, 35, 50, 70, 85, 105]
+    private let focalLengths = [13, 24, 48, 120]
     private let isoValues = [100, 200, 400, 800, 1600, 3200]
 
     @State private var tickOffset: CGFloat = 0
@@ -987,10 +1036,19 @@ struct LensRingControl: View {
 
                     Spacer()
 
-                    Text("\(focalLength)MM")
-                        .font(DS.mono(11, weight: .bold))
-                        .foregroundColor(isDragging ? DS.accent : .white)
-                        .frame(width: 50, alignment: .center)
+                    // Animated focal length with TickerValue
+                    HStack(spacing: 0) {
+                        TickerValue(
+                            values: focalLengths.map { "\($0)" },
+                            currentIndex: currentIndex,
+                            tickerOffset: tickOffset,
+                            isDragging: isDragging,
+                            itemWidth: 40
+                        )
+                        Text("MM")
+                            .font(DS.mono(9, weight: .medium))
+                            .foregroundColor(isDragging ? DS.accent : .white)
+                    }
 
                     Spacer()
 
@@ -1019,7 +1077,9 @@ struct LensRingControl: View {
                                 for _ in 0..<abs(steps) {
                                     if currentIndex < focalLengths.count - 1 {
                                         Haptics.light()
-                                        focalLength = focalLengths[currentIndex + 1]
+                                        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                                            focalLength = focalLengths[currentIndex + 1]
+                                        }
                                         onFocalLengthChanged(focalLength)
                                     }
                                 }
@@ -1027,7 +1087,9 @@ struct LensRingControl: View {
                                 for _ in 0..<steps {
                                     if currentIndex > 0 {
                                         Haptics.light()
-                                        focalLength = focalLengths[currentIndex - 1]
+                                        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                                            focalLength = focalLengths[currentIndex - 1]
+                                        }
                                         onFocalLengthChanged(focalLength)
                                     }
                                 }
@@ -1045,7 +1107,9 @@ struct LensRingControl: View {
             .onTapGesture {
                 Haptics.click()
                 let newIndex = (currentIndex + 1) % focalLengths.count
-                focalLength = focalLengths[newIndex]
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                    focalLength = focalLengths[newIndex]
+                }
                 onFocalLengthChanged(focalLength)
             }
         }
@@ -1075,22 +1139,15 @@ struct LiquidGlassZoomControl: View {
     @Binding var focalLength: Int
     let onFocalLengthChanged: (Int) -> Void
 
-    private let focalLengths = [24, 28, 35, 50, 70, 85, 105]
+    private let focalLengths = [13, 24, 48, 120]
 
     @State private var isDragging = false
     @State private var dragOffset: CGFloat = 0
     @State private var startIndex: Int = 0
     @State private var tickerOffset: CGFloat = 0
-    @State private var displayIndex: Int = 0
-    @State private var valueScale: CGFloat = 1.0
 
     private var currentIndex: Int {
         focalLengths.firstIndex(of: focalLength) ?? 0
-    }
-
-    private var displayValue: String {
-        guard displayIndex >= 0 && displayIndex < focalLengths.count else { return "" }
-        return "\(focalLengths[displayIndex])"
     }
 
     var body: some View {
@@ -1125,13 +1182,14 @@ struct LiquidGlassZoomControl: View {
 
                 // Center: Ticker value with MM suffix
                 HStack(spacing: 3) {
-                    // Animated focal length value with pop effect
-                    Text(displayValue)
-                        .font(.system(size: 12, weight: .bold, design: .monospaced))
-                        .foregroundColor(isDragging ? DS.accent : .white)
-                        .scaleEffect((isDragging ? 1.15 : 1.0) * valueScale)
-                        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isDragging)
-                        .animation(.spring(response: 0.15, dampingFraction: 0.6), value: valueScale)
+                    // Animated focal length value using TickerValue (same as ISO)
+                    TickerValue(
+                        values: focalLengths.map { "\($0)" },
+                        currentIndex: currentIndex,
+                        tickerOffset: tickerOffset,
+                        isDragging: isDragging,
+                        itemWidth: 40
+                    )
 
                     Text("MM")
                         .font(DS.mono(9, weight: .medium))
@@ -1169,16 +1227,12 @@ struct LiquidGlassZoomControl: View {
                         let stepWidth: CGFloat = 40
                         let steps = Int(-value.translation.width / stepWidth)
                         let newIndex = max(0, min(focalLengths.count - 1, startIndex + steps))
-                        if newIndex != displayIndex {
+                        if newIndex != currentIndex {
                             Haptics.light()
-                            displayIndex = newIndex
-                            focalLength = focalLengths[newIndex]
-                            onFocalLengthChanged(focalLength)
-                            // Pop animation on value change
-                            valueScale = 1.2
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                valueScale = 1.0
+                            withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                                focalLength = focalLengths[newIndex]
                             }
+                            onFocalLengthChanged(focalLength)
                         }
                     }
                     .onEnded { _ in
@@ -1189,33 +1243,6 @@ struct LiquidGlassZoomControl: View {
                     }
             )
         }
-        .onAppear {
-            displayIndex = currentIndex
-        }
-    }
-}
-
-// MARK: - Zoom Ticker Value (Animated value display for zoom control)
-struct ZoomTickerValue: View {
-    let values: [String]
-    let currentIndex: Int
-    let tickerOffset: CGFloat
-    let isDragging: Bool
-    var itemWidth: CGFloat = 55
-
-    private var currentValue: String {
-        guard currentIndex >= 0 && currentIndex < values.count else { return "" }
-        return values[currentIndex]
-    }
-
-    var body: some View {
-        Text(currentValue)
-            .font(.system(size: 12, weight: .bold, design: .monospaced))
-            .foregroundColor(isDragging ? DS.accent : .white)
-            .scaleEffect(isDragging ? 1.15 : 1.0)
-            .contentTransition(.numericText())
-            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isDragging)
-            .animation(.spring(response: 0.3, dampingFraction: 0.7), value: currentValue)
     }
 }
 
@@ -1366,91 +1393,63 @@ struct ShutterButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Outer ring (brighter for visibility)
-                Circle()
-                    .fill(Color(hex: "252525"))
-                    .frame(width: 72, height: 72)
-
-                // Subtle top highlight
-                Circle()
-                    .stroke(
-                        LinearGradient(
-                            colors: [Color.white.opacity(0.2), Color.white.opacity(0.03)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ),
-                        lineWidth: 1
-                    )
-                    .frame(width: 72, height: 72)
-
-                // Inner button face with subtle 3D effect (brightened)
+                // Collar - knurled chrome ring
                 Circle()
                     .fill(
-                        RadialGradient(
+                        AngularGradient(
                             colors: [
-                                Color(hex: isPressed ? "222222" : "2e2e2e"),
-                                Color(hex: isPressed ? "181818" : "222222"),
-                                Color(hex: isPressed ? "141414" : "1a1a1a")
+                                Color(hex: "333333"),
+                                Color(hex: "4a4a4a"),
+                                Color(hex: "2a2a2a"),
+                                Color(hex: "404040"),
+                                Color(hex: "303030"),
+                                Color(hex: "333333")
                             ],
-                            center: UnitPoint(x: 0.4, y: 0.35),
-                            startRadius: 0,
-                            endRadius: 32
+                            center: .center
                         )
                     )
-                    .frame(width: 64, height: 64)
+                    .frame(width: 74, height: 74)
 
-                // Inner stroke (brighter)
+                // Collar outer edge
                 Circle()
-                    .stroke(Color(hex: "404040"), lineWidth: 0.5)
-                    .frame(width: 64, height: 64)
+                    .stroke(Color(hex: "151515"), lineWidth: 1)
+                    .frame(width: 74, height: 74)
 
-                // Concentric grooves (more pronounced mechanical feel)
-                ForEach(0..<4, id: \.self) { i in
-                    Circle()
-                        .stroke(Color.white.opacity(0.06), lineWidth: 0.5)
-                        .frame(width: CGFloat(56 - i * 10), height: CGFloat(56 - i * 10))
-                }
-
-                // Top-edge metallic highlight arc (like real shutter button)
+                // Collar inner edge
                 Circle()
-                    .trim(from: 0.08, to: 0.42)
-                    .stroke(
-                        LinearGradient(
-                            colors: [Color.white.opacity(0.25), Color.white.opacity(0.05), Color.clear],
-                            startPoint: .top,
-                            endPoint: .center
-                        ),
-                        lineWidth: 1.5
-                    )
-                    .frame(width: 60, height: 60)
+                    .stroke(Color(hex: "1a1a1a"), lineWidth: 0.5)
+                    .frame(width: 65, height: 65)
 
-                // Inner shadow for depth
-                Circle()
-                    .stroke(
-                        LinearGradient(
-                            colors: [Color.black.opacity(0.3), Color.clear],
-                            startPoint: .top,
-                            endPoint: .center
-                        ),
-                        lineWidth: 2
-                    )
-                    .frame(width: 58, height: 58)
+                // Metal shader button face (concave brushed chrome)
+                MetalShutterSurface(size: 64, isPressed: isPressed)
+                    .clipShape(Circle())
 
                 // Capturing flash
                 if isCapturing {
                     Circle()
-                        .fill(Color.white.opacity(0.2))
+                        .fill(Color.white.opacity(0.12))
                         .frame(width: 64, height: 64)
                 }
             }
-            .shadow(color: Color.black.opacity(0.35), radius: isPressed ? 1 : 3, y: isPressed ? 0.5 : 2)
-            .animation(.easeOut(duration: 0.1), value: isPressed)
+            .scaleEffect(isPressed ? 0.93 : 1.0)
+            .shadow(color: Color.black.opacity(isPressed ? 0.3 : 0.6), radius: isPressed ? 1 : 6, y: isPressed ? 0.5 : 4)
+            .animation(.spring(response: 0.15, dampingFraction: 0.55), value: isPressed)
         }
         .buttonStyle(PlainButtonStyle())
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
+                .onChanged { _ in
+                    if !isPressed {
+                        isPressed = true
+                        let impact = UIImpactFeedbackGenerator(style: .medium)
+                        impact.impactOccurred()
+                    }
+                }
+                .onEnded { _ in
+                    isPressed = false
+                    let impact = UIImpactFeedbackGenerator(style: .light)
+                    impact.impactOccurred(intensity: 0.5)
+                }
         )
         .disabled(isCapturing)
     }

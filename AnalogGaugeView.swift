@@ -1,6 +1,10 @@
 import SwiftUI
 import UIKit
 
+extension Notification.Name {
+    static let toggleFingerTips = Notification.Name("toggleFingerTips")
+}
+
 // Uses Haptics, Triangle, and Color(hex:) from ContentView.swift
 
 // MARK: - Focus Dial (premium Leica/Nikon style)
@@ -473,6 +477,10 @@ struct HorizontalExposureMeter: View {
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                     .foregroundColor(.white.opacity(0.8))
             }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture(count: 5) {
+            NotificationCenter.default.post(name: .toggleFingerTips, object: nil)
         }
     }
 }

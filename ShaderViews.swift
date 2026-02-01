@@ -296,6 +296,31 @@ extension View {
     }
 }
 
+// MARK: - Metal Shutter Button Surface
+struct MetalShutterSurface: View {
+    let size: CGFloat
+    let isPressed: Bool
+
+    @State private var pressAmount: CGFloat = 0
+
+    var body: some View {
+        Rectangle()
+            .fill(Color.white)
+            .frame(width: size, height: size)
+            .colorEffect(
+                ShaderLibrary.shutterButtonMetal(
+                    .float2(size, size),
+                    .float(pressAmount)
+                )
+            )
+            .onChange(of: isPressed) { _, newValue in
+                withAnimation(.spring(response: 0.15, dampingFraction: 0.6)) {
+                    pressAmount = newValue ? 1.0 : 0.0
+                }
+            }
+    }
+}
+
 // MARK: - Leica Vulcanite Texture (Metal Shader)
 struct LeicaVulcaniteTexture: View {
     let scale: CGFloat
