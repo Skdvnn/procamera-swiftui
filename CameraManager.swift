@@ -156,10 +156,9 @@ class CameraManager: NSObject, ObservableObject {
         session.beginConfiguration()
         session.sessionPreset = .photo
 
-        // Add video input - prefer triple/dual wide camera for ultra-wide support
-        guard let videoDevice = AVCaptureDevice.default(.builtInTripleCamera, for: .video, position: currentCamera)
-                ?? AVCaptureDevice.default(.builtInDualWideCamera, for: .video, position: currentCamera)
-                ?? AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: currentCamera) else {
+        // Use wide angle camera directly - virtual multi-camera devices (triple/dual)
+        // don't support .custom exposure mode needed for manual ISO/shutter control
+        guard let videoDevice = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: currentCamera) else {
             DispatchQueue.main.async { self.error = .cameraUnavailable }
             session.commitConfiguration()
             return
@@ -202,7 +201,7 @@ class CameraManager: NSObject, ObservableObject {
             videoDataOutput = videoOutput
         }
 
-        // Select best format for long exposure support
+        // Select format with longest exposure that still supports custom exposure mode
         selectBestFormatForLongExposure(device: videoDevice)
 
         session.commitConfiguration()
@@ -222,18 +221,34 @@ class CameraManager: NSObject, ObservableObject {
 
     // MARK: - Long Exposure Format Selection
     private func selectBestFormatForLongExposure(device: AVCaptureDevice) {
-        // Find format with longest max exposure duration while maintaining good quality
+        // Find format with longest max exposure duration that also supports custom exposure mode
         var bestFormat: AVCaptureDevice.Format?
         var longestDuration: CMTime = CMTime.zero
+
+        // Save current format to test custom exposure support
+        let originalFormat = device.activeFormat
 
         for format in device.formats {
             let maxDuration = format.maxExposureDuration
             let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
 
-            // Prefer formats with at least 1080p resolution
+            // Require at least 1080p resolution
             guard dimensions.width >= 1920 else { continue }
 
-            // Check if this format supports longer exposure
+            // Test if this format supports custom exposure by temporarily applying it
+            do {
+                try device.lockForConfiguration()
+                device.activeFormat = format
+                let supportsCustom = device.isExposureModeSupported(.custom)
+                device.activeFormat = originalFormat
+                device.unlockForConfiguration()
+
+                guard supportsCustom else { continue }
+            } catch {
+                continue
+            }
+
+            // Pick the format with the longest exposure duration
             if CMTimeCompare(maxDuration, longestDuration) > 0 {
                 longestDuration = maxDuration
                 bestFormat = format
@@ -246,12 +261,7 @@ class CameraManager: NSObject, ObservableObject {
                 try device.lockForConfiguration()
                 device.activeFormat = format
                 device.unlockForConfiguration()
-
-                // Update capabilities with new format
                 updateDeviceCapabilities(device: device)
-
-                let seconds = CMTimeGetSeconds(longestDuration)
-                print("Selected format with max exposure: \(seconds)s")
             } catch {
                 print("Error selecting format: \(error)")
             }
@@ -471,48 +481,30 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     func setISO(_ value: Float) {
-        guard let device = videoDeviceInput?.device else {
-            print("[Camera] setISO: no device")
-            return
-        }
-        guard device.isExposureModeSupported(.custom) else {
-            print("[Camera] setISO: custom exposure not supported")
-            return
-        }
+        guard let device = videoDeviceInput?.device else { return }
+        guard device.isExposureModeSupported(.custom) else { return }
 
         let clampedISO = max(device.activeFormat.minISO, min(value, device.activeFormat.maxISO))
-        print("[Camera] setISO: \(value) -> clamped \(clampedISO), range [\(device.activeFormat.minISO)-\(device.activeFormat.maxISO)]")
 
         sessionQueue.async {
             do {
                 try device.lockForConfiguration()
-                // Keep current shutter speed, only change ISO
                 device.setExposureModeCustom(duration: AVCaptureDevice.currentExposureDuration, iso: clampedISO) { _ in }
                 device.unlockForConfiguration()
-                print("[Camera] setISO: success")
                 DispatchQueue.main.async {
                     self.isoValue = clampedISO
                     self.isManualExposure = true
                 }
             } catch {
-                print("[Camera] setISO error: \(error)")
+                print("Error setting ISO: \(error)")
             }
         }
     }
 
     func setShutterSpeed(index: Int) {
-        guard let device = videoDeviceInput?.device else {
-            print("[Camera] setShutterSpeed: no device")
-            return
-        }
-        guard index >= 0 && index < CameraManager.shutterSpeedValues.count else {
-            print("[Camera] setShutterSpeed: index \(index) out of range")
-            return
-        }
-        guard device.isExposureModeSupported(.custom) else {
-            print("[Camera] setShutterSpeed: custom exposure not supported")
-            return
-        }
+        guard let device = videoDeviceInput?.device else { return }
+        guard index >= 0 && index < CameraManager.shutterSpeedValues.count else { return }
+        guard device.isExposureModeSupported(.custom) else { return }
 
         let targetDuration = CameraManager.shutterSpeedValues[index]
 
@@ -528,21 +520,17 @@ class CameraManager: NSObject, ObservableObject {
             clampedDuration = maxDuration
         }
 
-        print("[Camera] setShutterSpeed: index \(index), duration \(CMTimeGetSeconds(clampedDuration))s")
-
         sessionQueue.async {
             do {
                 try device.lockForConfiguration()
-                // Keep current ISO, only change shutter speed
                 device.setExposureModeCustom(duration: clampedDuration, iso: AVCaptureDevice.currentISO) { _ in }
                 device.unlockForConfiguration()
-                print("[Camera] setShutterSpeed: success")
                 DispatchQueue.main.async {
                     self.shutterSpeed = clampedDuration
                     self.isManualExposure = true
                 }
             } catch {
-                print("[Camera] setShutterSpeed error: \(error)")
+                print("Error setting shutter speed: \(error)")
             }
         }
     }
