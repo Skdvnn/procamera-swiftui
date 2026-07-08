@@ -44,11 +44,35 @@ happen over Wi-Fi depending on the tool.
 Free-account limits apply: installs expire after **7 days** (AltStore can
 auto-refresh over Wi-Fi) and at most 3 sideloaded apps at a time.
 
-## Path C — TestFlight (set-and-forget, costs money)
+## Path C — TestFlight (best with a paid developer account)
 
-With a paid Apple Developer account you can distribute through TestFlight:
-builds last 90 days, install over the air, and update with one tap. This
-requires uploading a signed archive from Xcode (Product → Archive →
-Distribute App → TestFlight). Happy to wire up automated TestFlight uploads
-from CI if you go this route — it needs an App Store Connect API key added
-to the repo secrets.
+Builds install over the air from the TestFlight app, last 90 days, and
+update with one tap. The [TestFlight workflow](../../actions/workflows/testflight.yml)
+automates the whole thing — every push to `master` archives, signs, and
+uploads a build. One-time setup:
+
+1. **Create the app record** in [App Store Connect](https://appstoreconnect.apple.com/)
+   → My Apps → **+** → New App. Platform iOS, bundle ID
+   `com.skylardann.filmcam` (register the bundle ID at
+   [developer.apple.com/account](https://developer.apple.com/account/resources/identifiers/list)
+   first if it isn't offered in the dropdown). Name and SKU can be anything.
+2. **Create an API key**: App Store Connect → Users and Access →
+   [Integrations → App Store Connect API](https://appstoreconnect.apple.com/access/integrations/api)
+   → **+**. Role: **App Manager**. Download the `.p8` file (you only get one
+   chance), and note the **Key ID** and **Issuer ID** shown on that page.
+3. **Add three repo secrets** (GitHub → Settings → Secrets and variables →
+   Actions → New repository secret):
+   - `APP_STORE_CONNECT_KEY_ID` — the Key ID
+   - `APP_STORE_CONNECT_ISSUER_ID` — the Issuer ID
+   - `APP_STORE_CONNECT_KEY_P8` — the full contents of the `.p8` file
+4. Re-run the TestFlight workflow (or push any commit). The build appears in
+   App Store Connect → TestFlight a few minutes after upload finishes
+   processing; add yourself as an internal tester and install via the
+   TestFlight app on your phone.
+
+Until the secrets are configured, the workflow skips itself with a warning
+instead of failing.
+
+Note: TestFlight installs the Release app ("Shutter cam",
+`com.skylardann.filmcam`) — it lives side by side with a Debug
+"Shutter DEV" install and won't touch it.
