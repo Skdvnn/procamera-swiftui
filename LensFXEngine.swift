@@ -110,11 +110,11 @@ final class LensFXEngine {
             .applyingFilter("CIAffineTile")
             .cropped(to: extent)
 
-        let glass = CIFilter.glassDistortion()
-        glass.inputImage = image.clampedToExtent()
-        glass.texture = tiled
-        glass.center = CGPoint(x: extent.midX, y: extent.midY)
-        glass.scale = Float(extent.width * 0.02)
+        guard let glass = CIFilter(name: "CIGlassDistortion") else { return image }
+        glass.setValue(image.clampedToExtent(), forKey: kCIInputImageKey)
+        glass.setValue(tiled, forKey: "inputTexture")
+        glass.setValue(CIVector(x: extent.midX, y: extent.midY), forKey: kCIInputCenterKey)
+        glass.setValue(extent.width * 0.02, forKey: kCIInputScaleKey)
 
         return (glass.outputImage ?? image).cropped(to: extent)
     }
