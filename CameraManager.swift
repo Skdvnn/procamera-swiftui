@@ -979,6 +979,16 @@ class CameraManager: NSObject, ObservableObject {
         return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
     }
 
+    // Cap live preview frames at ~1280px on the long edge; the viewfinder is
+    // much smaller than sensor resolution and filters cost per-pixel
+    private func downscaledForPreview(_ image: CIImage) -> CIImage {
+        let maxDim = max(image.extent.width, image.extent.height)
+        let target: CGFloat = 1280
+        guard maxDim > target else { return image }
+        let scale = target / maxDim
+        return image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+    }
+
     // MARK: - Lens FX Processing
 
     // Apply the selected lens FX to a captured still (time 0 = static variant of animated effects)
@@ -1093,8 +1103,10 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             if currentTime - lastPreviewFrameTime >= previewFrameInterval {
                 lastPreviewFrameTime = currentTime
 
-                // Apply film filter then lens FX on background queue
-                var processed = applyFilmFilter(to: ciImage)
+                // Downscale first: full-res sensor frames are far too heavy
+                // to run distortion filters on at preview frame rates
+                var processed = downscaledForPreview(ciImage)
+                processed = applyFilmFilter(to: processed)
                 if selectedLensFX != .none {
                     processed = LensFXEngine.shared.apply(selectedLensFX, to: processed, time: currentTime)
                 }

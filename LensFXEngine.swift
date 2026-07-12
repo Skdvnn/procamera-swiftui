@@ -50,13 +50,19 @@ final class LensFXEngine {
     // Cached smooth-noise texture that drives the liquid glass distortion
     private lazy var liquidTexture: CIImage = makeLiquidTexture()
 
+    // Epoch for animation: absolute timestamps are ~8e8 seconds, which loses
+    // all sub-second precision once converted to Float for shader params
+    private let startTime = CFAbsoluteTimeGetCurrent()
+
     private init() {}
 
     /// Apply the selected effect to a camera frame.
     /// `time` animates time-varying effects in the live preview; pass 0 for stills.
-    func apply(_ fx: LensFXMode, to image: CIImage, time: TimeInterval) -> CIImage {
+    func apply(_ fx: LensFXMode, to image: CIImage, time rawTime: TimeInterval) -> CIImage {
         let extent = image.extent
         guard fx != .none, !extent.isInfinite, extent.width > 0 else { return image }
+
+        let time = rawTime > 0 ? rawTime - startTime : 0
 
         switch fx {
         case .none:
@@ -64,7 +70,7 @@ final class LensFXEngine {
         case .liquid:
             return applyLiquid(to: image, time: time)
         case .chrome:
-            return applyChrome(to: image)
+            return applyChrome(to: image, time: time)
         case .thermal:
             return applySimpleFilter(name: "CIThermal", to: image)
         case .xray:
@@ -92,38 +98,81 @@ final class LensFXEngine {
         blur.inputImage = random.cropped(to: textureRect).clampedToExtent()
         blur.radius = 14
 
-        let blurred = blur.outputImage ?? random
-        return blurred.cropped(to: textureRect)
+        let blurred = (blur.outputImage ?? random).cropped(to: textureRect)
+
+        // Render once to a bitmap — otherwise the noise+blur chain would be
+        // lazily re-executed on the GPU for every preview frame
+        let context = CIContext(options: [.useSoftwareRenderer: false])
+        if let cgImage = context.createCGImage(blurred, from: textureRect) {
+            return CIImage(cgImage: cgImage)
+        }
+        return blurred
+    }
+
+    // Two noise layers flowing in different directions, blended 50/50.
+    // Their interference makes the distortion field genuinely morph over time
+    // instead of just sliding past.
+    private func morphingTexture(covering extent: CGRect, time: TimeInterval) -> CIImage {
+        let t = CGFloat(time)
+
+        let driftA = CGAffineTransform(translationX: t * 46, y: t * 18)
+        // Second layer: larger blobs, moving against the first
+        let driftB = CGAffineTransform(translationX: -t * 28, y: t * 36)
+            .scaledBy(x: 1.8, y: 1.8)
+
+        let layerA = liquidTexture
+            .transformed(by: driftA)
+            .applyingFilter("CIAffineTile")
+            .cropped(to: extent)
+        let layerB = liquidTexture
+            .transformed(by: driftB)
+            .applyingFilter("CIAffineTile")
+            .cropped(to: extent)
+
+        let mix = CIFilter.dissolveTransition()
+        mix.inputImage = layerA
+        mix.targetImage = layerB
+        mix.time = 0.5
+
+        return (mix.outputImage ?? layerA).cropped(to: extent)
+    }
+
+    // Heavy glass warp driven by the morphing texture, plus a slow breathing
+    // twirl — reads as flowing liquid rather than static shimmer.
+    private func morphDistort(_ image: CIImage, extent: CGRect, time: TimeInterval, strength: CGFloat) -> CIImage {
+        let texture = morphingTexture(covering: extent, time: time)
+
+        guard let glass = CIFilter(name: "CIGlassDistortion") else { return image }
+        glass.setValue(image.clampedToExtent(), forKey: kCIInputImageKey)
+        glass.setValue(texture, forKey: "inputTexture")
+        glass.setValue(CIVector(x: extent.midX, y: extent.midY), forKey: kCIInputCenterKey)
+        glass.setValue(extent.width * strength, forKey: kCIInputScaleKey)
+
+        var output = (glass.outputImage ?? image).cropped(to: extent)
+
+        let twirl = CIFilter.twirlDistortion()
+        twirl.inputImage = output.clampedToExtent()
+        twirl.center = CGPoint(x: extent.midX, y: extent.midY)
+        twirl.radius = Float(min(extent.width, extent.height) * 0.75)
+        twirl.angle = Float(sin(time * 0.45)) * 0.9
+
+        output = (twirl.outputImage ?? output).cropped(to: extent)
+        return output
     }
 
     private func applyLiquid(to image: CIImage, time: TimeInterval) -> CIImage {
         let extent = image.extent
-
-        // Drift the texture so the preview shimmers like water
-        let drift = CGAffineTransform(
-            translationX: CGFloat(time.truncatingRemainder(dividingBy: 512)) * 24,
-            y: CGFloat(sin(time * 0.7)) * 40
-        )
-        // Tile the texture so it covers the whole frame at any offset
-        let tiled = liquidTexture
-            .transformed(by: drift)
-            .applyingFilter("CIAffineTile")
-            .cropped(to: extent)
-
-        guard let glass = CIFilter(name: "CIGlassDistortion") else { return image }
-        glass.setValue(image.clampedToExtent(), forKey: kCIInputImageKey)
-        glass.setValue(tiled, forKey: "inputTexture")
-        glass.setValue(CIVector(x: extent.midX, y: extent.midY), forKey: kCIInputCenterKey)
-        glass.setValue(extent.width * 0.02, forKey: kCIInputScaleKey)
-
-        return (glass.outputImage ?? image).cropped(to: extent)
+        return morphDistort(image, extent: extent, time: time, strength: 0.055)
     }
 
     // MARK: - Chrome (liquid metal)
 
-    private func applyChrome(to image: CIImage) -> CIImage {
+    private func applyChrome(to image: CIImage, time: TimeInterval) -> CIImage {
         let extent = image.extent
-        var output = image
+
+        // Morphing warp first, then the metal tone map — the moving highlights
+        // over warped geometry give the molten T-1000 look
+        var output = morphDistort(image, extent: extent, time: time, strength: 0.035)
 
         let mono = CIFilter.photoEffectMono()
         mono.inputImage = output
