@@ -393,6 +393,21 @@ float metalNoise(float2 p) {
     return half4(color.rgb * scanline, color.a);
 }
 
+// MARK: - Scanline Overlay (VHS viewfinder)
+// Outputs alpha-varying black lines so it composites over any layer
+// (including the camera preview) without needing a blend mode.
+[[ stitchable ]] half4 scanlineOverlay(
+    float2 position,
+    half4 color,
+    float lineWidth,
+    float intensity
+) {
+    float scanline = sin(position.y * lineWidth) * 0.5 + 0.5;
+    float alpha = pow(scanline, 2.0) * intensity;
+
+    return half4(0.0, 0.0, 0.0, half(alpha) * color.a);
+}
+
 // MARK: - Leica Vulcanite Texture Shader
 // Creates realistic diamond/crosshatch pattern like Leica M camera body grip
 [[ stitchable ]] half4 vulcaniteTexture(

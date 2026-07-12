@@ -22,6 +22,7 @@ class CameraManager: NSObject, ObservableObject {
     @Published var zoomFactor: CGFloat = 1.0
     @Published var isManualExposure: Bool = false
     @Published var selectedFilmFilter: FilmFilter = .none
+    @Published var selectedLensFX: LensFXMode = .none
     @Published var isLongExposureCapturing: Bool = false
     @Published var longExposureProgress: Float = 0.0
     @Published var captureFormat: CaptureFormatType = .heic
@@ -978,14 +979,30 @@ class CameraManager: NSObject, ObservableObject {
         return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
     }
 
+    // MARK: - Lens FX Processing
+
+    // Apply the selected lens FX to a captured still (time 0 = static variant of animated effects)
+    func applyLensFX(to image: UIImage) -> UIImage {
+        guard selectedLensFX != .none else { return image }
+        guard let ciImage = CIImage(image: image) else { return image }
+
+        let output = LensFXEngine.shared.apply(selectedLensFX, to: ciImage, time: 0)
+
+        guard let cgImage = ciContext.createCGImage(output, from: output.extent) else {
+            return image
+        }
+
+        return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
+    }
+
     func capturePhoto(completion: @escaping (UIImage?) -> Void) {
         photoCompletionHandler = { [weak self] image in
             guard let self = self, let image = image else {
                 completion(nil)
                 return
             }
-            // Apply film filter before returning (skip for RAW)
-            let filteredImage = self.captureFormat == .raw ? image : self.applyFilmFilter(to: image)
+            // Apply film filter + lens FX before returning (skip for RAW)
+            let filteredImage = self.captureFormat == .raw ? image : self.applyLensFX(to: self.applyFilmFilter(to: image))
             completion(filteredImage)
         }
 
@@ -1069,20 +1086,24 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
 
-        // Handle live preview filtering (when filter is selected and not doing long exposure)
-        if selectedFilmFilter != .none && !isLongExposureCapturing {
+        // Handle live preview processing (film filter and/or lens FX, not during long exposure)
+        let wantsLiveProcessing = selectedFilmFilter != .none || selectedLensFX != .none
+        if wantsLiveProcessing && !isLongExposureCapturing {
             let currentTime = CFAbsoluteTimeGetCurrent()
             if currentTime - lastPreviewFrameTime >= previewFrameInterval {
                 lastPreviewFrameTime = currentTime
 
-                // Apply filter on background queue
-                let filtered = applyFilmFilter(to: ciImage)
+                // Apply film filter then lens FX on background queue
+                var processed = applyFilmFilter(to: ciImage)
+                if selectedLensFX != .none {
+                    processed = LensFXEngine.shared.apply(selectedLensFX, to: processed, time: currentTime)
+                }
 
                 DispatchQueue.main.async {
-                    self.filteredPreviewImage = filtered
+                    self.filteredPreviewImage = processed
                 }
             }
-        } else if selectedFilmFilter == .none {
+        } else if !wantsLiveProcessing {
             // Clear filtered preview when no filter selected
             DispatchQueue.main.async {
                 if self.filteredPreviewImage != nil {
@@ -1140,7 +1161,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 
             let finalImage: UIImage?
             if let img = resultImage {
-                finalImage = self.applyFilmFilter(to: img)
+                finalImage = self.applyLensFX(to: self.applyFilmFilter(to: img))
             } else {
                 finalImage = nil
             }

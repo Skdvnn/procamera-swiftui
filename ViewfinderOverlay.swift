@@ -37,7 +37,9 @@ struct ViewfinderOverlay: View {
     let showGrid: Bool
     @Binding var aspectRatio: AspectRatioMode
     @Binding var filmFilter: FilmFilterMode
+    @Binding var lensFX: LensFXMode
     @State private var showFilmMenu = false
+    @State private var showFXMenu = false
 
     var body: some View {
         GeometryReader { geo in
@@ -49,6 +51,11 @@ struct ViewfinderOverlay: View {
                 // Film grain texture (subtle)
                 FilmGrainOverlay()
                     .opacity(0.3)
+
+                // VHS mode gets a Metal-shader scanline overlay on the viewfinder
+                if lensFX == .vhs {
+                    ScanlineShaderOverlay()
+                }
 
                 // Center focus indicator - curved brackets style (main feature)
                 CenterFocusBrackets()
@@ -83,6 +90,7 @@ struct ViewfinderOverlay: View {
                 // Top right - Film filter button (Leica-style)
                 Button(action: {
                     VFHaptics.click()
+                    showFXMenu = false
                     showFilmMenu.toggle()
                 }) {
                     ZStack {
@@ -95,6 +103,23 @@ struct ViewfinderOverlay: View {
                     }
                 }
                 .position(x: width - inset - 20, y: inset + 20)
+
+                // Below film button - Lens FX button (live shader effects)
+                Button(action: {
+                    VFHaptics.click()
+                    showFilmMenu = false
+                    showFXMenu.toggle()
+                }) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.black.opacity(0.4))
+                            .frame(width: 32, height: 32)
+                        Image(systemName: "sparkles")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(lensFX == .none ? .white.opacity(0.8) : .cyan)
+                    }
+                }
+                .position(x: width - inset - 20, y: inset + 60)
 
                 // Leica-style film picker panel - positioned near trigger (top right)
                 if showFilmMenu {
@@ -110,6 +135,21 @@ struct ViewfinderOverlay: View {
                         isPresented: $showFilmMenu
                     )
                     .position(x: width - 110, y: inset + 140)  // Near the trigger button
+                }
+
+                // Lens FX picker panel - same DSLR-inset style as the film picker
+                if showFXMenu {
+                    Color.clear
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            showFXMenu = false
+                        }
+
+                    LensFXPicker(
+                        selectedFX: $lensFX,
+                        isPresented: $showFXMenu
+                    )
+                    .position(x: width - 110, y: inset + 190)  // Near the FX button
                 }
             }
         }
@@ -558,5 +598,132 @@ struct LeicaFilmPicker: View {
         case .velvia50: return "50"
         case .cinestill800: return "800T"
         }
+    }
+}
+
+// MARK: - Lens FX Picker (DSLR-style inset menu, matches LeicaFilmPicker)
+struct LensFXPicker: View {
+    @Binding var selectedFX: LensFXMode
+    @Binding var isPresented: Bool
+
+    private let accent = Color(red: 0.45, green: 0.85, blue: 1.0)
+    @State private var animateIn = false
+
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header with inset style
+            HStack {
+                Text("LENS FX")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.5))
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+
+            // Separator line
+            Rectangle()
+                .fill(Color(hex: "2a2a2a"))
+                .frame(height: 1)
+                .padding(.horizontal, 8)
+
+            // FX options - DSLR list style
+            ForEach(LensFXMode.allCases, id: \.self) { fx in
+                Button(action: {
+                    VFHaptics.click()
+                    selectedFX = fx
+                    dismissWithAnimation()
+                }) {
+                    HStack(spacing: 8) {
+                        // Selection indicator bracket
+                        Text(selectedFX == fx ? ">" : " ")
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundColor(accent)
+                            .frame(width: 12)
+
+                        // Effect name
+                        Text(fx.name.uppercased())
+                            .font(.system(size: 11, weight: selectedFX == fx ? .semibold : .regular, design: .monospaced))
+                            .foregroundColor(selectedFX == fx ? .white : .white.opacity(0.6))
+
+                        Spacer()
+
+                        // Badge label
+                        if fx != .none {
+                            Text(fx.badge)
+                                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.3))
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(selectedFX == fx ? Color.white.opacity(0.05) : Color.clear)
+                }
+                .buttonStyle(.plain)
+            }
+
+            Spacer().frame(height: 6)
+        }
+        .background(
+            ZStack {
+                // Dark background
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(Color(hex: "0d0d0d"))
+
+                // Inner shadow overlay (top and left edges for inset depth)
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [Color.black.opacity(0.5), Color.clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 10)
+                    Spacer()
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [Color.black.opacity(0.4), Color.clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: 8)
+                    Spacer()
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                // Outer border
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color(hex: "1a1a1a"), lineWidth: 2)
+            }
+        )
+        .frame(width: 180)
+        .scaleEffect(animateIn ? 1.0 : 0.8)
+        .opacity(animateIn ? 1.0 : 0)
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: animateIn)
+        .onAppear {
+            withAnimation {
+                animateIn = true
+            }
+        }
+    }
+
+    private func dismissWithAnimation() {
+        withAnimation(.easeOut(duration: 0.15)) {
+            animateIn = false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            isPresented = false
+        }
+    }
+}
+
+// MARK: - Scanline Shader Overlay (VHS mode)
+// Metal shader draws alpha-varying black lines over the camera feed
+struct ScanlineShaderOverlay: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.white)
+            .colorEffect(
+                ShaderLibrary.scanlineOverlay(
+                    .float(1.6),   // line frequency
+                    .float(0.3)    // intensity
+                )
+            )
+            .allowsHitTesting(false)
     }
 }

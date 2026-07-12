@@ -198,6 +198,7 @@ struct ContentView: View {
     @State private var shutterSpeedIndex: Int = 9  // Default to 1/125
     @State private var aspectRatio: AspectRatioMode = .full
     @State private var filmFilter: FilmFilterMode = .none
+    @State private var lensFX: LensFXMode = .none
     @State private var captureFormat: CaptureFormat = .heic
 
     private let modes = ["P", "A", "T"]
@@ -286,7 +287,7 @@ struct ContentView: View {
                                 }
                             )
 
-                            ViewfinderOverlay(showGrid: showGrid, aspectRatio: $aspectRatio, filmFilter: $filmFilter)
+                            ViewfinderOverlay(showGrid: showGrid, aspectRatio: $aspectRatio, filmFilter: $filmFilter, lensFX: $lensFX)
                             ViewfinderVignette()
 
                             if showFocusPoint {
@@ -493,9 +494,13 @@ struct ContentView: View {
             camera.checkPermissions()
             // Sync initial filter state
             syncFilmFilter(filmFilter)
+            camera.selectedLensFX = lensFX
         }
         .onChange(of: filmFilter) { newFilter in
             syncFilmFilter(newFilter)
+        }
+        .onChange(of: lensFX) { newFX in
+            camera.selectedLensFX = newFX
         }
     }
 
