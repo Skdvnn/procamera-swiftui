@@ -10,18 +10,30 @@ struct FilteredCameraPreview: UIViewRepresentable {
     let filteredImage: CIImage?
     var onTap: ((CGPoint) -> Void)?
     var onPinch: ((CGFloat) -> Void)?
+    /// Drag / press on the viewfinder for morphic Lens FX.
+    /// point: normalized UIKit (0…1), velocity: normalized deltas, active: finger down.
+    var onMorphTouch: ((CGPoint, CGPoint, Bool) -> Void)?
 
     func makeUIView(context: Context) -> FilteredPreviewView {
         let view = FilteredPreviewView()
         view.session = session
         view.backgroundColor = .black
 
-        // Gestures
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
         view.addGestureRecognizer(tapGesture)
 
         let pinchGesture = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePinch(_:)))
         view.addGestureRecognizer(pinchGesture)
+
+        // Pan drives morph FX; allow simultaneous recognition with tap/pinch
+        // so a short tap still focuses and a drag warps the shader.
+        let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
+        panGesture.maximumNumberOfTouches = 2
+        panGesture.delegate = context.coordinator
+        view.addGestureRecognizer(panGesture)
+
+        context.coordinator.tapGesture = tapGesture
+        context.coordinator.panGesture = panGesture
 
         return view
     }
@@ -29,25 +41,45 @@ struct FilteredCameraPreview: UIViewRepresentable {
     func updateUIView(_ uiView: FilteredPreviewView, context: Context) {
         uiView.session = session
         uiView.updateFilteredImage(filteredImage)
+        context.coordinator.onTap = onTap
+        context.coordinator.onPinch = onPinch
+        context.coordinator.onMorphTouch = onMorphTouch
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onTap: onTap, onPinch: onPinch)
+        Coordinator(onTap: onTap, onPinch: onPinch, onMorphTouch: onMorphTouch)
     }
 
-    class Coordinator: NSObject {
+    class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var onTap: ((CGPoint) -> Void)?
         var onPinch: ((CGFloat) -> Void)?
+        var onMorphTouch: ((CGPoint, CGPoint, Bool) -> Void)?
         var lastScale: CGFloat = 1.0
+        weak var tapGesture: UITapGestureRecognizer?
+        weak var panGesture: UIPanGestureRecognizer?
+        private var lastPanTime: CFAbsoluteTime = 0
+        private var lastPanPoint: CGPoint = .zero
 
-        init(onTap: ((CGPoint) -> Void)?, onPinch: ((CGFloat) -> Void)?) {
+        init(
+            onTap: ((CGPoint) -> Void)?,
+            onPinch: ((CGFloat) -> Void)?,
+            onMorphTouch: ((CGPoint, CGPoint, Bool) -> Void)?
+        ) {
             self.onTap = onTap
             self.onPinch = onPinch
+            self.onMorphTouch = onMorphTouch
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
             let location = gesture.location(in: gesture.view)
-            guard let view = gesture.view else { return }
+            guard let view = gesture.view, view.bounds.width > 0, view.bounds.height > 0 else { return }
 
             let point = CGPoint(
                 x: location.x / view.bounds.width,
@@ -64,6 +96,49 @@ struct FilteredCameraPreview: UIViewRepresentable {
                 let delta = gesture.scale / lastScale
                 lastScale = gesture.scale
                 onPinch?(delta)
+            default:
+                break
+            }
+        }
+
+        @objc func handlePan(_ gesture: UIPanGestureRecognizer) {
+            guard let view = gesture.view, view.bounds.width > 0, view.bounds.height > 0 else { return }
+            let location = gesture.location(in: view)
+            let point = CGPoint(
+                x: min(1, max(0, location.x / view.bounds.width)),
+                y: min(1, max(0, location.y / view.bounds.height))
+            )
+
+            let now = CFAbsoluteTimeGetCurrent()
+            var velocity = CGPoint.zero
+
+            switch gesture.state {
+            case .began:
+                lastPanTime = now
+                lastPanPoint = point
+                onMorphTouch?(point, .zero, true)
+
+            case .changed:
+                let dt = max(1.0 / 120.0, now - lastPanTime)
+                velocity = CGPoint(
+                    x: (point.x - lastPanPoint.x) / CGFloat(dt),
+                    y: (point.y - lastPanPoint.y) / CGFloat(dt)
+                )
+                // Clamp runaway values from tiny dt spikes
+                velocity.x = min(8, max(-8, velocity.x))
+                velocity.y = min(8, max(-8, velocity.y))
+                lastPanTime = now
+                lastPanPoint = point
+                onMorphTouch?(point, velocity, true)
+
+            case .ended, .cancelled, .failed:
+                let uiVel = gesture.velocity(in: view)
+                velocity = CGPoint(
+                    x: min(8, max(-8, uiVel.x / view.bounds.width)),
+                    y: min(8, max(-8, uiVel.y / view.bounds.height))
+                )
+                onMorphTouch?(point, velocity, false)
+
             default:
                 break
             }
@@ -130,6 +205,8 @@ class FilteredPreviewView: UIView {
             mtkView.backgroundColor = .clear
             mtkView.isOpaque = false
             mtkView.isHidden = true  // Hidden when no filter
+            // Gestures live on the parent; keep Metal view from eating touches
+            mtkView.isUserInteractionEnabled = false
             addSubview(mtkView)
             self.metalView = mtkView
         }

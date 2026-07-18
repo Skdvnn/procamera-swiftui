@@ -48,28 +48,27 @@ struct ViewfinderOverlay: View {
             let inset: CGFloat = 16
 
             ZStack {
-                // Film grain texture (subtle)
-                FilmGrainOverlay()
-                    .opacity(0.3)
+                // Decorative layer — never steal focus/morph gestures
+                ZStack {
+                    FilmGrainOverlay()
+                        .opacity(0.3)
 
-                // VHS mode gets a Metal-shader scanline overlay on the viewfinder
-                if lensFX == .vhs {
-                    ScanlineShaderOverlay()
+                    if lensFX == .vhs {
+                        ScanlineShaderOverlay()
+                    }
+
+                    CenterFocusBrackets()
+                        .position(x: width/2, y: height/2)
+
+                    if showGrid {
+                        GridLines()
+                    }
+
+                    if aspectRatio != .full {
+                        AspectRatioMask(mode: aspectRatio, size: geo.size)
+                    }
                 }
-
-                // Center focus indicator - curved brackets style (main feature)
-                CenterFocusBrackets()
-                    .position(x: width/2, y: height/2)
-
-                // Grid (rule of thirds)
-                if showGrid {
-                    GridLines()
-                }
-
-                // Aspect ratio crop mask
-                if aspectRatio != .full {
-                    AspectRatioMask(mode: aspectRatio, size: geo.size)
-                }
+                .allowsHitTesting(false)
 
                 // Top left - Aspect ratio button (DSLR-style)
                 Button(action: {
@@ -87,7 +86,7 @@ struct ViewfinderOverlay: View {
                 }
                 .position(x: inset + 20, y: inset + 20)
 
-                // Top right - Film filter button (Leica-style)
+                // Top right - Film stocks (color grades)
                 Button(action: {
                     VFHaptics.click()
                     showFXMenu = false
@@ -99,12 +98,12 @@ struct ViewfinderOverlay: View {
                             .frame(width: 32, height: 32)
                         Image(systemName: "film")
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(filmFilter == .none ? .white.opacity(0.8) : .orange)
+                            .foregroundColor(filmFilter == .none ? .white.opacity(0.8) : Color(red: 1.0, green: 0.85, blue: 0.35))
                     }
                 }
                 .position(x: width - inset - 20, y: inset + 20)
 
-                // Below film button - Lens FX button (live shader effects)
+                // Below film — morphic / shader Lens FX
                 Button(action: {
                     VFHaptics.click()
                     showFilmMenu = false
@@ -114,16 +113,14 @@ struct ViewfinderOverlay: View {
                         Circle()
                             .fill(Color.black.opacity(0.4))
                             .frame(width: 32, height: 32)
-                        Image(systemName: "sparkles")
+                        Image(systemName: "water.waves")
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(lensFX == .none ? .white.opacity(0.8) : .cyan)
+                            .foregroundColor(lensFX == .none ? .white.opacity(0.8) : Color(red: 0.55, green: 0.88, blue: 0.95))
                     }
                 }
                 .position(x: width - inset - 20, y: inset + 60)
 
-                // Leica-style film picker panel - positioned near trigger (top right)
                 if showFilmMenu {
-                    // Invisible tap catcher to dismiss menu
                     Color.clear
                         .contentShape(Rectangle())
                         .onTapGesture {
@@ -134,10 +131,9 @@ struct ViewfinderOverlay: View {
                         selectedFilter: $filmFilter,
                         isPresented: $showFilmMenu
                     )
-                    .position(x: width - 110, y: inset + 140)  // Near the trigger button
+                    .position(x: width - 110, y: inset + 140)
                 }
 
-                // Lens FX picker panel - same DSLR-inset style as the film picker
                 if showFXMenu {
                     Color.clear
                         .contentShape(Rectangle())
@@ -149,7 +145,7 @@ struct ViewfinderOverlay: View {
                         selectedFX: $lensFX,
                         isPresented: $showFXMenu
                     )
-                    .position(x: width - 110, y: inset + 190)  // Near the FX button
+                    .position(x: width - 110, y: inset + 190)
                 }
             }
         }
@@ -177,18 +173,20 @@ enum AspectRatioMode: CaseIterable {
     }
 }
 
-// MARK: - Film Filter Mode
+// MARK: - Film Filter Mode (classic color grades / film stocks)
 enum FilmFilterMode: CaseIterable {
-    case none, portra400, kodakGold, trix400, velvia50, cinestill800
+    case none, portra400, kodakGold, ektar100, trix400, velvia50, cinestill800, instant
 
     var name: String {
         switch self {
         case .none: return "None"
         case .portra400: return "Portra 400"
         case .kodakGold: return "Kodak Gold"
+        case .ektar100: return "Ektar 100"
         case .trix400: return "Tri-X 400"
         case .velvia50: return "Velvia 50"
         case .cinestill800: return "CineStill 800T"
+        case .instant: return "Instant"
         }
     }
 }
@@ -491,84 +489,62 @@ struct LeicaFilmPicker: View {
         VStack(spacing: 0) {
             // Header with inset style
             HStack {
-                Text("FILM SIMULATION")
+                Text("FILM")
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundColor(.white.opacity(0.5))
                 Spacer()
+                Text("STOCK")
+                    .font(.system(size: 8, weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.28))
             }
             .padding(.horizontal, 12)
             .padding(.top, 10)
             .padding(.bottom, 6)
 
-            // Separator line
             Rectangle()
                 .fill(Color(hex: "2a2a2a"))
                 .frame(height: 1)
                 .padding(.horizontal, 8)
 
-            // Film options - DSLR list style
-            ForEach(FilmFilterMode.allCases, id: \.self) { filter in
-                Button(action: {
-                    VFHaptics.click()
-                    selectedFilter = filter
-                    dismissWithAnimation()
-                }) {
-                    HStack(spacing: 8) {
-                        // Selection indicator bracket
-                        Text(selectedFilter == filter ? ">" : " ")
-                            .font(.system(size: 12, weight: .bold, design: .monospaced))
-                            .foregroundColor(accent)
-                            .frame(width: 12)
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 0) {
+                    ForEach(FilmFilterMode.allCases, id: \.self) { filter in
+                        Button(action: {
+                            VFHaptics.click()
+                            selectedFilter = filter
+                            dismissWithAnimation()
+                        }) {
+                            HStack(spacing: 8) {
+                                Text(selectedFilter == filter ? ">" : " ")
+                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                    .foregroundColor(accent)
+                                    .frame(width: 12)
 
-                        // Film name
-                        Text(filter.name.uppercased())
-                            .font(.system(size: 11, weight: selectedFilter == filter ? .semibold : .regular, design: .monospaced))
-                            .foregroundColor(selectedFilter == filter ? .white : .white.opacity(0.6))
+                                Text(filter.name.uppercased())
+                                    .font(.system(size: 11, weight: selectedFilter == filter ? .semibold : .regular, design: .monospaced))
+                                    .foregroundColor(selectedFilter == filter ? .white : .white.opacity(0.6))
 
-                        Spacer()
+                                Spacer()
 
-                        // ISO indicator for film types
-                        if filter != .none {
-                            Text(isoLabel(for: filter))
-                                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                                .foregroundColor(.white.opacity(0.3))
+                                if filter != .none {
+                                    Text(isoLabel(for: filter))
+                                        .font(.system(size: 9, weight: .regular, design: .monospaced))
+                                        .foregroundColor(.white.opacity(0.3))
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(selectedFilter == filter ? Color.white.opacity(0.05) : Color.clear)
                         }
+                        .buttonStyle(.plain)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(selectedFilter == filter ? Color.white.opacity(0.05) : Color.clear)
                 }
-                .buttonStyle(.plain)
             }
+            .frame(maxHeight: 250)
 
             Spacer().frame(height: 6)
         }
-        .background(
-            ZStack {
-                // Dark background
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(hex: "0d0d0d"))
-
-                // Inner shadow overlay (top and left edges for inset depth)
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [Color.black.opacity(0.5), Color.clear], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 10)
-                    Spacer()
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                HStack(spacing: 0) {
-                    LinearGradient(colors: [Color.black.opacity(0.4), Color.clear], startPoint: .leading, endPoint: .trailing)
-                        .frame(width: 8)
-                    Spacer()
-                }
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-
-                // Outer border
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(hex: "1a1a1a"), lineWidth: 2)
-            }
-        )
+        .background(dsPickerChrome())
         .frame(width: 180)
         .scaleEffect(animateIn ? 1.0 : 0.8)
         .opacity(animateIn ? 1.0 : 0)
@@ -594,89 +570,23 @@ struct LeicaFilmPicker: View {
         case .none: return ""
         case .portra400: return "400"
         case .kodakGold: return "200"
+        case .ektar100: return "100"
         case .trix400: return "400"
         case .velvia50: return "50"
         case .cinestill800: return "800T"
+        case .instant: return "SX70"
         }
     }
 }
 
-// MARK: - Lens FX Picker (DSLR-style inset menu, matches LeicaFilmPicker)
-struct LensFXPicker: View {
-    @Binding var selectedFX: LensFXMode
-    @Binding var isPresented: Bool
-
-    private let accent = Color(red: 0.45, green: 0.85, blue: 1.0)
-    @State private var animateIn = false
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // Header with inset style
-            HStack {
-                Text("LENS FX")
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.5))
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 6)
-
-            // Separator line
-            Rectangle()
-                .fill(Color(hex: "2a2a2a"))
-                .frame(height: 1)
-                .padding(.horizontal, 8)
-
-            // FX options - DSLR list style, scrollable (more options than fit)
-            ScrollView(showsIndicators: false) {
-                VStack(spacing: 0) {
-                    ForEach(LensFXMode.allCases, id: \.self) { fx in
-                        Button(action: {
-                            VFHaptics.click()
-                            selectedFX = fx
-                            dismissWithAnimation()
-                        }) {
-                            HStack(spacing: 8) {
-                                // Selection indicator bracket
-                                Text(selectedFX == fx ? ">" : " ")
-                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                    .foregroundColor(accent)
-                                    .frame(width: 12)
-
-                                // Effect name
-                                Text(fx.name.uppercased())
-                                    .font(.system(size: 11, weight: selectedFX == fx ? .semibold : .regular, design: .monospaced))
-                                    .foregroundColor(selectedFX == fx ? .white : .white.opacity(0.6))
-
-                                Spacer()
-
-                                // Badge label
-                                if fx != .none {
-                                    Text(fx.badge)
-                                        .font(.system(size: 9, weight: .regular, design: .monospaced))
-                                        .foregroundColor(.white.opacity(0.3))
-                                }
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(selectedFX == fx ? Color.white.opacity(0.05) : Color.clear)
-                        }
-                        .buttonStyle(.plain)
-                    }
-                }
-            }
-            .frame(maxHeight: 230)
-
-            Spacer().frame(height: 6)
-        }
-        .background(
+// MARK: - Shared DSLR inset chrome for film / FX pickers
+private struct DSLRPickerChrome: ViewModifier {
+    func body(content: Content) -> some View {
+        content.background(
             ZStack {
-                // Dark background
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color(hex: "0d0d0d"))
 
-                // Inner shadow overlay (top and left edges for inset depth)
                 VStack(spacing: 0) {
                     LinearGradient(colors: [Color.black.opacity(0.5), Color.clear], startPoint: .top, endPoint: .bottom)
                         .frame(height: 10)
@@ -691,11 +601,73 @@ struct LensFXPicker: View {
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
-                // Outer border
                 RoundedRectangle(cornerRadius: 8)
                     .stroke(Color(hex: "1a1a1a"), lineWidth: 2)
             }
         )
+    }
+}
+
+private extension View {
+    func dsPickerChrome() -> some View {
+        modifier(DSLRPickerChrome())
+    }
+}
+
+// MARK: - Lens FX Picker (warp shaders vs look shaders)
+struct LensFXPicker: View {
+    @Binding var selectedFX: LensFXMode
+    @Binding var isPresented: Bool
+
+    private let accent = Color(red: 0.55, green: 0.88, blue: 0.95)
+    @State private var animateIn = false
+
+    private var warpCases: [LensFXMode] {
+        LensFXMode.pickerCases.filter { $0 == .none || $0.pickerSection == .warp }
+    }
+
+    private var lookCases: [LensFXMode] {
+        LensFXMode.pickerCases.filter { $0 != .none && $0.pickerSection == .look }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("LENS FX")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.5))
+                Spacer()
+                Text("SHADER")
+                    .font(.system(size: 8, weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.28))
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+
+            Rectangle()
+                .fill(Color(hex: "2a2a2a"))
+                .frame(height: 1)
+                .padding(.horizontal, 8)
+
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 0) {
+                    sectionHeader("WARP")
+                    ForEach(warpCases, id: \.self) { fx in
+                        fxRow(fx)
+                    }
+
+                    sectionHeader("LOOK")
+                    ForEach(lookCases, id: \.self) { fx in
+                        fxRow(fx)
+                    }
+                }
+            }
+            .frame(maxHeight: 260)
+
+            Spacer().frame(height: 6)
+        }
+        .background(dsPickerChrome())
         .frame(width: 180)
         .scaleEffect(animateIn ? 1.0 : 0.8)
         .opacity(animateIn ? 1.0 : 0)
@@ -705,6 +677,50 @@ struct LensFXPicker: View {
                 animateIn = true
             }
         }
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.32))
+                .tracking(0.8)
+            Spacer()
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
+    }
+
+    private func fxRow(_ fx: LensFXMode) -> some View {
+        Button(action: {
+            VFHaptics.click()
+            selectedFX = fx
+            dismissWithAnimation()
+        }) {
+            HStack(spacing: 8) {
+                Text(selectedFX == fx ? ">" : " ")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundColor(accent)
+                    .frame(width: 12)
+
+                Text(fx.name.uppercased())
+                    .font(.system(size: 11, weight: selectedFX == fx ? .semibold : .regular, design: .monospaced))
+                    .foregroundColor(selectedFX == fx ? .white : .white.opacity(0.6))
+
+                Spacer()
+
+                if fx != .none {
+                    Text(fx.badge)
+                        .font(.system(size: 9, weight: .regular, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.3))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(selectedFX == fx ? Color.white.opacity(0.05) : Color.clear)
+        }
+        .buttonStyle(.plain)
     }
 
     private func dismissWithAnimation() {

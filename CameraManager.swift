@@ -41,6 +41,8 @@ class CameraManager: NSObject, ObservableObject {
     @Published var filteredPreviewImage: CIImage?
     private var lastPreviewFrameTime: CFAbsoluteTime = 0
     private let previewFrameInterval: CFAbsoluteTime = 1.0 / 30.0  // 30fps max
+    /// While true, skip live FX so the GPU can finish baking the still.
+    private var isBakingStill = false
 
     // Live histogram - real luminance bins computed from preview frames
     @Published var histogramBins: [Float] = []
@@ -77,7 +79,7 @@ class CameraManager: NSObject, ObservableObject {
     private var longExposureTargetFrames: Int = 0
     private var longExposureCompletion: ((UIImage?) -> Void)?
 
-    // Film filter types
+    // Film filter types (color grades / stocks — not GPU morph shaders)
     enum FilmFilter: Int, CaseIterable {
         case none = 0
         case portra400      // Warm, natural skin tones
@@ -86,6 +88,7 @@ class CameraManager: NSObject, ObservableObject {
         case trix400        // Classic B&W
         case cinestill800   // Cinematic with halation
         case velvia50       // Ultra-vivid landscape
+        case instant        // Faded Polaroid / SX-70 look
 
         var name: String {
             switch self {
@@ -96,6 +99,7 @@ class CameraManager: NSObject, ObservableObject {
             case .trix400: return "Tri-X"
             case .cinestill800: return "Cine"
             case .velvia50: return "Velvia"
+            case .instant: return "Instant"
             }
         }
     }
@@ -1025,18 +1029,76 @@ class CameraManager: NSObject, ObservableObject {
             vibrance.inputImage = outputImage
             vibrance.amount = 0.4
             if let result = vibrance.outputImage { outputImage = result }
+
+        case .instant:
+            outputImage = applyInstantFilmLook(to: outputImage, preview: true)
         }
 
         return outputImage
     }
 
     func applyFilmFilter(to image: UIImage) -> UIImage {
-        guard selectedFilmFilter != .none else { return image }
-        guard let ciImage = CIImage(image: image) else { return image }
+
+        applyFilmFilter(selectedFilmFilter, to: image)
+    }
+
+    /// Polaroid / SX-70 grade used by FilmFilter.instant (and legacy LensFX.instant).
+    private func applyInstantFilmLook(to image: CIImage, preview: Bool) -> CIImage {
+        let extent = image.extent
+        var output = image
+
+        let controls = CIFilter.colorControls()
+        controls.inputImage = output
+        controls.saturation = 0.82
+        controls.brightness = 0.02
+        controls.contrast = 0.92
+        if let result = controls.outputImage { output = result }
+
+        let tempTint = CIFilter.temperatureAndTint()
+        tempTint.inputImage = output
+        tempTint.neutral = CIVector(x: 6500, y: 0)
+        tempTint.targetNeutral = CIVector(x: 5300, y: -8)
+        if let result = tempTint.outputImage { output = result }
+
+        let curve = CIFilter.toneCurve()
+        curve.inputImage = output
+        curve.point0 = CGPoint(x: 0.00, y: 0.10)
+        curve.point1 = CGPoint(x: 0.25, y: 0.28)
+        curve.point2 = CGPoint(x: 0.50, y: 0.52)
+        curve.point3 = CGPoint(x: 0.75, y: 0.78)
+        curve.point4 = CGPoint(x: 1.00, y: 0.93)
+        if let result = curve.outputImage { output = result }
+
+        let vignette = CIFilter.vignette()
+        vignette.inputImage = output
+        vignette.intensity = 0.8
+        vignette.radius = 1.8
+        if let result = vignette.outputImage { output = result }
+
+        if !preview {
+            let bloom = CIFilter.bloom()
+            bloom.inputImage = output
+            bloom.radius = 4
+            bloom.intensity = 0.25
+            if let result = bloom.outputImage { output = result }
+        }
+
+        return output.cropped(to: extent)
+    }
+
+    private func applyFilmFilter(_ filmFilter: FilmFilter, to image: UIImage) -> UIImage {
+        guard filmFilter != .none else { return image }
+        guard var ciImage = CIImage(image: image) else { return image }
+
+        // Bake UIImage orientation into pixels; CIImage(image:) ignores it
+        if image.imageOrientation != .up {
+            ciImage = ciImage.oriented(CGImagePropertyOrientation(image.imageOrientation))
+        }
+
 
         var outputImage = ciImage
 
-        switch selectedFilmFilter {
+        switch filmFilter {
         case .none:
             break
 
@@ -1167,6 +1229,9 @@ class CameraManager: NSObject, ObservableObject {
             if let result = vibrance.outputImage {
                 outputImage = result
             }
+
+        case .instant:
+            outputImage = applyInstantFilmLook(to: outputImage, preview: false)
         }
 
         // Render the filtered image (use outputImage.extent in case filter changed bounds)
@@ -1174,7 +1239,7 @@ class CameraManager: NSObject, ObservableObject {
             return image
         }
 
-        return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
+        return UIImage(cgImage: cgImage, scale: image.scale, orientation: .up)
     }
 
     // Applies the new filter selection on the very next frame and drops any
@@ -1245,32 +1310,53 @@ class CameraManager: NSObject, ObservableObject {
 
     // MARK: - Lens FX Processing
 
-    // Apply the selected lens FX to a captured still (time 0 = static variant of animated effects)
+    // Apply the selected lens FX to a captured still
     func applyLensFX(to image: UIImage) -> UIImage {
-        guard selectedLensFX != .none else { return image }
-        guard var ciImage = CIImage(image: image) else { return image }
-
-        // Cap resolution: distortion FX on a full 12MP still can stall the GPU
-        // or fail the render entirely (silently returning the unfiltered image)
-        let maxDim = max(ciImage.extent.width, ciImage.extent.height)
-        let cap: CGFloat = 3072
-        if maxDim > cap {
-            let scale = cap / maxDim
-            ciImage = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
-        }
-
-        let output = LensFXEngine.shared.apply(selectedLensFX, to: ciImage, time: 0)
-
-        guard let cgImage = ciContext.createCGImage(output, from: output.extent) else {
-            return image
-        }
-
-        return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
+        applyLensFX(selectedLensFX, to: image)
     }
 
-    func capturePhoto(completion: @escaping (UIImage?) -> Void) {
+    private func applyLensFX(_ lensFX: LensFXMode, to image: UIImage) -> UIImage {
+        guard lensFX != .none else { return image }
+        if let rendered = LensFXEngine.shared.render(lensFX, on: image) {
+            return rendered
+        }
+        // Last-ditch: never silently ship the unfiltered still when an FX was
+        // requested — try a more aggressive downscale via the engine again.
+        if let rendered = LensFXEngine.shared.render(lensFX, on: image, maxDimension: 1280) {
+            print("LensFX: recovered bake at 1280px for \(lensFX.name)")
+            return rendered
+        }
+        print("LensFX: BAKE FAILED for \(lensFX.name) — saving unfiltered still")
+        return image
+    }
+
+    /// - Parameters:
+    ///   - filmFilter: Optional override frozen from the UI at shutter time.
+    ///   - lensFX: Optional override frozen from the UI at shutter time.
+    ///     Prefer passing these from ContentView so bake cannot miss a stale
+    ///     `selectedLensFX` if the SwiftUI binding lagged the viewfinder.
+    func capturePhoto(
+        filmFilter: FilmFilter? = nil,
+        lensFX: LensFXMode? = nil,
+        completion: @escaping (UIImage?) -> Void
+    ) {
+        // Freeze the selections at shutter time. The user can change controls
+        // while AVFoundation is delivering the still.
+        let captureFilmFilter = filmFilter ?? selectedFilmFilter
+        let captureLensFX = lensFX ?? selectedLensFX
+        let shouldProcess = captureFormat != .raw
+        let needsFXBake = shouldProcess && (captureLensFX != .none || captureFilmFilter != .none)
+
+        if needsFXBake {
+            isBakingStill = true
+        }
+
+        print("LensFX capture: fx=\(captureLensFX.name) film=\(captureFilmFilter) format=\(captureFormat) process=\(shouldProcess)")
+
+
         photoCompletionHandler = { [weak self] image in
             guard let self = self, let image = image else {
+                self?.isBakingStill = false
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
@@ -1278,11 +1364,19 @@ class CameraManager: NSObject, ObservableObject {
             // still there blocks the capture pipeline and freezes the camera.
             // Deliver on main so SwiftUI state updates are safe.
             DispatchQueue.global(qos: .userInitiated).async {
-                // Apply film filter + lens FX before returning (skip for RAW —
-                // the processed sibling is an unfiltered preview; DNG is the master)
-                let filteredImage = self.captureFormat == .raw
-                    ? image
-                    : self.applyLensFX(to: self.applyFilmFilter(to: image))
+
+                let filteredImage: UIImage
+                if shouldProcess {
+                    filteredImage = self.applyLensFX(
+                        captureLensFX,
+                        to: self.applyFilmFilter(captureFilmFilter, to: image)
+                    )
+                } else {
+                    filteredImage = image
+                }
+                self.isBakingStill = false
+                print("LensFX capture done: out=\(filteredImage.size) orient=\(filteredImage.imageOrientation.rawValue)")
+
                 DispatchQueue.main.async { completion(filteredImage) }
             }
         }
@@ -1427,7 +1521,8 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         // Handle live preview processing (film filter and/or lens FX, not during long exposure)
         let (filmFilter, lensFX) = currentPipelineSelection()
         let wantsLiveProcessing = filmFilter != .none || lensFX != .none
-        if wantsLiveProcessing && !isLongExposureCapturing {
+        if wantsLiveProcessing && !isLongExposureCapturing && !isBakingStill {
+
             let currentTime = CFAbsoluteTimeGetCurrent()
             if currentTime - lastPreviewFrameTime >= previewFrameInterval {
                 lastPreviewFrameTime = currentTime
@@ -1498,6 +1593,10 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 
         resetToAutoExposure()
 
+        let captureFilmFilter = selectedFilmFilter
+        let captureLensFX = selectedLensFX
+        isBakingStill = true
+
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
 
@@ -1505,13 +1604,17 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 
             let finalImage: UIImage?
             if let img = resultImage {
-                finalImage = self.applyLensFX(to: self.applyFilmFilter(to: img))
+                finalImage = self.applyLensFX(
+                    captureLensFX,
+                    to: self.applyFilmFilter(captureFilmFilter, to: img)
+                )
             } else {
                 finalImage = nil
             }
 
             self.longExposureAccumulator = nil
             self.longExposureFrameCount = 0
+            self.isBakingStill = false
 
             DispatchQueue.main.async {
                 self.longExposureCompletion?(finalImage)

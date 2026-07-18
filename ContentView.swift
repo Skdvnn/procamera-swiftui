@@ -296,7 +296,8 @@ struct ContentView: View {
                                     if !isManualFocusEnabled {
                                         focusPosition = Float(zoomValue - 1) / 4.0
                                     }
-                                }
+                                },
+                                onMorphTouch: handleMorphTouch
                             )
 
                             ViewfinderOverlay(showGrid: showGrid, aspectRatio: $aspectRatio, filmFilter: $filmFilter, lensFX: $lensFX)
@@ -568,6 +569,9 @@ struct ContentView: View {
         }
         .onChange(of: lensFX) { _, newFX in
             camera.selectedLensFX = newFX
+            if !newFX.isTouchReactive {
+                LensFXEngine.shared.setTouch(x: 0.5, y: 0.5, force: 0, velX: 0, velY: 0, active: false)
+            }
         }
         .fullScreenCover(isPresented: $showPhotoBook) {
             LibraryView(store: gallery)
@@ -591,14 +595,27 @@ struct ContentView: View {
     }
 
     private func syncFilmFilter(_ filter: FilmFilterMode) {
+        camera.selectedFilmFilter = cameraFilmFilter(from: filter)
+    }
+
+    private func cameraFilmFilter(from filter: FilmFilterMode) -> CameraManager.FilmFilter {
         switch filter {
-        case .none: camera.selectedFilmFilter = .none
-        case .portra400: camera.selectedFilmFilter = .portra400
-        case .kodakGold: camera.selectedFilmFilter = .kodakGold
-        case .trix400: camera.selectedFilmFilter = .trix400
-        case .velvia50: camera.selectedFilmFilter = .velvia50
-        case .cinestill800: camera.selectedFilmFilter = .cinestill800
+        case .none: return .none
+        case .portra400: return .portra400
+        case .kodakGold: return .kodakGold
+        case .ektar100: return .ektar100
+        case .trix400: return .trix400
+        case .velvia50: return .velvia50
+        case .cinestill800: return .cinestill800
+        case .instant: return .instant
         }
+    }
+
+    /// Push viewfinder controls into CameraManager immediately before shutter
+    /// so bake cannot miss a lagging onChange.
+    private func syncCaptureControlsToCamera() {
+        syncFilmFilter(filmFilter)
+        camera.selectedLensFX = lensFX
     }
 
     private func handleFocusTap(_ point: CGPoint) {
@@ -611,6 +628,28 @@ struct ContentView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             withAnimation { showFocusPoint = false }
         }
+        // Tap also drops a decaying ripple when a morphic FX is active
+        if lensFX.isTouchReactive {
+            LensFXEngine.shared.setTouch(
+                x: point.x, y: point.y,
+                force: 0.85, velX: 0, velY: 0,
+                active: false
+            )
+        }
+    }
+
+    /// Viewfinder drag → morph uniforms (Liquid / Chrome / Fisheye / Kaleido).
+    private func handleMorphTouch(_ point: CGPoint, velocity: CGPoint, active: Bool) {
+        guard !isLocked, lensFX.isTouchReactive else { return }
+        let force: CGFloat = active ? 1.0 : max(0.35, min(1.0, hypot(velocity.x, velocity.y) * 0.12))
+        LensFXEngine.shared.setTouch(
+            x: point.x,
+            y: point.y,
+            force: force,
+            velX: velocity.x,
+            velY: velocity.y,
+            active: active
+        )
     }
 
     // Vertical swipe that collapses/expands a control deck.
@@ -653,6 +692,11 @@ struct ContentView: View {
     private func captureNow() {
         isCapturing = true
         Haptics.heavy()
+        // Source of truth is ContentView state (viewfinder pickers). Force-sync
+        // and pass explicitly so the still bake cannot see stale .none.
+        syncCaptureControlsToCamera()
+        let shutterFilm = cameraFilmFilter(from: filmFilter)
+        let shutterFX = lensFX
 
         // Check if this is a long exposure (shutter speed index 0-3 = 4s, 2s, 1s, 1/2s)
         let isLongExposure = shutterSpeedIndex <= 3
@@ -662,10 +706,11 @@ struct ContentView: View {
             let durations: [Double] = [4.0, 2.0, 1.0, 0.5]
             let duration = durations[shutterSpeedIndex]
 
+            isCapturing = true
             camera.captureLongExposure(durationSeconds: duration) { img in
                 isCapturing = false
                 if let img = img {
-                    lastCapturedImage = img
+lastCapturedImage = img
                     photoCount += 1
                     recordShot(img)
                     camera.saveToPhotoLibrary(img) { _ in }
@@ -673,12 +718,13 @@ struct ContentView: View {
             }
         } else {
             // Normal capture with flash effect
+            isCapturing = true
             withAnimation(.easeInOut(duration: 0.1)) { showFlash = true }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { showFlash = false }
-            camera.capturePhoto { img in
+            camera.capturePhoto(filmFilter: shutterFilm, lensFX: shutterFX) { img in
                 isCapturing = false
                 if let img = img {
-                    lastCapturedImage = img
+lastCapturedImage = img
                     photoCount += 1
                     recordShot(img)
                     // RAW mode already writes the DNG from CameraManager; still
