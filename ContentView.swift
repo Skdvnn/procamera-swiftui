@@ -200,6 +200,8 @@ struct ContentView: View {
     @State private var filmFilter: FilmFilterMode = .none
     @State private var lensFX: LensFXMode = .none
     @State private var captureFormat: CaptureFormat = .heic
+    @State private var topCollapsed = false
+    @State private var bottomCollapsed = false
 
     private let modes = ["P", "A", "T"]
     private let shutterSpeeds = ["4\"", "2\"", "1\"", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60", "1/125", "1/250", "1/500", "1/1000", "1/2000", "1/4000"]
@@ -213,7 +215,7 @@ struct ContentView: View {
             let safeBottom = geo.safeAreaInsets.bottom
 
             // Layout measurements
-            let topPanelHeight: CGFloat = 110
+            let topPanelHeight: CGFloat = topCollapsed ? 72 : 110
             let gaugeToViewfinderSpacing: CGFloat = 5
             let viewfinderToControlsSpacing: CGFloat = 5
 
@@ -232,6 +234,7 @@ struct ContentView: View {
                         flashMode: camera.flashMode == .off ? "OFF" : "ON",
                         macroEnabled: macroEnabled,
                         isAutoFocus: !isManualFocusEnabled,
+                        compact: topCollapsed,
                         onFocusChanged: { val in
                             camera.setManualFocus(val)
                             isManualFocusEnabled = true
@@ -260,6 +263,10 @@ struct ContentView: View {
                     )
                     .frame(height: topPanelHeight)
                     .padding(.horizontal, DS.pageMargin)
+                    // Swipe up to minimize the dial deck, down to restore.
+                    // Dials claim drags starting on them, so this only catches
+                    // swipes that begin in the gaps or center display.
+                    .gesture(deckSwipe(collapseOnSwipeUp: true) { topCollapsed = $0 })
 
                     Spacer().frame(height: gaugeToViewfinderSpacing)
 
@@ -353,6 +360,37 @@ struct ContentView: View {
 
                     // BOTTOM CONTROLS - grid-like DSLR layout with equidistant spacing
                     VStack(spacing: 0) {
+                        if bottomCollapsed {
+                        // COMPACT: single row - thumbnail | shutter | readout
+                        HStack(alignment: .center, spacing: 0) {
+                            ThumbnailPill(image: lastCapturedImage) {
+                                Haptics.click()
+                                if let url = URL(string: "photos-redirect://") {
+                                    UIApplication.shared.open(url)
+                                }
+                            }
+
+                            Spacer()
+
+                            ShutterButton(isCapturing: isCapturing) {
+                                Haptics.heavy()
+                                handleCapture()
+                            }
+
+                            Spacer()
+
+                            // Readout balances the thumbnail so the shutter stays centered
+                            VStack(alignment: .trailing, spacing: 3) {
+                                Text("ISO \(isoValue)")
+                                Text(shutterSpeeds[shutterSpeedIndex])
+                            }
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.6))
+                            .frame(width: 88, alignment: .trailing)
+                        }
+                        .padding(.horizontal, DS.pageMargin)
+                        .padding(.vertical, 6)
+                        } else {
                         // ROW 1: Zoom control (full width) - no top padding
                         LensRingControl(
                                 focalLength: $focalLength,
@@ -474,10 +512,14 @@ struct ContentView: View {
                                 )
                             }
                             .padding(.horizontal, DS.pageMargin)
+                        }
                     }
                     .background {
                         ControlsGrain()
                     }
+                    // Swipe down for the super-compact deck, up to restore.
+                    // Scrubbers use horizontal drags, so vertical swipes pass through.
+                    .gesture(deckSwipe(collapseOnSwipeUp: false) { bottomCollapsed = $0 })
                 }
                 .padding(.top, safeTop)
                 .padding(.bottom, safeBottom * 0.7)
@@ -534,6 +576,23 @@ struct ContentView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             withAnimation { showFocusPoint = false }
         }
+    }
+
+    // Vertical swipe that collapses/expands a control deck.
+    // For the top deck a swipe up collapses; for the bottom deck a swipe down does.
+    private func deckSwipe(collapseOnSwipeUp: Bool, set: @escaping (Bool) -> Void) -> some Gesture {
+        DragGesture(minimumDistance: 20)
+            .onEnded { value in
+                let dy = value.translation.height
+                guard abs(dy) > abs(value.translation.width) else { return }
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                    if dy < -30 {
+                        set(collapseOnSwipeUp)
+                    } else if dy > 30 {
+                        set(!collapseOnSwipeUp)
+                    }
+                }
+            }
     }
 
     private func handleCapture() {

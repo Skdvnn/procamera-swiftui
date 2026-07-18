@@ -533,6 +533,7 @@ struct AnalogDisplayPanel: View {
     let flashMode: String
     let macroEnabled: Bool
     let isAutoFocus: Bool
+    var compact: Bool = false
     let onFocusChanged: (Float) -> Void
     let onExposureChanged: (Float) -> Void
     let onShutterSpeedChanged: (Int) -> Void  // Changed from onApertureChanged
@@ -562,42 +563,46 @@ struct AnalogDisplayPanel: View {
             HStack(spacing: 0) {
                 // Left: Focus dial
                 FocusDial(value: $focusPosition, onChanged: onFocusChanged)
-                    .frame(width: 98, height: 98)
+                    .frame(width: dialSize, height: dialSize)
 
                 Spacer()
 
-                // Center: Exposure meter with enhanced detail
-                CenterDisplay(
-                    timerSeconds: timerSeconds,
-                    iso: iso,
-                    flashMode: flashMode,
-                    macroEnabled: macroEnabled,
-                    isAutoFocus: isAutoFocus,
-                    exposureValue: exposureValue,
-                    onTimerTap: onTimerTap,
-                    onMacroTap: onMacroTap
-                )
+                if compact {
+                    // Minimized center: essential readouts only
+                    VStack(spacing: 3) {
+                        Text(String(format: "%+.1f EV", exposureValue))
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.85))
+                        Text("ISO \(iso)")
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.45))
+                    }
+                } else {
+                    // Center: Exposure meter with enhanced detail
+                    CenterDisplay(
+                        timerSeconds: timerSeconds,
+                        iso: iso,
+                        flashMode: flashMode,
+                        macroEnabled: macroEnabled,
+                        isAutoFocus: isAutoFocus,
+                        exposureValue: exposureValue,
+                        onTimerTap: onTimerTap,
+                        onMacroTap: onMacroTap
+                    )
+                }
 
                 Spacer()
 
                 // Right: Shutter Speed dial
                 ShutterSpeedDial(value: $shutterSpeedIndex, onChanged: onShutterSpeedChanged)
-                    .frame(width: 98, height: 98)
+                    .frame(width: dialSize, height: dialSize)
             }
             .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-
-            // Leica-style engraved branding (bottom center)
-            VStack {
-                Spacer()
-                Text("PRO CAMERA")
-                    .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundColor(Color.white.opacity(0.25))
-                    .padding(.bottom, 6)
-            }
+            .padding(.vertical, compact ? 4 : 6)
         }
     }
+
+    private var dialSize: CGFloat { compact ? 60 : 98 }
 }
 
 // Legacy initializer for backward compatibility (without shutter speed)

@@ -16,6 +16,7 @@ A professional-grade camera app built with SwiftUI featuring analog-style contro
 - **Manual Focus** - Precise focus control with haptic feedback
 - **Timer Support** - 3s and 10s countdown modes
 - **Grid Overlay** - Rule of thirds composition guide
+- **Full-Bleed Mode** - Swipe the top dial panel up or the bottom controls down to collapse them into compact decks and give the viewfinder the screen
 
 ## Design System
 
