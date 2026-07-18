@@ -198,7 +198,12 @@ struct ContentView: View {
     @State private var shutterSpeedIndex: Int = 9  // Default to 1/125
     @State private var aspectRatio: AspectRatioMode = .full
     @State private var filmFilter: FilmFilterMode = .none
+    @State private var lensFX: LensFXMode = .none
     @State private var captureFormat: CaptureFormat = .heic
+    @State private var topCollapsed = false
+    @State private var bottomCollapsed = false
+    @StateObject private var gallery = GalleryStore()
+    @State private var showPhotoBook = false
 
     private let modes = ["P", "A", "T"]
     private let shutterSpeeds = ["4\"", "2\"", "1\"", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60", "1/125", "1/250", "1/500", "1/1000", "1/2000", "1/4000"]
@@ -207,12 +212,11 @@ struct ContentView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let screenWidth = geo.size.width
             let safeTop = geo.safeAreaInsets.top
             let safeBottom = geo.safeAreaInsets.bottom
 
             // Layout measurements
-            let topPanelHeight: CGFloat = 110
+            let topPanelHeight: CGFloat = topCollapsed ? 64 : 110
             let gaugeToViewfinderSpacing: CGFloat = 5
             let viewfinderToControlsSpacing: CGFloat = 5
 
@@ -231,6 +235,7 @@ struct ContentView: View {
                         flashMode: camera.flashMode == .off ? "OFF" : "ON",
                         macroEnabled: macroEnabled,
                         isAutoFocus: !isManualFocusEnabled,
+                        compact: topCollapsed,
                         onFocusChanged: { val in
                             camera.setManualFocus(val)
                             isManualFocusEnabled = true
@@ -255,10 +260,18 @@ struct ContentView: View {
                         onMacroTap: {
                             Haptics.click()
                             macroEnabled.toggle()
+                            camera.setMacroEnabled(macroEnabled)
+                            if macroEnabled {
+                                isManualFocusEnabled = false
+                            }
                         }
                     )
                     .frame(height: topPanelHeight)
                     .padding(.horizontal, DS.pageMargin)
+                    // Swipe up to minimize the dial deck, down to restore.
+                    // Dials claim drags starting on them, so this only catches
+                    // swipes that begin in the gaps or center display.
+                    .gesture(deckSwipe(collapseOnSwipeUp: true) { topCollapsed = $0 })
 
                     Spacer().frame(height: gaugeToViewfinderSpacing)
 
@@ -286,7 +299,7 @@ struct ContentView: View {
                                 }
                             )
 
-                            ViewfinderOverlay(showGrid: showGrid, aspectRatio: $aspectRatio, filmFilter: $filmFilter)
+                            ViewfinderOverlay(showGrid: showGrid, aspectRatio: $aspectRatio, filmFilter: $filmFilter, lensFX: $lensFX)
                             ViewfinderVignette()
 
                             if showFocusPoint {
@@ -299,11 +312,16 @@ struct ContentView: View {
                                     .foregroundColor(.white.opacity(0.9))
                             }
 
+                            if camera.isLongExposureCapturing {
+                                LongExposureProgressOverlay(progress: camera.longExposureProgress)
+                            }
+
                             VStack {
                                 Spacer()
                                 RefractiveGlassInfoBar(
                                     iso: isoValue,
-                                    shutterSpeed: computeShutterSpeed(),
+                                    shutterSpeed: shutterSpeeds[shutterSpeedIndex],
+                                    histogram: camera.histogramBins,
                                     aperture: apertureValue,
                                     photoCount: photoCount,
                                     exposureValue: exposureValue,
@@ -352,6 +370,35 @@ struct ContentView: View {
 
                     // BOTTOM CONTROLS - grid-like DSLR layout with equidistant spacing
                     VStack(spacing: 0) {
+                        if bottomCollapsed {
+                        // COMPACT: single row - thumbnail | shutter | readout
+                        HStack(alignment: .center, spacing: 0) {
+                            ThumbnailPill(image: lastCapturedImage) {
+                                Haptics.click()
+                                showPhotoBook = true
+                            }
+
+                            Spacer()
+
+                            ShutterButton(isCapturing: isCapturing) {
+                                Haptics.heavy()
+                                handleCapture()
+                            }
+
+                            Spacer()
+
+                            // Readout balances the thumbnail so the shutter stays centered
+                            VStack(alignment: .trailing, spacing: 3) {
+                                Text("ISO \(isoValue)")
+                                Text(shutterSpeeds[shutterSpeedIndex])
+                            }
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.6))
+                            .frame(width: 88, alignment: .trailing)
+                        }
+                        .padding(.horizontal, DS.pageMargin)
+                        .padding(.vertical, 6)
+                        } else {
                         // ROW 1: Zoom control (full width) - no top padding
                         LensRingControl(
                                 focalLength: $focalLength,
@@ -424,6 +471,10 @@ struct ContentView: View {
                                         ModeButton(isActive: macroEnabled) {
                                             Haptics.click()
                                             macroEnabled.toggle()
+                                            camera.setMacroEnabled(macroEnabled)
+                                            if macroEnabled {
+                                                isManualFocusEnabled = false
+                                            }
                                         }
                                     }
                                     VStack(spacing: 8) {
@@ -451,9 +502,7 @@ struct ContentView: View {
                             HStack(alignment: .center, spacing: 0) {
                                 ThumbnailPill(image: lastCapturedImage) {
                                     Haptics.click()
-                                    if let url = URL(string: "photos-redirect://") {
-                                        UIApplication.shared.open(url)
-                                    }
+                                    showPhotoBook = true
                                 }
 
                                 Spacer()
@@ -473,10 +522,16 @@ struct ContentView: View {
                                 )
                             }
                             .padding(.horizontal, DS.pageMargin)
+                        }
                     }
                     .background {
                         ControlsGrain()
                     }
+                    // Swipe down for the super-compact deck, up to restore.
+                    // Must be simultaneous: the scrubbers claim drags that start on
+                    // them, but they only respond to horizontal movement, and this
+                    // gesture only acts on clearly vertical swipes.
+                    .simultaneousGesture(deckSwipe(collapseOnSwipeUp: false) { bottomCollapsed = $0 })
                 }
                 .padding(.top, safeTop)
                 .padding(.bottom, safeBottom * 0.7)
@@ -488,32 +543,52 @@ struct ContentView: View {
             .ignoresSafeArea()
         }
         .statusBarHidden(false)
+        // Require a second deliberate swipe for the home gesture so drags on
+        // the bottom control rows don't accidentally minimize the app
+        .defersSystemGestures(on: .bottom)
         .id(colorScheme)  // Force redraw on color scheme change
         .onAppear {
             camera.checkPermissions()
             // Sync initial filter state
             syncFilmFilter(filmFilter)
+            camera.selectedLensFX = lensFX
         }
-        .onChange(of: filmFilter) { newFilter in
+        .onChange(of: filmFilter) { _, newFilter in
             syncFilmFilter(newFilter)
         }
+        .onChange(of: lensFX) { _, newFX in
+            camera.selectedLensFX = newFX
+        }
+        .fullScreenCover(isPresented: $showPhotoBook) {
+            LibraryView(store: gallery)
+        }
+    }
+
+    // Bind a captured frame into the Field Book with the live shot settings
+    private func recordShot(_ img: UIImage) {
+        let metadata = ShotMetadata(
+            id: UUID(),
+            date: Date(),
+            iso: isoValue,
+            shutter: shutterSpeeds[shutterSpeedIndex],
+            aperture: apertureValue,
+            ev: exposureValue,
+            filmFilter: filmFilter.name,
+            lensFX: lensFX.name,
+            focalLength: focalLength
+        )
+        gallery.add(image: img, metadata: metadata)
     }
 
     private func syncFilmFilter(_ filter: FilmFilterMode) {
         switch filter {
         case .none: camera.selectedFilmFilter = .none
         case .portra400: camera.selectedFilmFilter = .portra400
-        case .kodakGold: camera.selectedFilmFilter = .ektar100
+        case .kodakGold: camera.selectedFilmFilter = .kodakGold
         case .trix400: camera.selectedFilmFilter = .trix400
         case .velvia50: camera.selectedFilmFilter = .velvia50
         case .cinestill800: camera.selectedFilmFilter = .cinestill800
         }
-    }
-
-    // MARK: - Helpers
-    private func computeShutterSpeed() -> String {
-        let speed = Int(1600 / pow(2, exposureValue))
-        return "1/\(max(speed, 1))"
     }
 
     private func handleFocusTap(_ point: CGPoint) {
@@ -526,6 +601,23 @@ struct ContentView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             withAnimation { showFocusPoint = false }
         }
+    }
+
+    // Vertical swipe that collapses/expands a control deck.
+    // For the top deck a swipe up collapses; for the bottom deck a swipe down does.
+    private func deckSwipe(collapseOnSwipeUp: Bool, set: @escaping (Bool) -> Void) -> some Gesture {
+        DragGesture(minimumDistance: 20)
+            .onEnded { value in
+                let dy = value.translation.height
+                guard abs(dy) > abs(value.translation.width) else { return }
+                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                    if dy < -30 {
+                        set(collapseOnSwipeUp)
+                    } else if dy > 30 {
+                        set(!collapseOnSwipeUp)
+                    }
+                }
+            }
     }
 
     private func handleCapture() {
@@ -549,6 +641,7 @@ struct ContentView: View {
     }
 
     private func captureNow() {
+        isCapturing = true
         Haptics.heavy()
 
         // Check if this is a long exposure (shutter speed index 0-3 = 4s, 2s, 1s, 1/2s)
@@ -564,6 +657,7 @@ struct ContentView: View {
                 if let img = img {
                     lastCapturedImage = img
                     photoCount += 1
+                    recordShot(img)
                     camera.saveToPhotoLibrary(img) { _ in }
                 }
             }
@@ -576,6 +670,9 @@ struct ContentView: View {
                 if let img = img {
                     lastCapturedImage = img
                     photoCount += 1
+                    recordShot(img)
+                    // RAW mode already writes the DNG from CameraManager; still
+                    // save the processed preview so Photos has a viewable sibling.
                     camera.saveToPhotoLibrary(img) { _ in }
                 }
             }
@@ -603,10 +700,46 @@ struct ViewfinderVignette: View {
     }
 }
 
+// MARK: - Long Exposure Progress (viewfinder ring during computational LE)
+struct LongExposureProgressOverlay: View {
+    let progress: Float
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.35)
+
+            VStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .stroke(Color.white.opacity(0.15), lineWidth: 3)
+                        .frame(width: 72, height: 72)
+                    Circle()
+                        .trim(from: 0, to: CGFloat(max(0, min(1, progress))))
+                        .stroke(Color.white.opacity(0.9), style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .frame(width: 72, height: 72)
+                        .rotationEffect(.degrees(-90))
+                        .animation(.linear(duration: 0.1), value: progress)
+
+                    Text("\(Int((progress * 100).rounded()))%")
+                        .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white)
+                }
+
+                Text("LONG EXPOSURE")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .tracking(1.5)
+                    .foregroundColor(.white.opacity(0.7))
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 // MARK: - Refractive Glass Info Bar (Apple-style Liquid Glass)
 struct RefractiveGlassInfoBar: View {
     let iso: Int
     let shutterSpeed: String
+    var histogram: [Float] = []
     let aperture: Float
     let photoCount: Int
     let exposureValue: Float
@@ -615,7 +748,7 @@ struct RefractiveGlassInfoBar: View {
     var body: some View {
         HStack(spacing: 10) {
             // Histogram in glass container
-            GlassHistogram(exposureValue: exposureValue)
+            GlassHistogram(exposureValue: exposureValue, bins: histogram)
                 .frame(width: 70, height: 40)
 
             // Format info
@@ -687,6 +820,7 @@ struct RefractiveGlassInfoBar: View {
 // MARK: - Glass Histogram (Clean container)
 struct GlassHistogram: View {
     let exposureValue: Float
+    var bins: [Float] = []
 
     var body: some View {
         ZStack {
@@ -694,19 +828,26 @@ struct GlassHistogram: View {
             RoundedRectangle(cornerRadius: 6)
                 .fill(Color.black.opacity(0.5))
 
-            // Histogram bars
+            // Histogram bars - real luminance bins from the camera feed,
+            // synthetic EV-shifted curve until the first frame arrives
             Canvas { ctx, size in
-                let ev = CGFloat((exposureValue + 2) / 4)
                 let padding: CGFloat = 4
-                let barWidth = (size.width - padding * 2) / 40
+                let barCount = bins.isEmpty ? 40 : bins.count
+                let barWidth = (size.width - padding * 2) / CGFloat(barCount)
 
-                for i in 0..<40 {
+                for i in 0..<barCount {
                     let x = padding + CGFloat(i) * barWidth
-                    let n = CGFloat(i) / 40
-                    let shifted = n - (ev - 0.5) * 0.4
-                    var h = exp(-pow((shifted - 0.3) * 4, 2)) * 0.85
-                    h += exp(-pow((shifted - 0.7) * 5, 2)) * 0.6
-                    h = min(max(h, 0.03), 1.0)
+                    let h: CGFloat
+                    if bins.isEmpty {
+                        let ev = CGFloat((exposureValue + 2) / 4)
+                        let n = CGFloat(i) / CGFloat(barCount)
+                        let shifted = n - (ev - 0.5) * 0.4
+                        var synth = exp(-pow((shifted - 0.3) * 4, 2)) * 0.85
+                        synth += exp(-pow((shifted - 0.7) * 5, 2)) * 0.6
+                        h = min(max(synth, 0.03), 1.0)
+                    } else {
+                        h = min(max(CGFloat(bins[i]), 0.03), 1.0)
+                    }
                     let barHeight = (size.height - padding * 2) * h
                     let rect = CGRect(
                         x: x,
@@ -2567,9 +2708,7 @@ struct ISOScrubberVertical: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            let height = geo.size.height
-
+        GeometryReader { _ in
             ZStack {
                 // Background
                 RoundedRectangle(cornerRadius: 10)
@@ -2687,9 +2826,7 @@ struct FStopScrubber: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            let size = geo.size
-
+        GeometryReader { _ in
             ZStack {
                 // Background
                 RoundedRectangle(cornerRadius: 10)

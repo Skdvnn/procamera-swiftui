@@ -21,7 +21,12 @@ class CameraManager: NSObject, ObservableObject {
     @Published var whiteBalance: AVCaptureDevice.WhiteBalanceGains?
     @Published var zoomFactor: CGFloat = 1.0
     @Published var isManualExposure: Bool = false
-    @Published var selectedFilmFilter: FilmFilter = .none
+    @Published var selectedFilmFilter: FilmFilter = .none {
+        didSet { refreshLivePreviewState() }
+    }
+    @Published var selectedLensFX: LensFXMode = .none {
+        didSet { refreshLivePreviewState() }
+    }
     @Published var isLongExposureCapturing: Bool = false
     @Published var longExposureProgress: Float = 0.0
     @Published var captureFormat: CaptureFormatType = .heic
@@ -30,6 +35,10 @@ class CameraManager: NSObject, ObservableObject {
     @Published var filteredPreviewImage: CIImage?
     private var lastPreviewFrameTime: CFAbsoluteTime = 0
     private let previewFrameInterval: CFAbsoluteTime = 1.0 / 30.0  // 30fps max
+
+    // Live histogram - real luminance bins computed from preview frames
+    @Published var histogramBins: [Float] = []
+    private var lastHistogramTime: CFAbsoluteTime = 0
 
     // Capture format types
     enum CaptureFormatType: Int, CaseIterable {
@@ -58,6 +67,7 @@ class CameraManager: NSObject, ObservableObject {
         case none = 0
         case portra400      // Warm, natural skin tones
         case ektar100       // Vivid, saturated colors
+        case kodakGold      // Golden warmth, gentle contrast
         case trix400        // Classic B&W
         case cinestill800   // Cinematic with halation
         case velvia50       // Ultra-vivid landscape
@@ -67,6 +77,7 @@ class CameraManager: NSObject, ObservableObject {
             case .none: return "None"
             case .portra400: return "Portra"
             case .ektar100: return "Ektar"
+            case .kodakGold: return "Gold"
             case .trix400: return "Tri-X"
             case .cinestill800: return "Cine"
             case .velvia50: return "Velvia"
@@ -185,7 +196,6 @@ class CameraManager: NSObject, ObservableObject {
         // Add photo output
         if session.canAddOutput(photoOutput) {
             session.addOutput(photoOutput)
-            photoOutput.isHighResolutionCaptureEnabled = true
             photoOutput.maxPhotoQualityPrioritization = .quality
         } else {
             DispatchQueue.main.async { self.error = .cannotAddOutput }
@@ -205,8 +215,21 @@ class CameraManager: NSObject, ObservableObject {
         // Select format with longest exposure that still supports custom exposure mode
         selectBestFormatForLongExposure(device: videoDevice)
 
+        // Request full-resolution stills for the final active format
+        updateMaxPhotoDimensions(for: videoDevice)
+
         session.commitConfiguration()
         startSession()
+    }
+
+    // Modern replacement for isHighResolutionCaptureEnabled: pick the largest
+    // photo dimensions the active format supports. Must be re-applied whenever
+    // the device or its active format changes.
+    private func updateMaxPhotoDimensions(for device: AVCaptureDevice) {
+        let supported = device.activeFormat.supportedMaxPhotoDimensions
+        if let best = supported.max(by: { Int($0.width) * Int($0.height) < Int($1.width) * Int($1.height) }) {
+            photoOutput.maxPhotoDimensions = best
+        }
     }
 
     private func updateDeviceCapabilities(device: AVCaptureDevice) {
@@ -298,7 +321,12 @@ class CameraManager: NSObject, ObservableObject {
                 device.setExposureModeCustom(duration: targetDuration, iso: targetISO) { _ in
                     // Now capture the photo
                     DispatchQueue.main.async {
-                        self.capturePhoto(completion: completion)
+                        self.capturePhoto { image in
+                            // Restore auto exposure or the preview stays at
+                            // seconds-per-frame and the camera looks frozen
+                            self.resetToAutoExposure()
+                            completion(image)
+                        }
                     }
                 }
 
@@ -577,6 +605,38 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    /// Restrict AF to near range when macro is on. Only applies in auto/continuous AF.
+    func setMacroEnabled(_ enabled: Bool) {
+        guard let device = videoDeviceInput?.device else { return }
+
+        sessionQueue.async {
+            do {
+                try device.lockForConfiguration()
+
+                if device.isAutoFocusRangeRestrictionSupported {
+                    device.autoFocusRangeRestriction = enabled ? .near : .none
+                }
+
+                // Macro only helps in auto AF — leave locked manual focus alone when disabling,
+                // but when enabling, switch to continuous AF so the near restriction can engage.
+                if enabled {
+                    if device.isFocusModeSupported(.continuousAutoFocus) {
+                        device.focusMode = .continuousAutoFocus
+                    } else if device.isFocusModeSupported(.autoFocus) {
+                        device.focusMode = .autoFocus
+                    }
+                    DispatchQueue.main.async {
+                        self.isManualFocus = false
+                    }
+                }
+
+                device.unlockForConfiguration()
+            } catch {
+                print("Error setting macro focus range: \(error)")
+            }
+        }
+    }
+
     func setZoom(_ factor: CGFloat) {
         guard let device = videoDeviceInput?.device else { return }
 
@@ -679,6 +739,7 @@ class CameraManager: NSObject, ObservableObject {
 
                     // Select best format for this lens
                     self.selectBestFormatForLongExposure(device: newDevice)
+                    self.updateMaxPhotoDimensions(for: newDevice)
 
                     // Apply zoom within this lens
                     try newDevice.lockForConfiguration()
@@ -810,6 +871,26 @@ class CameraManager: NSObject, ObservableObject {
             vibrance.amount = 0.3
             if let result = vibrance.outputImage { outputImage = result }
 
+        case .kodakGold:
+            // Golden hour in a canister: warm cast, gentle contrast, soft lift
+            let colorControls = CIFilter.colorControls()
+            colorControls.inputImage = outputImage
+            colorControls.saturation = 1.08
+            colorControls.contrast = 1.02
+            colorControls.brightness = 0.03
+            if let result = colorControls.outputImage { outputImage = result }
+
+            let tempTint = CIFilter.temperatureAndTint()
+            tempTint.inputImage = outputImage
+            tempTint.neutral = CIVector(x: 6500, y: 0)
+            tempTint.targetNeutral = CIVector(x: 5400, y: 12)
+            if let result = tempTint.outputImage { outputImage = result }
+
+            let vibrance = CIFilter.vibrance()
+            vibrance.inputImage = outputImage
+            vibrance.amount = 0.15
+            if let result = vibrance.outputImage { outputImage = result }
+
         case .trix400:
             let noir = CIFilter.photoEffectNoir()
             noir.inputImage = outputImage
@@ -906,6 +987,32 @@ class CameraManager: NSObject, ObservableObject {
                 outputImage = result
             }
 
+        case .kodakGold:
+            // Golden hour in a canister: warm cast, gentle contrast, soft lift
+            let colorControls = CIFilter.colorControls()
+            colorControls.inputImage = outputImage
+            colorControls.saturation = 1.08
+            colorControls.contrast = 1.02
+            colorControls.brightness = 0.03
+            if let result = colorControls.outputImage {
+                outputImage = result
+            }
+
+            let tempTint = CIFilter.temperatureAndTint()
+            tempTint.inputImage = outputImage
+            tempTint.neutral = CIVector(x: 6500, y: 0)
+            tempTint.targetNeutral = CIVector(x: 5400, y: 12)
+            if let result = tempTint.outputImage {
+                outputImage = result
+            }
+
+            let vibrance = CIFilter.vibrance()
+            vibrance.inputImage = outputImage
+            vibrance.amount = 0.15
+            if let result = vibrance.outputImage {
+                outputImage = result
+            }
+
         case .trix400:
             // Classic black and white
             let noir = CIFilter.photoEffectNoir()
@@ -978,15 +1085,114 @@ class CameraManager: NSObject, ObservableObject {
         return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
     }
 
+    // Applies the new filter selection on the very next frame and drops any
+    // stale filtered output, so toggling never appears stuck
+    private func refreshLivePreviewState() {
+        lastPreviewFrameTime = 0
+        if selectedFilmFilter == .none && selectedLensFX == .none {
+            filteredPreviewImage = nil
+        }
+    }
+
+    private func downscaled(_ image: CIImage, longEdge target: CGFloat) -> CIImage {
+        let maxDim = max(image.extent.width, image.extent.height)
+        guard maxDim > target else { return image }
+        let scale = target / maxDim
+        return image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+    }
+
+    // Cap live preview frames at ~1280px on the long edge; the viewfinder is
+    // much smaller than sensor resolution and filters cost per-pixel
+    private func downscaledForPreview(_ image: CIImage) -> CIImage {
+        downscaled(image, longEdge: 1280)
+    }
+
+    // MARK: - Live Histogram
+
+    // Computes 40 luminance bins from the current frame via CIAreaHistogram
+    private func updateHistogram(from image: CIImage) {
+        let binCount = 40
+
+        // Histogram doesn't need resolution — sample a small version
+        let small = downscaled(image, longEdge: 256)
+
+        guard let filter = CIFilter(name: "CIAreaHistogram") else { return }
+        filter.setValue(small, forKey: kCIInputImageKey)
+        filter.setValue(CIVector(cgRect: small.extent), forKey: "inputExtent")
+        filter.setValue(binCount, forKey: "inputCount")
+        filter.setValue(12.0, forKey: "inputScale")
+
+        guard let output = filter.outputImage else { return }
+
+        var bitmap = [UInt8](repeating: 0, count: binCount * 4)
+        ciContext.render(
+            output,
+            toBitmap: &bitmap,
+            rowBytes: binCount * 4,
+            bounds: CGRect(x: 0, y: 0, width: binCount, height: 1),
+            format: .RGBA8,
+            colorSpace: nil
+        )
+
+        var bins = [Float](repeating: 0, count: binCount)
+        for i in 0..<binCount {
+            let r = Float(bitmap[i * 4])
+            let g = Float(bitmap[i * 4 + 1])
+            let b = Float(bitmap[i * 4 + 2])
+            bins[i] = (r + g + b) / (3.0 * 255.0)
+        }
+
+        // Normalize so the tallest bin fills the display
+        let peak = max(bins.max() ?? 1, 0.001)
+        let normalized = bins.map { $0 / peak }
+
+        DispatchQueue.main.async {
+            self.histogramBins = normalized
+        }
+    }
+
+    // MARK: - Lens FX Processing
+
+    // Apply the selected lens FX to a captured still (time 0 = static variant of animated effects)
+    func applyLensFX(to image: UIImage) -> UIImage {
+        guard selectedLensFX != .none else { return image }
+        guard var ciImage = CIImage(image: image) else { return image }
+
+        // Cap resolution: distortion FX on a full 12MP still can stall the GPU
+        // or fail the render entirely (silently returning the unfiltered image)
+        let maxDim = max(ciImage.extent.width, ciImage.extent.height)
+        let cap: CGFloat = 3072
+        if maxDim > cap {
+            let scale = cap / maxDim
+            ciImage = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        }
+
+        let output = LensFXEngine.shared.apply(selectedLensFX, to: ciImage, time: 0)
+
+        guard let cgImage = ciContext.createCGImage(output, from: output.extent) else {
+            return image
+        }
+
+        return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
+    }
+
     func capturePhoto(completion: @escaping (UIImage?) -> Void) {
         photoCompletionHandler = { [weak self] image in
             guard let self = self, let image = image else {
-                completion(nil)
+                DispatchQueue.main.async { completion(nil) }
                 return
             }
-            // Apply film filter before returning (skip for RAW)
-            let filteredImage = self.captureFormat == .raw ? image : self.applyFilmFilter(to: image)
-            completion(filteredImage)
+            // Process off the AVFoundation delegate thread — filtering a full-res
+            // still there blocks the capture pipeline and freezes the camera.
+            // Deliver on main so SwiftUI state updates are safe.
+            DispatchQueue.global(qos: .userInitiated).async {
+                // Apply film filter + lens FX before returning (skip for RAW —
+                // the processed sibling is an unfiltered preview; DNG is the master)
+                let filteredImage = self.captureFormat == .raw
+                    ? image
+                    : self.applyLensFX(to: self.applyFilmFilter(to: image))
+                DispatchQueue.main.async { completion(filteredImage) }
+            }
         }
 
         var settings: AVCapturePhotoSettings
@@ -1001,11 +1207,20 @@ class CameraManager: NSObject, ObservableObject {
         case .jpeg:
             settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
         case .raw:
-            // Check if RAW is supported
+            // Dual RAW+processed: DNG alone cannot decode via UIImage(data:),
+            // which previously returned nil and dropped the capture silently.
             if let rawFormat = photoOutput.availableRawPhotoPixelFormatTypes.first {
-                settings = AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
+                let processedFormat: [String: Any]
+                if photoOutput.availablePhotoCodecTypes.contains(.hevc) {
+                    processedFormat = [AVVideoCodecKey: AVVideoCodecType.hevc]
+                } else {
+                    processedFormat = [AVVideoCodecKey: AVVideoCodecType.jpeg]
+                }
+                settings = AVCapturePhotoSettings(
+                    rawPixelFormatType: rawFormat,
+                    processedFormat: processedFormat
+                )
             } else {
-                // Fallback to HEIC if RAW not supported
                 print("RAW not supported, falling back to HEIC")
                 if photoOutput.availablePhotoCodecTypes.contains(.hevc) {
                     settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.hevc])
@@ -1016,7 +1231,7 @@ class CameraManager: NSObject, ObservableObject {
         }
 
         settings.flashMode = flashMode
-        settings.isHighResolutionPhotoEnabled = true
+        settings.maxPhotoDimensions = photoOutput.maxPhotoDimensions
 
         photoOutput.capturePhoto(with: settings, delegate: self)
     }
@@ -1048,17 +1263,56 @@ class CameraManager: NSObject, ObservableObject {
             }
         }
     }
+
+    private func saveRawDataToPhotoLibrary(_ data: Data) {
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            guard status == .authorized || status == .limited else { return }
+
+            PHPhotoLibrary.shared().performChanges {
+                let request = PHAssetCreationRequest.forAsset()
+                request.addResource(with: .photo, data: data, options: nil)
+            } completionHandler: { success, error in
+                if let error = error {
+                    print("Failed to save RAW: \(error)")
+                } else if !success {
+                    print("Failed to save RAW: unknown error")
+                }
+            }
+        }
+    }
 }
 
 extension CameraManager: AVCapturePhotoCaptureDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        guard error == nil,
-              let imageData = photo.fileDataRepresentation(),
-              let image = UIImage(data: imageData) else {
-            photoCompletionHandler?(nil)
+        if let error = error {
+            print("Photo capture error: \(error)")
+            // RAW half of a dual capture can fail independently; still wait for processed
+            if photo.isRawPhoto { return }
+            let handler = photoCompletionHandler
+            photoCompletionHandler = nil
+            handler?(nil)
             return
         }
-        photoCompletionHandler?(image)
+
+        // RAW half of a dual capture — persist DNG, wait for processed preview
+        if photo.isRawPhoto {
+            if let rawData = photo.fileDataRepresentation() {
+                saveRawDataToPhotoLibrary(rawData)
+            }
+            return
+        }
+
+        guard let imageData = photo.fileDataRepresentation(),
+              let image = UIImage(data: imageData) else {
+            let handler = photoCompletionHandler
+            photoCompletionHandler = nil
+            handler?(nil)
+            return
+        }
+
+        let handler = photoCompletionHandler
+        photoCompletionHandler = nil
+        handler?(image)
     }
 }
 
@@ -1069,20 +1323,35 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
 
-        // Handle live preview filtering (when filter is selected and not doing long exposure)
-        if selectedFilmFilter != .none && !isLongExposureCapturing {
+        // Update the real histogram a few times a second
+        if !isLongExposureCapturing {
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastHistogramTime >= 0.25 {
+                lastHistogramTime = now
+                updateHistogram(from: ciImage)
+            }
+        }
+
+        // Handle live preview processing (film filter and/or lens FX, not during long exposure)
+        let wantsLiveProcessing = selectedFilmFilter != .none || selectedLensFX != .none
+        if wantsLiveProcessing && !isLongExposureCapturing {
             let currentTime = CFAbsoluteTimeGetCurrent()
             if currentTime - lastPreviewFrameTime >= previewFrameInterval {
                 lastPreviewFrameTime = currentTime
 
-                // Apply filter on background queue
-                let filtered = applyFilmFilter(to: ciImage)
+                // Downscale first: full-res sensor frames are far too heavy
+                // to run distortion filters on at preview frame rates
+                var processed = downscaledForPreview(ciImage)
+                processed = applyFilmFilter(to: processed)
+                if selectedLensFX != .none {
+                    processed = LensFXEngine.shared.apply(selectedLensFX, to: processed, time: currentTime)
+                }
 
                 DispatchQueue.main.async {
-                    self.filteredPreviewImage = filtered
+                    self.filteredPreviewImage = processed
                 }
             }
-        } else if selectedFilmFilter == .none {
+        } else if !wantsLiveProcessing {
             // Clear filtered preview when no filter selected
             DispatchQueue.main.async {
                 if self.filteredPreviewImage != nil {
@@ -1100,14 +1369,17 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             return
         }
 
-        // Running accumulation — add frame to accumulator
+        // Running accumulation — add frame to accumulator.
+        // Accumulate at reduced resolution: adding full-res frames at 30fps
+        // saturates the GPU and freezes the app during the exposure.
+        let accumulationFrame = downscaled(ciImage, longEdge: 2048)
         if let acc = longExposureAccumulator {
             let blend = CIFilter.additionCompositing()
-            blend.inputImage = ciImage
+            blend.inputImage = accumulationFrame
             blend.backgroundImage = acc
             longExposureAccumulator = blend.outputImage
         } else {
-            longExposureAccumulator = ciImage
+            longExposureAccumulator = accumulationFrame
         }
         longExposureFrameCount += 1
 
@@ -1140,7 +1412,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 
             let finalImage: UIImage?
             if let img = resultImage {
-                finalImage = self.applyFilmFilter(to: img)
+                finalImage = self.applyLensFX(to: self.applyFilmFilter(to: img))
             } else {
                 finalImage = nil
             }

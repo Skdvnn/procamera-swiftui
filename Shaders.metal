@@ -260,12 +260,13 @@ float metalNoise(float2 p) {
         float3 H = normalize(L1 + V);
         float NdH = max(dot(Ng, H), 0.0);
 
-        // Broad glow + sharp metallic peak
-        float soft = pow(NdH, 5.0) * 0.40;
-        float tight = pow(NdH, 64.0) * 0.55;
+        // Broad glow + very tight hot peak - polished chrome throws
+        // a pinpoint specular, not a soft sheen
+        float soft = pow(NdH, 5.0) * 0.35;
+        float tight = pow(NdH, 180.0) * 0.90;
         float spec = (soft + tight) * NdL;
 
-        specTotal += spec * float3(1.0, 0.97, 0.92) * 1.5;
+        specTotal += spec * float3(1.0, 0.97, 0.92) * 1.6;
         diffTotal += NdL * 0.65;
     }
 
@@ -275,11 +276,11 @@ float metalNoise(float2 p) {
         float3 H = normalize(L2 + V);
         float NdH = max(dot(Ng, H), 0.0);
 
-        float soft = pow(NdH, 5.0) * 0.40;
-        float tight = pow(NdH, 64.0) * 0.55;
+        float soft = pow(NdH, 5.0) * 0.35;
+        float tight = pow(NdH, 180.0) * 0.75;
         float spec = (soft + tight) * NdL;
 
-        specTotal += spec * float3(0.90, 0.93, 1.0) * 0.65;
+        specTotal += spec * float3(0.90, 0.93, 1.0) * 0.70;
         diffTotal += NdL * 0.25;
     }
 
@@ -297,7 +298,7 @@ float metalNoise(float2 p) {
     // ==========================================================
     // CHROME MATERIAL
     // ==========================================================
-    float3 F0 = float3(0.60, 0.58, 0.55);
+    float3 F0 = float3(0.85, 0.83, 0.80);
     F0 *= mix(1.0, 0.65, pressed);
 
     float NdV = max(dot(N, V), 0.0);
@@ -316,10 +317,14 @@ float metalNoise(float2 p) {
     // Broad sky/ground
     float skyMix = smoothstep(-0.15, 0.45, reflDir.y);
     float3 envColor = mix(
-        float3(0.01, 0.01, 0.02),  // near-black (camera body)
-        float3(0.32, 0.32, 0.36),  // bright overhead
+        float3(0.002, 0.002, 0.005), // near-black (camera body)
+        float3(0.58, 0.58, 0.64),    // bright overhead
         skyMix
     );
+    // Hard horizon band - mirrors reflect a sharp light/dark boundary,
+    // and that contrast edge is what makes chrome read as chrome
+    float horizon = 1.0 - smoothstep(0.0, 0.08, abs(reflDir.y - 0.12));
+    envColor += float3(0.30, 0.30, 0.33) * horizon;
 
     // Organic variation
     float env1 = metalNoise(reflDir.xy * 2.5 + 0.7);
@@ -336,16 +341,29 @@ float metalNoise(float2 p) {
     float3 result = float3(0);
 
     // Ambient (nearly black for chrome - all light comes from reflections)
-    result += chromeBase * 0.15;
+    result += chromeBase * 0.06;
 
-    // Diffuse (minimal for chrome)
-    result += chromeBase * diffTotal * 0.10;
+    // Diffuse (chrome has essentially none - it's all reflection)
+    result += chromeBase * diffTotal * 0.03;
 
     // Specular (broad, natural arcs from bowl geometry)
     result += fresnel * specTotal;
 
-    // Environment reflection (chrome is a mirror)
-    result += fresnel * envColor * 0.50;
+    // Environment reflection (chrome is a mirror - this dominates)
+    result += fresnel * envColor * 1.05;
+
+    // Anisotropic lathe crescents: a bright arc sweeping toward the key
+    // light with a dark mirrored arc opposite - the signature look of
+    // machined, lathe-turned metal
+    {
+        float2 keyDir = normalize(float2(-0.55, -0.60));
+        float facing = dot(radDir, keyDir);
+        float annulus = smoothstep(0.18, 0.45, r) * smoothstep(0.95, 0.62, r);
+        float arcBright = pow(max(facing, 0.0), 2.5) * annulus;
+        float arcDark = pow(max(-facing, 0.0), 2.5) * annulus;
+        result += arcBright * float3(0.42, 0.41, 0.39) * (1.0 - pressed * 0.4);
+        result -= arcDark * float3(0.12, 0.12, 0.13);
+    }
 
     // Lathe texture - very subtle brightness modulation,
     // the real effect is through the normal perturbation above
@@ -354,7 +372,9 @@ float metalNoise(float2 p) {
     // ==========================================================
     // DOME SHADING - center catches most light, edges fall off
     // ==========================================================
-    float domeMod = 0.65 + height * 0.70;
+    // Gentle: a mirror's brightness comes from what it reflects,
+    // not from surface shading
+    float domeMod = 0.78 + height * 0.50;
     result *= domeMod;
 
     // ==========================================================
@@ -391,6 +411,21 @@ float metalNoise(float2 p) {
     scanline = pow(scanline, 2.0) * intensity + (1.0 - intensity);
 
     return half4(color.rgb * scanline, color.a);
+}
+
+// MARK: - Scanline Overlay (VHS viewfinder)
+// Outputs alpha-varying black lines so it composites over any layer
+// (including the camera preview) without needing a blend mode.
+[[ stitchable ]] half4 scanlineOverlay(
+    float2 position,
+    half4 color,
+    float lineWidth,
+    float intensity
+) {
+    float scanline = sin(position.y * lineWidth) * 0.5 + 0.5;
+    float alpha = pow(scanline, 2.0) * intensity;
+
+    return half4(0.0, 0.0, 0.0, half(alpha) * color.a);
 }
 
 // MARK: - Leica Vulcanite Texture Shader
