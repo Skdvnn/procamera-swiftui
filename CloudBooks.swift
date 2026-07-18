@@ -465,41 +465,8 @@ struct SharedBookView: View {
     @ViewBuilder
     private func pageContent(at index: Int) -> some View {
         if index == 0 {
-            BookPage {
-                VStack(alignment: .leading, spacing: 10) {
-                    Text("CONTACT SHEET")
-                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                        .tracking(3)
-                        .foregroundColor(.white.opacity(0.4))
-
-                    ScrollView(showsIndicators: false) {
-                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 74), spacing: 8)], spacing: 10) {
-                            ForEach(Array(shots.enumerated()), id: \.element.id) { i, shot in
-                                Button(action: { currentPage = i + 1 }) {
-                                    VStack(spacing: 3) {
-                                        ZStack {
-                                            Rectangle().fill(Color.black)
-                                            if let thumb = shot.thumb {
-                                                Image(uiImage: thumb)
-                                                    .resizable()
-                                                    .aspectRatio(contentMode: .fill)
-                                            }
-                                        }
-                                        .frame(height: 74)
-                                        .clipped()
-                                        .overlay(Rectangle().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
-
-                                        Text("Nº \(String(format: "%03d", i + 1))")
-                                            .font(.system(size: 7, weight: .medium, design: .monospaced))
-                                            .foregroundColor(accent.opacity(0.7))
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                            }
-                        }
-                        .padding(.top, 2)
-                    }
-                }
+            CloudContactSheetPage(shots: shots, accent: accent) { i in
+                currentPage = i + 1
             }
         } else if index - 1 < shots.count {
             let shot = shots[index - 1]
@@ -564,6 +531,100 @@ struct SharedBookView: View {
             isLoading = false
             if currentPage > shots.count { currentPage = shots.count }
         }
+    }
+}
+
+// MARK: - Cloud Contact Sheet (matches local proof-sheet index)
+struct CloudContactSheetPage: View {
+    let shots: [CloudBookManager.CloudShot]
+    let accent: Color
+    let onSelect: (Int) -> Void
+
+    private let columns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(hex: "181614"))
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("CONTACT SHEET")
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .tracking(2.5)
+                            .foregroundColor(.white.opacity(0.88))
+                        Text("TAP A FRAME TO OPEN  ·  \(shots.count) TOTAL")
+                            .font(.system(size: 8, weight: .medium, design: .monospaced))
+                            .tracking(1.2)
+                            .foregroundColor(.white.opacity(0.35))
+                    }
+                    Spacer()
+                    Text("SHARED")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .tracking(2)
+                        .foregroundColor(accent.opacity(0.7))
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 3)
+                                .stroke(accent.opacity(0.35), lineWidth: 1)
+                        )
+                }
+                .padding(.horizontal, 14)
+                .padding(.top, 14)
+                .padding(.bottom, 12)
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.08))
+                    .frame(height: 0.5)
+                    .padding(.horizontal, 14)
+
+                ScrollView(showsIndicators: false) {
+                    LazyVGrid(columns: columns, spacing: 14) {
+                        ForEach(Array(shots.enumerated()), id: \.element.id) { i, shot in
+                            Button(action: { onSelect(i) }) {
+                                VStack(spacing: 0) {
+                                    ZStack {
+                                        Color.black
+                                        if let thumb = shot.thumb {
+                                            Image(uiImage: thumb)
+                                                .resizable()
+                                                .aspectRatio(contentMode: .fill)
+                                        }
+                                    }
+                                    .aspectRatio(0.8, contentMode: .fit)
+                                    .clipped()
+                                    .padding(5)
+                                    .background(Color(white: 0.9))
+                                    .shadow(color: .black.opacity(0.35), radius: 3, y: 2)
+
+                                    HStack {
+                                        Text("Nº \(String(format: "%03d", i + 1))")
+                                            .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                                            .foregroundColor(accent.opacity(0.8))
+                                        Spacer()
+                                    }
+                                    .padding(.top, 6)
+                                }
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    .padding(.top, 14)
+                    .padding(.bottom, 18)
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
     }
 }
 

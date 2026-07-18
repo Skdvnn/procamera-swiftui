@@ -316,41 +316,42 @@ struct LibraryView: View {
                 header
                     .padding(.horizontal, 20)
                     .padding(.top, 14)
-                    .padding(.bottom, 6)
-                    .opacity(route == nil && openedSharedBook == nil ? 1 : 0)
-
-                Text("TAP A COVER TO OPEN")
-                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                    .tracking(2.5)
-                    .foregroundColor(.white.opacity(0.28))
-                    .frame(maxWidth: .infinity)
-                    .padding(.bottom, 10)
+                    .padding(.bottom, 12)
                     .opacity(route == nil && openedSharedBook == nil ? 1 : 0)
 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 0) {
+                        // Local ledge label — one job: your books
+                        shelfSectionLabel("YOUR BOOKS")
+                            .padding(.bottom, 10)
+
                         ForEach(Array(shelves.enumerated()), id: \.offset) { _, row in
                             shelfRow(for: row)
                         }
 
+                        if store.books.isEmpty {
+                            Text("Long-press a book later to file frames — or open All Frames.")
+                                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.28))
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 36)
+                                .padding(.top, 4)
+                                .padding(.bottom, 18)
+                        }
+
                         // Books others invited you into — same shelf language, own ledges
                         if !sharedShelves.isEmpty {
-                            Text("SHARED WITH ME")
-                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                                .tracking(3)
-                                .foregroundColor(.white.opacity(0.4))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 22)
-                                .padding(.top, 10)
-                                .padding(.bottom, 8)
+                            shelfSectionLabel("SHARED WITH ME")
+                                .padding(.top, 14)
+                                .padding(.bottom, 10)
 
                             ForEach(Array(sharedShelves.enumerated()), id: \.offset) { _, row in
                                 shelfRow(for: row)
                             }
                         }
                     }
-                    .padding(.top, 8)
-                    .padding(.bottom, 36)
+                    .padding(.top, 4)
+                    .padding(.bottom, 40)
                 }
                 .opacity(route == nil && openedSharedBook == nil ? 1 : 0)
                 .allowsHitTesting(route == nil && openedSharedBook == nil)
@@ -508,42 +509,59 @@ struct LibraryView: View {
 
     private var header: some View {
         HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("LIBRARY")
-                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                    .tracking(4)
-                    .foregroundColor(.white.opacity(0.9))
+            VStack(alignment: .leading, spacing: 4) {
+                Text("FIELD BOOK")
+                    .font(.system(size: 18, weight: .semibold, design: .monospaced))
+                    .tracking(3)
+                    .foregroundColor(.white.opacity(0.94))
                 Text(librarySubtitle)
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .tracking(2)
-                    .foregroundColor(.white.opacity(0.35))
+                    .foregroundColor(accent.opacity(0.55))
             }
 
             Spacer()
 
             Button(action: { dismiss() }) {
-                ZStack {
-                    Circle()
-                        .fill(Color.black.opacity(0.5))
-                        .frame(width: 34, height: 34)
-                    Circle()
-                        .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
-                        .frame(width: 34, height: 34)
-                    Image(systemName: "xmark")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.8))
-                }
+                Text("CAMERA")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .tracking(1.5)
+                    .foregroundColor(accent.opacity(0.9))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(
+                        Capsule()
+                            .fill(Color.black.opacity(0.45))
+                            .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
+                    )
             }
         }
     }
 
-    private var librarySubtitle: String {
-        let local = store.books.count + 1
-        let shared = cloud.sharedBooks.count
-        if shared > 0 {
-            return "\(local) BOOKS  ·  \(shared) SHARED  ·  \(store.shots.count) FRAMES"
+    private func shelfSectionLabel(_ text: String) -> some View {
+        HStack(spacing: 10) {
+            Text(text)
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .tracking(3)
+                .foregroundColor(.white.opacity(0.38))
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(height: 0.5)
         }
-        return "\(local) BOOKS  ·  \(store.shots.count) FRAMES"
+        .padding(.horizontal, 22)
+    }
+
+    private var librarySubtitle: String {
+        let books = store.books.count
+        let shared = cloud.sharedBooks.count
+        let frames = store.shots.count
+        if shared > 0 {
+            return "\(frames) FRAMES  ·  \(books) BOOKS  ·  \(shared) SHARED"
+        }
+        if books == 0 {
+            return "\(frames) FRAME\(frames == 1 ? "" : "S")  ·  TAP A COVER"
+        }
+        return "\(frames) FRAMES  ·  \(books) BOOK\(books == 1 ? "" : "S")"
     }
 }
 
@@ -621,20 +639,26 @@ struct AlbumShelfRail: View {
     let onSelect: (ShelfItem) -> Void
 
     var body: some View {
-        VStack(spacing: 6) {
-            Text("YOUR SHELF")
-                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                .tracking(2)
-                .foregroundColor(.white.opacity(0.3))
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Text("SHELF")
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .tracking(2.5)
+                    .foregroundColor(.white.opacity(0.32))
+                Rectangle()
+                    .fill(Color.white.opacity(0.08))
+                    .frame(height: 0.5)
+            }
+            .padding(.horizontal, 20)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .bottom, spacing: 14) {
+                HStack(alignment: .bottom, spacing: 16) {
                     ForEach(items) { item in
                         let isActive = activeRouteID == item.id
                         Button {
                             onSelect(item)
                         } label: {
-                                            BookCover(
+                            BookCover(
                                 title: item.title,
                                 count: item.count,
                                 coverImage: item.coverImage,
@@ -643,36 +667,29 @@ struct AlbumShelfRail: View {
                                 matchID: "rail-\(item.id)",
                                 namespace: namespace,
                                 isRailMiniature: true,
-                                coverHeight: 64,
+                                coverHeight: 70,
                                 subtitleOverride: item.subtitle,
                                 isShared: item.isShared
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 3)
-                                    .stroke(isActive ? accent.opacity(0.9) : Color.clear, lineWidth: 1.5)
+                                    .stroke(isActive ? accent.opacity(0.95) : Color.clear, lineWidth: 1.5)
                             )
-                            .opacity(isActive ? 1 : 0.72)
-                            .scaleEffect(isActive ? 1.06 : 1.0)
+                            .opacity(isActive ? 1 : 0.68)
+                            .scaleEffect(isActive ? 1.08 : 1.0)
+                            .animation(.spring(response: 0.32, dampingFraction: 0.82), value: isActive)
                         }
                         .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal, 20)
-                .padding(.vertical, 4)
+                .padding(.vertical, 6)
             }
 
             // Mini ledge under the rail
-            Rectangle()
-                .fill(
-                    LinearGradient(
-                        colors: [Color(hex: "3a2c22"), Color(hex: "1a1511")],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .frame(height: 6)
-                .padding(.horizontal, 12)
-                .shadow(color: .black.opacity(0.4), radius: 4, y: 2)
+            ShelfLedge()
+                .padding(.horizontal, 14)
+                .scaleEffect(y: 0.7, anchor: .top)
         }
     }
 }
@@ -704,14 +721,14 @@ struct ShelfRow: View {
                     }
                 }
             }
-            .padding(.horizontal, 18)
-            .padding(.bottom, 2)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 4)
 
             // The ledge the books sit on
             ShelfLedge()
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 6)
         }
-        .padding(.bottom, 22)
+        .padding(.bottom, 28)
     }
 
     @ViewBuilder
@@ -788,17 +805,17 @@ struct ShelfLedge: View {
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color(hex: "5a4535").opacity(0.9),
-                            Color(hex: "3a2c22")
+                            Color(hex: "6a5340").opacity(0.95),
+                            Color(hex: "3f3126")
                         ],
                         startPoint: .top,
                         endPoint: .bottom
                     )
                 )
-                .frame(height: 5)
+                .frame(height: 6)
                 .overlay(
                     Rectangle()
-                        .fill(Color.white.opacity(0.08))
+                        .fill(Color.white.opacity(0.12))
                         .frame(height: 1),
                     alignment: .top
                 )
@@ -808,25 +825,32 @@ struct ShelfLedge: View {
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color(hex: "2a211a"),
-                            Color(hex: "1a1511")
+                            Color(hex: "32271f"),
+                            Color(hex: "1c1612"),
+                            Color(hex: "14100d")
                         ],
                         startPoint: .top,
                         endPoint: .bottom
                     )
                 )
-                .frame(height: 14)
+                .frame(height: 16)
                 .overlay(
                     // Subtle grain lines
-                    HStack(spacing: 18) {
-                        ForEach(0..<12, id: \.self) { _ in
+                    HStack(spacing: 16) {
+                        ForEach(0..<14, id: \.self) { _ in
                             Rectangle()
-                                .fill(Color.white.opacity(0.015))
+                                .fill(Color.white.opacity(0.02))
                                 .frame(width: 1)
                         }
                     }
                 )
-                .shadow(color: .black.opacity(0.55), radius: 8, x: 0, y: 6)
+                .overlay(
+                    Rectangle()
+                        .fill(Color.black.opacity(0.35))
+                        .frame(height: 1),
+                    alignment: .bottom
+                )
+                .shadow(color: .black.opacity(0.6), radius: 10, x: 0, y: 7)
         }
         .clipShape(RoundedRectangle(cornerRadius: 2))
     }
@@ -917,25 +941,26 @@ struct BookCover: View {
                 .clipped()
 
                 // Bottom title band
-                VStack(spacing: 2) {
+                VStack(spacing: 3) {
                     Text(title)
                         .font(.system(size: isRailMiniature ? 7 : 9, weight: .bold, design: .monospaced))
                         .tracking(isRailMiniature ? 0.5 : 1.2)
                         .lineLimit(2)
                         .multilineTextAlignment(.center)
-                        .foregroundColor(isMaster || isShared ? accent : .white.opacity(0.92))
+                        .foregroundColor(isMaster || isShared ? accent : .white.opacity(0.94))
                     if !isRailMiniature {
-                        Text(subtitleOverride ?? "\(count)")
-                            .font(.system(size: 8, weight: .medium, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.45))
+                        Text(coverSubtitle)
+                            .font(.system(size: 7, weight: .medium, design: .monospaced))
+                            .tracking(0.8)
+                            .foregroundColor(.white.opacity(0.48))
                     }
                 }
                 .padding(.horizontal, isRailMiniature ? 3 : 6)
-                .padding(.vertical, isRailMiniature ? 5 : 8)
+                .padding(.vertical, isRailMiniature ? 5 : 9)
                 .frame(maxWidth: .infinity)
                 .background(
                     LinearGradient(
-                        colors: [Color.black.opacity(0.05), Color.black.opacity(0.78)],
+                        colors: [Color.black.opacity(0.02), Color.black.opacity(0.82)],
                         startPoint: .top,
                         endPoint: .bottom
                     )
@@ -943,13 +968,23 @@ struct BookCover: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: 3))
             .overlay(
+                // Master roll gets a thin accent edge so it reads as the source book
+                RoundedRectangle(cornerRadius: 3)
+                    .stroke(
+                        isMaster
+                            ? accent.opacity(0.45)
+                            : Color.clear,
+                        lineWidth: isMaster && !isRailMiniature ? 1 : 0
+                    )
+            )
+            .overlay(
                 RoundedRectangle(cornerRadius: 3)
                     .stroke(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(0.28),
-                                Color.white.opacity(0.05),
-                                Color.black.opacity(0.4)
+                                Color.white.opacity(0.32),
+                                Color.white.opacity(0.06),
+                                Color.black.opacity(0.45)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -959,7 +994,7 @@ struct BookCover: View {
             )
             .overlay(
                 LinearGradient(
-                    colors: [Color.white.opacity(0.14), Color.clear, Color.clear],
+                    colors: [Color.white.opacity(0.16), Color.clear, Color.clear],
                     startPoint: .topLeading,
                     endPoint: UnitPoint(x: 0.55, y: 0.45)
                 )
@@ -967,6 +1002,12 @@ struct BookCover: View {
                 .allowsHitTesting(false)
             )
         }
+    }
+
+    private var coverSubtitle: String {
+        if let subtitleOverride { return subtitleOverride }
+        if count == 0 { return "EMPTY" }
+        return "\(count) FRAME\(count == 1 ? "" : "S")"
     }
 }
 
@@ -1003,14 +1044,25 @@ struct NewBookCover: View {
     let accent: Color
 
     var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "plus")
-                .font(.system(size: 18, weight: .medium))
-                .foregroundColor(accent.opacity(0.75))
-            Text("NEW")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .tracking(2)
-                .foregroundColor(.white.opacity(0.45))
+        VStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .stroke(accent.opacity(0.45), lineWidth: 1)
+                    .frame(width: 36, height: 36)
+                Image(systemName: "plus")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(accent.opacity(0.85))
+            }
+            VStack(spacing: 3) {
+                Text("NEW BOOK")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .tracking(1.5)
+                    .foregroundColor(.white.opacity(0.55))
+                Text("START A SHELF")
+                    .font(.system(size: 7, weight: .medium, design: .monospaced))
+                    .tracking(1)
+                    .foregroundColor(.white.opacity(0.28))
+            }
         }
         .frame(maxWidth: .infinity)
         .aspectRatio(0.68, contentMode: .fit)
@@ -1018,12 +1070,18 @@ struct NewBookCover: View {
         .background(
             RoundedRectangle(cornerRadius: 3)
                 .strokeBorder(
-                    Color.white.opacity(0.22),
-                    style: StrokeStyle(lineWidth: 1.2, dash: [5, 4])
+                    accent.opacity(0.28),
+                    style: StrokeStyle(lineWidth: 1.1, dash: [4, 4])
                 )
                 .background(
                     RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.white.opacity(0.03))
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.04), Color.black.opacity(0.2)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
                 )
         )
         .contentShape(RoundedRectangle(cornerRadius: 3))
@@ -1613,53 +1671,129 @@ final class IndexedHostingController<Content: View>: UIHostingController<Content
     }
 }
 
-// MARK: - Contact Sheet (index page)
+// MARK: - Contact Sheet (index leaf — film proof sheet)
 struct ContactSheetPage: View {
     let store: GalleryStore
     let shots: [ShotMetadata]
     let accent: Color
     let onSelect: (Int) -> Void
 
-    private let columns = [GridItem(.adaptive(minimum: 74), spacing: 8)]
+    private let columns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
 
     var body: some View {
-        BookPage {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("CONTACT SHEET")
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundColor(.white.opacity(0.4))
+        ZStack {
+            // Proof-sheet ground — slightly warmer than print leaves
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color(hex: "181614"))
+
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+
+            VStack(alignment: .leading, spacing: 0) {
+                contactHeader
+                    .padding(.horizontal, 14)
+                    .padding(.top, 14)
+                    .padding(.bottom, 12)
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.08))
+                    .frame(height: 0.5)
+                    .padding(.horizontal, 14)
 
                 ScrollView(showsIndicators: false) {
-                    LazyVGrid(columns: columns, spacing: 10) {
+                    LazyVGrid(columns: columns, spacing: 14) {
                         ForEach(Array(shots.enumerated()), id: \.element.id) { index, shot in
-                            Button(action: { onSelect(index) }) {
-                                VStack(spacing: 3) {
-                                    ZStack {
-                                        Rectangle().fill(Color.black)
-                                        if let thumb = store.thumbnail(for: shot) {
-                                            Image(uiImage: thumb)
-                                                .resizable()
-                                                .aspectRatio(contentMode: .fill)
-                                        }
-                                    }
-                                    .frame(height: 74)
-                                    .clipped()
-                                    .overlay(Rectangle().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
-
-                                    Text("Nº \(String(format: "%03d", index + 1))")
-                                        .font(.system(size: 7, weight: .medium, design: .monospaced))
-                                        .foregroundColor(accent.opacity(0.7))
-                                }
-                            }
-                            .buttonStyle(.plain)
+                            contactCell(shot: shot, index: index)
                         }
                     }
-                    .padding(.top, 2)
+                    .padding(.horizontal, 14)
+                    .padding(.top, 14)
+                    .padding(.bottom, 18)
                 }
             }
         }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
     }
+
+    private var contactHeader: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("CONTACT SHEET")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .tracking(2.5)
+                    .foregroundColor(.white.opacity(0.88))
+                Text("TAP A FRAME TO OPEN  ·  \(shots.count) TOTAL")
+                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .tracking(1.2)
+                    .foregroundColor(.white.opacity(0.35))
+            }
+            Spacer()
+            Text("INDEX")
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .tracking(2)
+                .foregroundColor(accent.opacity(0.7))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3)
+                        .stroke(accent.opacity(0.35), lineWidth: 1)
+                )
+        }
+    }
+
+    private func contactCell(shot: ShotMetadata, index: Int) -> some View {
+        Button(action: { onSelect(index) }) {
+            VStack(spacing: 0) {
+                // White-border proof frame
+                ZStack(alignment: .topTrailing) {
+                    ZStack {
+                        Color.black
+                        if let thumb = store.thumbnail(for: shot) {
+                            Image(uiImage: thumb)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                        }
+                    }
+                    .aspectRatio(0.8, contentMode: .fit)
+                    .clipped()
+
+                    if shot.lensFX != "None" || shot.filmFilter != "None" {
+                        Circle()
+                            .fill(accent.opacity(0.9))
+                            .frame(width: 6, height: 6)
+                            .padding(5)
+                    }
+                }
+                .padding(5)
+                .background(Color(white: 0.9))
+                .shadow(color: .black.opacity(0.35), radius: 3, y: 2)
+
+                HStack(spacing: 4) {
+                    Text("Nº \(String(format: "%03d", index + 1))")
+                        .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                        .foregroundColor(accent.opacity(0.8))
+                    Spacer(minLength: 0)
+                    Text(Self.shortDate.string(from: shot.date).uppercased())
+                        .font(.system(size: 7, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.32))
+                        .lineLimit(1)
+                }
+                .padding(.top, 6)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    private static let shortDate: DateFormatter = {
+        let df = DateFormatter()
+        df.dateFormat = "d MMM"
+        return df
+    }()
 }
 
 // MARK: - Print Page (photo-first leaf — the image itself curls)
