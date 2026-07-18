@@ -20,7 +20,7 @@ A professional-grade camera app built with SwiftUI featuring analog-style contro
 - **Timer Support** - 3s and 10s countdown modes
 - **Grid Overlay** - Rule of thirds composition guide
 - **Full-Bleed Mode** - Swipe the top dial panel up or the bottom controls down to collapse them into compact decks and give the viewfinder the screen
-- **Field Book Library** - Classic Apple Books-style shelf: upright covers on physical ledges, tap a cover to open it, tap other covers on the open-book rail to flip through albums. Inside each book: black paper pages, corner-mounted prints, silver-pen captions (ISO, shutter, EV, film, FX), contact-sheet index, page-curl turns, and a pinch-zoom lightbox. Create little books, add frames from the master roll, and pin favorites to the front
+- **Field Book Library** - Classic Apple Books-style shelf: upright covers on physical ledges, tap a cover to open it, tap other covers on the open-book rail to flip through albums. Share a book over iCloud; invites land on a Shared With Me shelf. Inside each book: black paper pages, corner-mounted prints, silver-pen captions (ISO, shutter, EV, film, FX), contact-sheet index, page-curl turns, and a pinch-zoom lightbox. Create little books, add frames from the master roll, and pin favorites to the front
 
 ## Design System
 

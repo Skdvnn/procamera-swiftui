@@ -1,5 +1,6 @@
 import SwiftUI
 import Fingertips
+import CloudKit
 
 class FingerTipAppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
@@ -30,6 +31,12 @@ class FingerTipSceneDelegate: NSObject, UIWindowSceneDelegate {
             guard let w = fingerTipWindow else { return }
             w.alwaysShowTouches.toggle()
         }
+    }
+
+    // Invitee tapped a Field Book share link
+    func windowScene(_ windowScene: UIWindowScene,
+                     userDidAcceptCloudKitShareWith cloudKitShareMetadata: CKShare.Metadata) {
+        CloudBookManager.shared.acceptShare(metadata: cloudKitShareMetadata)
     }
 }
 

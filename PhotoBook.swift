@@ -100,6 +100,10 @@ final class GalleryStore: ObservableObject {
         UIImage(contentsOfFile: imageURL(for: shot.id).path)
     }
 
+    // File locations used by the CloudKit uploader to build CKAssets
+    func imageFileURL(for shot: ShotMetadata) -> URL { imageURL(for: shot.id) }
+    func thumbFileURL(for shot: ShotMetadata) -> URL { thumbURL(for: shot.id) }
+
     func thumbnail(for shot: ShotMetadata) -> UIImage? {
         let key = shot.id.uuidString as NSString
         if let cached = thumbCache.object(forKey: key) { return cached }
@@ -226,12 +230,15 @@ final class GalleryStore: ObservableObject {
 // MARK: - Library (classic Apple Books-style shelf)
 // Physical shelves, upright covers, tap a book to open it, tap another
 // cover on the open-book rail to flip through albums without returning.
+// CloudKit shared books sit on their own shelf rows below.
 struct LibraryView: View {
     @ObservedObject var store: GalleryStore
+    @ObservedObject private var cloud = CloudBookManager.shared
     @Environment(\.dismiss) private var dismiss
     @Namespace private var bookNamespace
 
     @State private var route: BookRoute?
+    @State private var openedSharedBook: CloudBookManager.SharedBookRef?
     @State private var showNewBook = false
     @State private var newBookTitle = ""
     @State private var pressedRouteID: String?
@@ -251,7 +258,7 @@ struct LibraryView: View {
         }
     }
 
-    /// Shelf entries: master roll, user books, then the "new book" slot.
+    /// Local shelf: master roll, user books, then the "new book" slot.
     private var shelfItems: [ShelfItem] {
         var items: [ShelfItem] = [
             .allFrames(count: store.shots.count,
@@ -269,9 +276,21 @@ struct LibraryView: View {
         return items
     }
 
+    private var sharedShelfItems: [ShelfItem] {
+        cloud.sharedBooks.map { .shared($0) }
+    }
+
     private var shelves: [[ShelfItem]] {
-        stride(from: 0, to: shelfItems.count, by: booksPerShelf).map { start in
-            Array(shelfItems[start..<min(start + booksPerShelf, shelfItems.count)])
+        chunked(shelfItems)
+    }
+
+    private var sharedShelves: [[ShelfItem]] {
+        chunked(sharedShelfItems)
+    }
+
+    private func chunked(_ items: [ShelfItem]) -> [[ShelfItem]] {
+        stride(from: 0, to: items.count, by: booksPerShelf).map { start in
+            Array(items[start..<min(start + booksPerShelf, items.count)])
         }
     }
 
@@ -285,7 +304,7 @@ struct LibraryView: View {
                     .padding(.horizontal, 20)
                     .padding(.top, 14)
                     .padding(.bottom, 6)
-                    .opacity(route == nil ? 1 : 0)
+                    .opacity(route == nil && openedSharedBook == nil ? 1 : 0)
 
                 Text("TAP A COVER TO OPEN")
                     .font(.system(size: 8, weight: .bold, design: .monospaced))
@@ -293,41 +312,38 @@ struct LibraryView: View {
                     .foregroundColor(.white.opacity(0.28))
                     .frame(maxWidth: .infinity)
                     .padding(.bottom, 10)
-                    .opacity(route == nil ? 1 : 0)
+                    .opacity(route == nil && openedSharedBook == nil ? 1 : 0)
 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 0) {
                         ForEach(Array(shelves.enumerated()), id: \.offset) { _, row in
-                            ShelfRow(
-                                items: row,
-                                accent: accent,
-                                namespace: bookNamespace,
-                                activeRouteID: route?.id,
-                                pressedRouteID: pressedRouteID,
-                                onPress: { pressedRouteID = $0 },
-                                onOpen: openBook,
-                                onNew: {
-                                    newBookTitle = ""
-                                    showNewBook = true
-                                },
-                                onDelete: { id in
-                                    if let book = store.books.first(where: { $0.id == id }) {
-                                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                            store.deleteBook(book)
-                                        }
-                                    }
-                                }
-                            )
+                            shelfRow(for: row)
+                        }
+
+                        // Books others invited you into — same shelf language, own ledges
+                        if !sharedShelves.isEmpty {
+                            Text("SHARED WITH ME")
+                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                                .tracking(3)
+                                .foregroundColor(.white.opacity(0.4))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 22)
+                                .padding(.top, 10)
+                                .padding(.bottom, 8)
+
+                            ForEach(Array(sharedShelves.enumerated()), id: \.offset) { _, row in
+                                shelfRow(for: row)
+                            }
                         }
                     }
                     .padding(.top, 8)
                     .padding(.bottom, 36)
                 }
-                .opacity(route == nil ? 1 : 0)
-                .allowsHitTesting(route == nil)
+                .opacity(route == nil && openedSharedBook == nil ? 1 : 0)
+                .allowsHitTesting(route == nil && openedSharedBook == nil)
             }
 
-            // Opened book overlays the shelf with a cover-zoom, iBooks-style
+            // Opened local book overlays the shelf with a cover-zoom, iBooks-style
             if let route = route {
                 PhotoBookView(
                     store: store,
@@ -348,6 +364,10 @@ struct LibraryView: View {
                 .zIndex(2)
             }
         }
+        .onAppear { cloud.refreshSharedBooks() }
+        .fullScreenCover(item: $openedSharedBook) { ref in
+            SharedBookView(bookRef: ref, store: store)
+        }
         .alert("New Book", isPresented: $showNewBook) {
             TextField("Title (e.g. Big Sur Trip)", text: $newBookTitle)
             Button("Create") { store.createBook(title: newBookTitle) }
@@ -358,11 +378,45 @@ struct LibraryView: View {
         .statusBarHidden(true)
     }
 
-    /// Entries shown in the open-book shelf rail (no "new book" slot).
+    private func shelfRow(for row: [ShelfItem]) -> some View {
+        ShelfRow(
+            items: row,
+            accent: accent,
+            namespace: bookNamespace,
+            activeRouteID: route?.id,
+            pressedRouteID: pressedRouteID,
+            onPress: { pressedRouteID = $0 },
+            onOpen: handleOpen,
+            onNew: {
+                newBookTitle = ""
+                showNewBook = true
+            },
+            onDelete: { id in
+                if let book = store.books.first(where: { $0.id == id }) {
+                    withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                        store.deleteBook(book)
+                    }
+                }
+            }
+        )
+    }
+
+    private func handleOpen(_ item: ShelfItem) {
+        if case .shared(let ref) = item {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            openedSharedBook = ref
+            return
+        }
+        openBook(item)
+    }
+
+    /// Entries shown in the open-book shelf rail (local albums only).
     private var openableShelfItems: [ShelfItem] {
         shelfItems.filter {
-            if case .newBook = $0 { return false }
-            return true
+            switch $0 {
+            case .newBook, .shared: return false
+            default: return true
+            }
         }
     }
 
@@ -429,7 +483,7 @@ struct LibraryView: View {
                     .font(.system(size: 15, weight: .semibold, design: .monospaced))
                     .tracking(4)
                     .foregroundColor(.white.opacity(0.9))
-                Text("\(store.books.count + 1) BOOKS  ·  \(store.shots.count) FRAMES")
+                Text(librarySubtitle)
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .tracking(2)
                     .foregroundColor(.white.opacity(0.35))
@@ -452,18 +506,29 @@ struct LibraryView: View {
             }
         }
     }
+
+    private var librarySubtitle: String {
+        let local = store.books.count + 1
+        let shared = cloud.sharedBooks.count
+        if shared > 0 {
+            return "\(local) BOOKS  ·  \(shared) SHARED  ·  \(store.shots.count) FRAMES"
+        }
+        return "\(local) BOOKS  ·  \(store.shots.count) FRAMES"
+    }
 }
 
 // MARK: - Shelf data
 enum ShelfItem: Identifiable {
     case allFrames(count: Int, cover: UIImage?)
     case book(id: UUID, title: String, count: Int, cover: UIImage?)
+    case shared(CloudBookManager.SharedBookRef)
     case newBook
 
     var id: String {
         switch self {
         case .allFrames: return "all-frames"
         case .book(let id, _, _, _): return id.uuidString
+        case .shared(let ref): return "shared-\(ref.id)"
         case .newBook: return "new-book"
         }
     }
@@ -472,7 +537,7 @@ enum ShelfItem: Identifiable {
         switch self {
         case .allFrames: return .allFrames
         case .book(let id, _, _, _): return .book(id)
-        case .newBook: return nil
+        case .shared, .newBook: return nil
         }
     }
 
@@ -480,6 +545,7 @@ enum ShelfItem: Identifiable {
         switch self {
         case .allFrames: return "ALL FRAMES"
         case .book(_, let title, _, _): return title.uppercased()
+        case .shared(let ref): return ref.title.uppercased()
         case .newBook: return "NEW BOOK"
         }
     }
@@ -488,7 +554,7 @@ enum ShelfItem: Identifiable {
         switch self {
         case .allFrames(let count, _): return count
         case .book(_, _, let count, _): return count
-        case .newBook: return 0
+        case .shared, .newBook: return 0
         }
     }
 
@@ -496,13 +562,23 @@ enum ShelfItem: Identifiable {
         switch self {
         case .allFrames(_, let cover): return cover
         case .book(_, _, _, let cover): return cover
-        case .newBook: return nil
+        case .shared, .newBook: return nil
         }
     }
 
     var isMaster: Bool {
         if case .allFrames = self { return true }
         return false
+    }
+
+    var isShared: Bool {
+        if case .shared = self { return true }
+        return false
+    }
+
+    var subtitle: String? {
+        if case .shared = self { return "SHARED" }
+        return nil
     }
 }
 
@@ -528,7 +604,7 @@ struct AlbumShelfRail: View {
                         Button {
                             onSelect(item)
                         } label: {
-                            BookCover(
+                                            BookCover(
                                 title: item.title,
                                 count: item.count,
                                 coverImage: item.coverImage,
@@ -537,7 +613,9 @@ struct AlbumShelfRail: View {
                                 matchID: "rail-\(item.id)",
                                 namespace: namespace,
                                 isRailMiniature: true,
-                                coverHeight: 64
+                                coverHeight: 64,
+                                subtitleOverride: item.subtitle,
+                                isShared: item.isShared
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 3)
@@ -627,7 +705,9 @@ struct ShelfRow: View {
                         accent: accent,
                         isMaster: item.isMaster,
                         matchID: item.id,
-                        namespace: namespace
+                        namespace: namespace,
+                        subtitleOverride: item.subtitle,
+                        isShared: item.isShared
                     )
                     .scaleEffect(isPressed ? 0.94 : 1.0)
                     .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isPressed)
@@ -730,6 +810,8 @@ struct BookCover: View {
     var coverHeight: CGFloat = 168
     /// Destination of a shelf→open morph (hero cover). Shelf slots leave this false.
     var isOpenDestination: Bool = false
+    var subtitleOverride: String? = nil
+    var isShared: Bool = false
 
     var body: some View {
         coverBody
@@ -740,10 +822,11 @@ struct BookCover: View {
             .modifier(BookCoverMatchModifier(
                 matchID: matchID,
                 namespace: namespace,
-                enabled: !isRailMiniature,
+                // Shared books open via fullScreenCover (cloud viewer), not cover morph
+                enabled: !isRailMiniature && !isShared,
                 isSource: !isOpenDestination
             ))
-            .accessibilityLabel("\(title), \(count) frames")
+            .accessibilityLabel(isShared ? "\(title), shared book" : "\(title), \(count) frames")
     }
 
     private var coverBody: some View {
@@ -779,13 +862,16 @@ struct BookCover: View {
                         ZStack {
                             LinearGradient(
                                 colors: [
-                                    isMaster ? Color(hex: "2a2418") : Color(hex: "1c1c1c"),
+                                    isMaster ? Color(hex: "2a2418")
+                                        : isShared ? Color(hex: "1a2228")
+                                        : Color(hex: "1c1c1c"),
                                     Color(hex: "0e0e0e")
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             )
-                            Image(systemName: isMaster ? "camera.aperture" : "book.closed")
+                            Image(systemName: isMaster ? "camera.aperture"
+                                  : isShared ? "person.2" : "book.closed")
                                 .font(.system(size: isRailMiniature ? 14 : 26, weight: .ultraLight))
                                 .foregroundColor(.white.opacity(0.22))
                         }
@@ -801,9 +887,9 @@ struct BookCover: View {
                         .tracking(isRailMiniature ? 0.5 : 1.2)
                         .lineLimit(2)
                         .multilineTextAlignment(.center)
-                        .foregroundColor(isMaster ? accent : .white.opacity(0.92))
+                        .foregroundColor(isMaster || isShared ? accent : .white.opacity(0.92))
                     if !isRailMiniature {
-                        Text("\(count)")
+                        Text(subtitleOverride ?? "\(count)")
                             .font(.system(size: 8, weight: .medium, design: .monospaced))
                             .foregroundColor(.white.opacity(0.45))
                     }
@@ -928,6 +1014,9 @@ struct PhotoBookView: View {
     @State private var contentRevealed = false
     /// Rail taps should swap albums without replaying the shelf→cover open morph
     @State private var skipNextOpenMorph = false
+    @State private var shareContext: CloudBookManager.ShareContext?
+    @State private var isPreparingShare = false
+    @State private var shareError: String?
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
 
@@ -1024,6 +1113,17 @@ struct PhotoBookView: View {
                 Lightbox(image: store.image(for: shot)) { zoomedShot = nil }
             }
         }
+        .sheet(item: $shareContext) { context in
+            CloudSharingSheet(share: context.share, container: context.container, title: context.title)
+        }
+        .alert("Couldn't share book", isPresented: Binding(
+            get: { shareError != nil },
+            set: { if !$0 { shareError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(shareError ?? "")
+        }
         .onAppear { revealContent(after: 0.3) }
         .onChange(of: bookID) { _, _ in
             currentPage = 0
@@ -1044,6 +1144,21 @@ struct PhotoBookView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.9)) {
                 contentRevealed = true
+            }
+        }
+    }
+
+    // Upload the book to iCloud and show the system invite sheet
+    private func prepareShare() {
+        guard let book = book, !isPreparingShare else { return }
+        isPreparingShare = true
+        CloudBookManager.shared.share(book: book, store: store) { result in
+            isPreparingShare = false
+            switch result {
+            case .success(let context):
+                shareContext = context
+            case .failure(let error):
+                shareError = error.localizedDescription
             }
         }
     }
@@ -1104,6 +1219,31 @@ struct PhotoBookView: View {
             }
 
             Spacer()
+
+            // Invite people into this book (user books only — not the master roll)
+            if book != nil {
+                Button(action: prepareShare) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.black.opacity(0.5))
+                            .frame(width: 34, height: 34)
+                        Circle()
+                            .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
+                            .frame(width: 34, height: 34)
+                        if isPreparingShare {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                                .tint(.white.opacity(0.8))
+                        } else {
+                            Image(systemName: "person.crop.circle.badge.plus")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                    }
+                }
+                .disabled(isPreparingShare)
+                .padding(.trailing, 6)
+            }
 
             Button(action: close) {
                 Text("SHELF")
