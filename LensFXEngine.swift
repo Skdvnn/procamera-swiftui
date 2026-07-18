@@ -18,6 +18,9 @@ enum LensFXMode: Int, CaseIterable {
     case vhs          // Chromatic aberration + scanline overlay
     case kaleido      // Six-way kaleidoscope
     case pixel8       // Chunky 8-bit pixellation
+    case toon         // Comic-book ink and halftone
+    case mirror       // Symmetry down the middle
+    case negative     // Inverted film negative
 
     var name: String {
         switch self {
@@ -32,6 +35,9 @@ enum LensFXMode: Int, CaseIterable {
         case .vhs: return "VHS"
         case .kaleido: return "Kaleido"
         case .pixel8: return "8-Bit"
+        case .toon: return "Comic"
+        case .mirror: return "Mirror"
+        case .negative: return "Negative"
         }
     }
 
@@ -48,6 +54,9 @@ enum LensFXMode: Int, CaseIterable {
         case .vhs: return "PAL"
         case .kaleido: return "x6"
         case .pixel8: return "8BIT"
+        case .toon: return "INK"
+        case .mirror: return "SYM"
+        case .negative: return "NEG"
         }
     }
 }
@@ -96,6 +105,12 @@ final class LensFXEngine {
             return applyKaleido(to: image, time: time)
         case .pixel8:
             return applyPixel8(to: image)
+        case .toon:
+            return applySimpleFilter(name: "CIComicEffect", to: image)
+        case .mirror:
+            return applyMirror(to: image)
+        case .negative:
+            return applyNegative(to: image)
         }
     }
 
@@ -405,6 +420,49 @@ final class LensFXEngine {
         posterize.inputImage = output
         posterize.levels = 5
         if let result = posterize.outputImage { output = result }
+
+        return output.cropped(to: extent)
+    }
+
+    // MARK: - Mirror symmetry
+
+    private func applyMirror(to image: CIImage) -> CIImage {
+        let extent = image.extent
+
+        // Flip horizontally in place: x' = (maxX + minX) - x
+        let flip = CGAffineTransform(a: -1, b: 0, c: 0, d: 1,
+                                     tx: extent.maxX + extent.minX, ty: 0)
+        let flipped = image.transformed(by: flip)
+
+        // Right half becomes the reflection of the left half
+        let rightHalf = CGRect(x: extent.midX, y: extent.minY,
+                               width: extent.width / 2, height: extent.height)
+
+        let composite = CIFilter.sourceOverCompositing()
+        composite.inputImage = flipped.cropped(to: rightHalf)
+        composite.backgroundImage = image
+
+        return (composite.outputImage ?? image).cropped(to: extent)
+    }
+
+    // MARK: - Film negative
+
+    private func applyNegative(to image: CIImage) -> CIImage {
+        let extent = image.extent
+        var output = image
+
+        let invert = CIFilter.colorInvert()
+        invert.inputImage = output
+        if let result = invert.outputImage { output = result }
+
+        // Slight orange bias like a real color negative base
+        let tint = CIFilter.colorMatrix()
+        tint.inputImage = output
+        tint.rVector = CIVector(x: 1.0, y: 0, z: 0, w: 0)
+        tint.gVector = CIVector(x: 0, y: 0.92, z: 0, w: 0)
+        tint.bVector = CIVector(x: 0, y: 0, z: 0.82, w: 0)
+        tint.biasVector = CIVector(x: 0.06, y: 0.03, z: 0, w: 0)
+        if let result = tint.outputImage { output = result }
 
         return output.cropped(to: extent)
     }

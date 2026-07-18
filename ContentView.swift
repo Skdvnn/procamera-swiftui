@@ -210,7 +210,6 @@ struct ContentView: View {
 
     var body: some View {
         GeometryReader { geo in
-            let screenWidth = geo.size.width
             let safeTop = geo.safeAreaInsets.top
             let safeBottom = geo.safeAreaInsets.bottom
 
@@ -311,7 +310,8 @@ struct ContentView: View {
                                 Spacer()
                                 RefractiveGlassInfoBar(
                                     iso: isoValue,
-                                    shutterSpeed: computeShutterSpeed(),
+                                    shutterSpeed: shutterSpeeds[shutterSpeedIndex],
+                                    histogram: camera.histogramBins,
                                     aperture: apertureValue,
                                     photoCount: photoCount,
                                     exposureValue: exposureValue,
@@ -541,10 +541,10 @@ struct ContentView: View {
             syncFilmFilter(filmFilter)
             camera.selectedLensFX = lensFX
         }
-        .onChange(of: filmFilter) { newFilter in
+        .onChange(of: filmFilter) { _, newFilter in
             syncFilmFilter(newFilter)
         }
-        .onChange(of: lensFX) { newFX in
+        .onChange(of: lensFX) { _, newFX in
             camera.selectedLensFX = newFX
         }
     }
@@ -553,17 +553,11 @@ struct ContentView: View {
         switch filter {
         case .none: camera.selectedFilmFilter = .none
         case .portra400: camera.selectedFilmFilter = .portra400
-        case .kodakGold: camera.selectedFilmFilter = .ektar100
+        case .kodakGold: camera.selectedFilmFilter = .kodakGold
         case .trix400: camera.selectedFilmFilter = .trix400
         case .velvia50: camera.selectedFilmFilter = .velvia50
         case .cinestill800: camera.selectedFilmFilter = .cinestill800
         }
-    }
-
-    // MARK: - Helpers
-    private func computeShutterSpeed() -> String {
-        let speed = Int(1600 / pow(2, exposureValue))
-        return "1/\(max(speed, 1))"
     }
 
     private func handleFocusTap(_ point: CGPoint) {
@@ -674,6 +668,7 @@ struct ViewfinderVignette: View {
 struct RefractiveGlassInfoBar: View {
     let iso: Int
     let shutterSpeed: String
+    var histogram: [Float] = []
     let aperture: Float
     let photoCount: Int
     let exposureValue: Float
@@ -682,7 +677,7 @@ struct RefractiveGlassInfoBar: View {
     var body: some View {
         HStack(spacing: 10) {
             // Histogram in glass container
-            GlassHistogram(exposureValue: exposureValue)
+            GlassHistogram(exposureValue: exposureValue, bins: histogram)
                 .frame(width: 70, height: 40)
 
             // Format info
@@ -754,6 +749,7 @@ struct RefractiveGlassInfoBar: View {
 // MARK: - Glass Histogram (Clean container)
 struct GlassHistogram: View {
     let exposureValue: Float
+    var bins: [Float] = []
 
     var body: some View {
         ZStack {
@@ -761,19 +757,26 @@ struct GlassHistogram: View {
             RoundedRectangle(cornerRadius: 6)
                 .fill(Color.black.opacity(0.5))
 
-            // Histogram bars
+            // Histogram bars - real luminance bins from the camera feed,
+            // synthetic EV-shifted curve until the first frame arrives
             Canvas { ctx, size in
-                let ev = CGFloat((exposureValue + 2) / 4)
                 let padding: CGFloat = 4
-                let barWidth = (size.width - padding * 2) / 40
+                let barCount = bins.isEmpty ? 40 : bins.count
+                let barWidth = (size.width - padding * 2) / CGFloat(barCount)
 
-                for i in 0..<40 {
+                for i in 0..<barCount {
                     let x = padding + CGFloat(i) * barWidth
-                    let n = CGFloat(i) / 40
-                    let shifted = n - (ev - 0.5) * 0.4
-                    var h = exp(-pow((shifted - 0.3) * 4, 2)) * 0.85
-                    h += exp(-pow((shifted - 0.7) * 5, 2)) * 0.6
-                    h = min(max(h, 0.03), 1.0)
+                    let h: CGFloat
+                    if bins.isEmpty {
+                        let ev = CGFloat((exposureValue + 2) / 4)
+                        let n = CGFloat(i) / CGFloat(barCount)
+                        let shifted = n - (ev - 0.5) * 0.4
+                        var synth = exp(-pow((shifted - 0.3) * 4, 2)) * 0.85
+                        synth += exp(-pow((shifted - 0.7) * 5, 2)) * 0.6
+                        h = min(max(synth, 0.03), 1.0)
+                    } else {
+                        h = min(max(CGFloat(bins[i]), 0.03), 1.0)
+                    }
                     let barHeight = (size.height - padding * 2) * h
                     let rect = CGRect(
                         x: x,
@@ -2634,9 +2637,7 @@ struct ISOScrubberVertical: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            let height = geo.size.height
-
+        GeometryReader { _ in
             ZStack {
                 // Background
                 RoundedRectangle(cornerRadius: 10)
@@ -2754,9 +2755,7 @@ struct FStopScrubber: View {
     }
 
     var body: some View {
-        GeometryReader { geo in
-            let size = geo.size
-
+        GeometryReader { _ in
             ZStack {
                 // Background
                 RoundedRectangle(cornerRadius: 10)

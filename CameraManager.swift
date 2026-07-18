@@ -36,6 +36,10 @@ class CameraManager: NSObject, ObservableObject {
     private var lastPreviewFrameTime: CFAbsoluteTime = 0
     private let previewFrameInterval: CFAbsoluteTime = 1.0 / 30.0  // 30fps max
 
+    // Live histogram - real luminance bins computed from preview frames
+    @Published var histogramBins: [Float] = []
+    private var lastHistogramTime: CFAbsoluteTime = 0
+
     // Capture format types
     enum CaptureFormatType: Int, CaseIterable {
         case heic = 0
@@ -63,6 +67,7 @@ class CameraManager: NSObject, ObservableObject {
         case none = 0
         case portra400      // Warm, natural skin tones
         case ektar100       // Vivid, saturated colors
+        case kodakGold      // Golden warmth, gentle contrast
         case trix400        // Classic B&W
         case cinestill800   // Cinematic with halation
         case velvia50       // Ultra-vivid landscape
@@ -72,6 +77,7 @@ class CameraManager: NSObject, ObservableObject {
             case .none: return "None"
             case .portra400: return "Portra"
             case .ektar100: return "Ektar"
+            case .kodakGold: return "Gold"
             case .trix400: return "Tri-X"
             case .cinestill800: return "Cine"
             case .velvia50: return "Velvia"
@@ -190,7 +196,6 @@ class CameraManager: NSObject, ObservableObject {
         // Add photo output
         if session.canAddOutput(photoOutput) {
             session.addOutput(photoOutput)
-            photoOutput.isHighResolutionCaptureEnabled = true
             photoOutput.maxPhotoQualityPrioritization = .quality
         } else {
             DispatchQueue.main.async { self.error = .cannotAddOutput }
@@ -210,8 +215,21 @@ class CameraManager: NSObject, ObservableObject {
         // Select format with longest exposure that still supports custom exposure mode
         selectBestFormatForLongExposure(device: videoDevice)
 
+        // Request full-resolution stills for the final active format
+        updateMaxPhotoDimensions(for: videoDevice)
+
         session.commitConfiguration()
         startSession()
+    }
+
+    // Modern replacement for isHighResolutionCaptureEnabled: pick the largest
+    // photo dimensions the active format supports. Must be re-applied whenever
+    // the device or its active format changes.
+    private func updateMaxPhotoDimensions(for device: AVCaptureDevice) {
+        let supported = device.activeFormat.supportedMaxPhotoDimensions
+        if let best = supported.max(by: { Int($0.width) * Int($0.height) < Int($1.width) * Int($1.height) }) {
+            photoOutput.maxPhotoDimensions = best
+        }
     }
 
     private func updateDeviceCapabilities(device: AVCaptureDevice) {
@@ -689,6 +707,7 @@ class CameraManager: NSObject, ObservableObject {
 
                     // Select best format for this lens
                     self.selectBestFormatForLongExposure(device: newDevice)
+                    self.updateMaxPhotoDimensions(for: newDevice)
 
                     // Apply zoom within this lens
                     try newDevice.lockForConfiguration()
@@ -820,6 +839,26 @@ class CameraManager: NSObject, ObservableObject {
             vibrance.amount = 0.3
             if let result = vibrance.outputImage { outputImage = result }
 
+        case .kodakGold:
+            // Golden hour in a canister: warm cast, gentle contrast, soft lift
+            let colorControls = CIFilter.colorControls()
+            colorControls.inputImage = outputImage
+            colorControls.saturation = 1.08
+            colorControls.contrast = 1.02
+            colorControls.brightness = 0.03
+            if let result = colorControls.outputImage { outputImage = result }
+
+            let tempTint = CIFilter.temperatureAndTint()
+            tempTint.inputImage = outputImage
+            tempTint.neutral = CIVector(x: 6500, y: 0)
+            tempTint.targetNeutral = CIVector(x: 5400, y: 12)
+            if let result = tempTint.outputImage { outputImage = result }
+
+            let vibrance = CIFilter.vibrance()
+            vibrance.inputImage = outputImage
+            vibrance.amount = 0.15
+            if let result = vibrance.outputImage { outputImage = result }
+
         case .trix400:
             let noir = CIFilter.photoEffectNoir()
             noir.inputImage = outputImage
@@ -912,6 +951,32 @@ class CameraManager: NSObject, ObservableObject {
             let vibrance = CIFilter.vibrance()
             vibrance.inputImage = outputImage
             vibrance.amount = 0.3
+            if let result = vibrance.outputImage {
+                outputImage = result
+            }
+
+        case .kodakGold:
+            // Golden hour in a canister: warm cast, gentle contrast, soft lift
+            let colorControls = CIFilter.colorControls()
+            colorControls.inputImage = outputImage
+            colorControls.saturation = 1.08
+            colorControls.contrast = 1.02
+            colorControls.brightness = 0.03
+            if let result = colorControls.outputImage {
+                outputImage = result
+            }
+
+            let tempTint = CIFilter.temperatureAndTint()
+            tempTint.inputImage = outputImage
+            tempTint.neutral = CIVector(x: 6500, y: 0)
+            tempTint.targetNeutral = CIVector(x: 5400, y: 12)
+            if let result = tempTint.outputImage {
+                outputImage = result
+            }
+
+            let vibrance = CIFilter.vibrance()
+            vibrance.inputImage = outputImage
+            vibrance.amount = 0.15
             if let result = vibrance.outputImage {
                 outputImage = result
             }
@@ -1010,6 +1075,50 @@ class CameraManager: NSObject, ObservableObject {
         downscaled(image, longEdge: 1280)
     }
 
+    // MARK: - Live Histogram
+
+    // Computes 40 luminance bins from the current frame via CIAreaHistogram
+    private func updateHistogram(from image: CIImage) {
+        let binCount = 40
+
+        // Histogram doesn't need resolution — sample a small version
+        let small = downscaled(image, longEdge: 256)
+
+        guard let filter = CIFilter(name: "CIAreaHistogram") else { return }
+        filter.setValue(small, forKey: kCIInputImageKey)
+        filter.setValue(CIVector(cgRect: small.extent), forKey: "inputExtent")
+        filter.setValue(binCount, forKey: "inputCount")
+        filter.setValue(12.0, forKey: "inputScale")
+
+        guard let output = filter.outputImage else { return }
+
+        var bitmap = [UInt8](repeating: 0, count: binCount * 4)
+        ciContext.render(
+            output,
+            toBitmap: &bitmap,
+            rowBytes: binCount * 4,
+            bounds: CGRect(x: 0, y: 0, width: binCount, height: 1),
+            format: .RGBA8,
+            colorSpace: nil
+        )
+
+        var bins = [Float](repeating: 0, count: binCount)
+        for i in 0..<binCount {
+            let r = Float(bitmap[i * 4])
+            let g = Float(bitmap[i * 4 + 1])
+            let b = Float(bitmap[i * 4 + 2])
+            bins[i] = (r + g + b) / (3.0 * 255.0)
+        }
+
+        // Normalize so the tallest bin fills the display
+        let peak = max(bins.max() ?? 1, 0.001)
+        let normalized = bins.map { $0 / peak }
+
+        DispatchQueue.main.async {
+            self.histogramBins = normalized
+        }
+    }
+
     // MARK: - Lens FX Processing
 
     // Apply the selected lens FX to a captured still (time 0 = static variant of animated effects)
@@ -1078,7 +1187,7 @@ class CameraManager: NSObject, ObservableObject {
         }
 
         settings.flashMode = flashMode
-        settings.isHighResolutionPhotoEnabled = true
+        settings.maxPhotoDimensions = photoOutput.maxPhotoDimensions
 
         photoOutput.capturePhoto(with: settings, delegate: self)
     }
@@ -1130,6 +1239,15 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         // Convert sample buffer to CIImage
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
+
+        // Update the real histogram a few times a second
+        if !isLongExposureCapturing {
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastHistogramTime >= 0.25 {
+                lastHistogramTime = now
+                updateHistogram(from: ciImage)
+            }
+        }
 
         // Handle live preview processing (film filter and/or lens FX, not during long exposure)
         let wantsLiveProcessing = selectedFilmFilter != .none || selectedLensFX != .none
