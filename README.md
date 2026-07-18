@@ -6,14 +6,17 @@ A professional-grade camera app built with SwiftUI featuring analog-style contro
 
 - **Analog Display Panel** - Dual dial interface with focus and exposure controls
 - **Rich Metal Shutter Button** - Tactile press feedback with gradient shaders
-- **Aperture Dial** - Rotary f-stop selector (f/2.8 - f/16)
-- **Lens Ring Zoom** - Swipe-based focal length control (24-105mm)
+- **Lens Ring Zoom** - Swipe-based focal length control across available lenses
 - **Flash Control** - Cycle through Off/On/Auto modes with visual indicators
 - **White Balance Presets** - Auto, Sunny, Cloudy, Shade, Lamp, Fluorescent
-- **ISO Control** - Quick-tap cycling through common values (100-3200)
-- **Live Histogram** - Real-time exposure feedback in glass container
+- **ISO / Shutter Controls** - Manual exposure wired to AVFoundation
+- **Live Histogram** - Real luminance bins from the camera feed
 - **Lens FX** - Live GPU shader effects on the camera feed: Liquid glass distortion, Chrome, Instant film, Dream glow, Fisheye, Thermal, X-Ray, VHS (chromatic aberration + scanlines), Kaleidoscope, 8-Bit, Comic, Mirror, and Negative — baked into captured photos
+- **Film Simulation** - Portra, Gold, Tri-X, Velvia, CineStill live filters
 - **Manual Focus** - Precise focus control with haptic feedback
+- **Macro Mode** - Near-range autofocus restriction
+- **RAW+HEIC Capture** - Dual capture with DNG saved alongside a viewable preview
+- **Long Exposure** - Computational multi-frame capture with viewfinder progress
 - **Timer Support** - 3s and 10s countdown modes
 - **Grid Overlay** - Rule of thirds composition guide
 - **Full-Bleed Mode** - Swipe the top dial panel up or the bottom controls down to collapse them into compact decks and give the viewfinder the screen
@@ -27,7 +30,7 @@ The app uses a cohesive design system (`DS`) featuring:
 - **Strokes**: Stacked inner/outer strokes for beveled effect
 - **Typography**: SF Mono for all numeric displays
 - **Radius**: Consistent 12px corners on controls
-- **Margins**: 20px page wrapper for balanced layout
+- **Margins**: 10pt page wrapper for balanced layout
 
 ## Requirements
 
@@ -38,17 +41,17 @@ The app uses a cohesive design system (`DS`) featuring:
 ## Project Structure
 
 ```
-SwiftUI/
-├── ContentView.swift       # Main UI and all control components
-├── CameraManager.swift     # AVFoundation camera interface
-├── AnalogGaugeView.swift   # Focus/Exposure dial components
-├── CameraPreviewView.swift # Live camera preview
-├── ViewfinderOverlay.swift # Grid and vignette overlays
-├── LensFXEngine.swift      # Live GPU lens effects (liquid, chrome, VHS...)
-├── ShaderViews.swift       # Metal shader integrations
-├── Shaders.metal           # Custom GPU shaders
-├── UIValidation.swift      # Debug validation tests
-└── .swiftlint.yml          # Code style configuration
+├── ContentView.swift           # Main UI and control components
+├── CameraManager.swift         # AVFoundation camera interface
+├── LensFXEngine.swift          # Live GPU effects processor
+├── PhotoBook.swift             # Field Book gallery + library
+├── AnalogGaugeView.swift       # Focus/Exposure dial components
+├── FilteredCameraPreview.swift # Metal-backed filtered preview
+├── CameraPreviewView.swift     # Live camera preview
+├── ViewfinderOverlay.swift     # Grid, film, and FX overlays
+├── ShaderViews.swift           # Metal shader integrations
+├── Shaders.metal               # Custom GPU shaders
+└── .swiftlint.yml              # Code style configuration
 ```
 
 ## Controls Reference
@@ -57,13 +60,14 @@ SwiftUI/
 |---------|-------------|----------|
 | Focus Dial | Drag/Double-tap | Manual focus / Reset to center |
 | Exposure Dial | Drag/Double-tap | EV compensation / Reset to 0 |
-| Aperture Dial | Drag/Tap | Select f-stop |
 | Lens Ring | Swipe left/right | Zoom in/out |
 | Shutter | Tap | Capture photo |
 | Flash | Tap | Cycle Off/On/Auto |
 | WB | Tap | Cycle white balance presets |
-| ISO | Tap | Cycle ISO values |
-| Thumbnail | Tap | View last captured photo |
+| ISO | Drag | Set ISO |
+| Format | Tap | Cycle HEIC / JPG / RAW |
+| Macro | Tap | Near-range AF |
+| Thumbnail | Tap | Open Field Book |
 
 ## Building
 

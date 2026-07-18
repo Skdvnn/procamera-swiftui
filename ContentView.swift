@@ -260,6 +260,10 @@ struct ContentView: View {
                         onMacroTap: {
                             Haptics.click()
                             macroEnabled.toggle()
+                            camera.setMacroEnabled(macroEnabled)
+                            if macroEnabled {
+                                isManualFocusEnabled = false
+                            }
                         }
                     )
                     .frame(height: topPanelHeight)
@@ -306,6 +310,10 @@ struct ContentView: View {
                                 Text("\(timerCountdown)")
                                     .font(.system(size: 80, weight: .thin, design: .monospaced))
                                     .foregroundColor(.white.opacity(0.9))
+                            }
+
+                            if camera.isLongExposureCapturing {
+                                LongExposureProgressOverlay(progress: camera.longExposureProgress)
                             }
 
                             VStack {
@@ -463,6 +471,10 @@ struct ContentView: View {
                                         ModeButton(isActive: macroEnabled) {
                                             Haptics.click()
                                             macroEnabled.toggle()
+                                            camera.setMacroEnabled(macroEnabled)
+                                            if macroEnabled {
+                                                isManualFocusEnabled = false
+                                            }
                                         }
                                     }
                                     VStack(spacing: 8) {
@@ -629,6 +641,7 @@ struct ContentView: View {
     }
 
     private func captureNow() {
+        isCapturing = true
         Haptics.heavy()
 
         // Check if this is a long exposure (shutter speed index 0-3 = 4s, 2s, 1s, 1/2s)
@@ -658,6 +671,8 @@ struct ContentView: View {
                     lastCapturedImage = img
                     photoCount += 1
                     recordShot(img)
+                    // RAW mode already writes the DNG from CameraManager; still
+                    // save the processed preview so Photos has a viewable sibling.
                     camera.saveToPhotoLibrary(img) { _ in }
                 }
             }
@@ -681,6 +696,41 @@ struct ViewfinderVignette: View {
             startRadius: 100,
             endRadius: 250
         )
+        .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Long Exposure Progress (viewfinder ring during computational LE)
+struct LongExposureProgressOverlay: View {
+    let progress: Float
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.35)
+
+            VStack(spacing: 14) {
+                ZStack {
+                    Circle()
+                        .stroke(Color.white.opacity(0.15), lineWidth: 3)
+                        .frame(width: 72, height: 72)
+                    Circle()
+                        .trim(from: 0, to: CGFloat(max(0, min(1, progress))))
+                        .stroke(Color.white.opacity(0.9), style: StrokeStyle(lineWidth: 3, lineCap: .round))
+                        .frame(width: 72, height: 72)
+                        .rotationEffect(.degrees(-90))
+                        .animation(.linear(duration: 0.1), value: progress)
+
+                    Text("\(Int((progress * 100).rounded()))%")
+                        .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white)
+                }
+
+                Text("LONG EXPOSURE")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .tracking(1.5)
+                    .foregroundColor(.white.opacity(0.7))
+            }
+        }
         .allowsHitTesting(false)
     }
 }
