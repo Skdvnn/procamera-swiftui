@@ -78,6 +78,9 @@ class CameraManager: NSObject, ObservableObject {
     private var longExposureFrameCount: Int = 0
     private var longExposureTargetFrames: Int = 0
     private var longExposureCompletion: ((UIImage?) -> Void)?
+    /// Frozen at shutter so a multi-second LE can't bake a later picker change.
+    private var longExposureFilmFilter: FilmFilter = .none
+    private var longExposureLensFX: LensFXMode = .none
 
     // Film filter types (color grades / stocks — not GPU morph shaders)
     enum FilmFilter: Int, CaseIterable {
@@ -365,11 +368,20 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     // MARK: - Computational Long Exposure
-    func captureLongExposure(durationSeconds: Double, completion: @escaping (UIImage?) -> Void) {
+    func captureLongExposure(
+        durationSeconds: Double,
+        filmFilter: FilmFilter? = nil,
+        lensFX: LensFXMode? = nil,
+        completion: @escaping (UIImage?) -> Void
+    ) {
         guard let device = videoDeviceInput?.device else {
             completion(nil)
             return
         }
+
+        // Freeze selections at shutter — LE can outlive picker changes.
+        longExposureFilmFilter = filmFilter ?? selectedFilmFilter
+        longExposureLensFX = lensFX ?? selectedLensFX
 
         // Get device's actual max exposure duration
         let maxHardwareDuration = CMTimeGetSeconds(device.activeFormat.maxExposureDuration)
@@ -390,6 +402,8 @@ class CameraManager: NSObject, ObservableObject {
         }
 
         let targetDuration = CMTime(seconds: duration, preferredTimescale: 1000000)
+        let captureFilm = longExposureFilmFilter
+        let captureFX = longExposureLensFX
 
         sessionQueue.async {
             do {
@@ -400,7 +414,7 @@ class CameraManager: NSObject, ObservableObject {
                 device.setExposureModeCustom(duration: targetDuration, iso: targetISO) { _ in
                     // Now capture the photo
                     DispatchQueue.main.async {
-                        self.capturePhoto { image in
+                        self.capturePhoto(filmFilter: captureFilm, lensFX: captureFX) { image in
                             // Restore auto exposure or the preview stays at
                             // seconds-per-frame and the camera looks frozen
                             self.resetToAutoExposure()
@@ -1088,7 +1102,18 @@ class CameraManager: NSObject, ObservableObject {
 
     private func applyFilmFilter(_ filmFilter: FilmFilter, to image: UIImage) -> UIImage {
         guard filmFilter != .none else { return image }
-        guard var ciImage = CIImage(image: image) else { return image }
+        // Prefer CIImage(image:) then fall back to CGImage — never silently skip
+        // a requested film bake because the UIImage bridge returned nil.
+        var ciImage: CIImage?
+        if let bridged = CIImage(image: image) {
+            ciImage = bridged
+        } else if let cg = image.cgImage {
+            ciImage = CIImage(cgImage: cg)
+        }
+        guard var ciImage else {
+            print("FilmFilter: BAKE FAILED for \(filmFilter.name) — could not build CIImage")
+            return image
+        }
 
         // Bake UIImage orientation into pixels; CIImage(image:) ignores it
         if image.imageOrientation != .up {
@@ -1593,9 +1618,11 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 
         resetToAutoExposure()
 
-        let captureFilmFilter = selectedFilmFilter
-        let captureLensFX = selectedLensFX
+        // Use shutter-time freeze, not live selected* (user may have changed pickers).
+        let captureFilmFilter = longExposureFilmFilter
+        let captureLensFX = longExposureLensFX
         isBakingStill = true
+        print("LensFX LE bake: fx=\(captureLensFX.name) film=\(captureFilmFilter)")
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }

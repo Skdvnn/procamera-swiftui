@@ -41,12 +41,13 @@ struct ViewfinderOverlay: View {
     @State private var showFilmMenu = false
     @State private var showFXMenu = false
 
+    private let filmAccent = Color(red: 1.0, green: 0.85, blue: 0.35)
+    private let fxAccent = Color(red: 0.55, green: 0.88, blue: 0.95)
+    private let chromeInset: CGFloat = 12
+    private let chromeHit: CGFloat = 44
+
     var body: some View {
         GeometryReader { geo in
-            let width = geo.size.width
-            let height = geo.size.height
-            let inset: CGFloat = 16
-
             ZStack {
                 // Decorative layer — never steal focus/morph gestures
                 ZStack {
@@ -58,7 +59,6 @@ struct ViewfinderOverlay: View {
                     }
 
                     CenterFocusBrackets()
-                        .position(x: width/2, y: height/2)
 
                     if showGrid {
                         GridLines()
@@ -68,87 +68,99 @@ struct ViewfinderOverlay: View {
                         AspectRatioMask(mode: aspectRatio, size: geo.size)
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .allowsHitTesting(false)
 
-                // Top left - Aspect ratio button (DSLR-style)
-                Button(action: {
+            }
+            // Overlay chrome keeps hit targets to control bounds only.
+            // (`.position()` expands layout/hit area to the full GeometryReader.)
+            .overlay(alignment: .topLeading) {
+                vfChromeButton(active: false, accent: .white) {
+                    Text(aspectRatio.label)
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.9))
+                } action: {
                     VFHaptics.click()
                     aspectRatio = aspectRatio.next
-                }) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.black.opacity(0.4))
-                            .frame(width: 32, height: 32)
-                        Text(aspectRatio.label)
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.9))
-                    }
                 }
-                .position(x: inset + 20, y: inset + 20)
-
-                // Top right - Film stocks (color grades)
-                Button(action: {
-                    VFHaptics.click()
-                    showFXMenu = false
-                    showFilmMenu.toggle()
-                }) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.black.opacity(0.4))
-                            .frame(width: 32, height: 32)
+                .padding(chromeInset)
+            }
+            .overlay(alignment: .topTrailing) {
+                VStack(spacing: 8) {
+                    vfChromeButton(active: filmFilter != .none, accent: filmAccent) {
                         Image(systemName: "film")
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(filmFilter == .none ? .white.opacity(0.8) : Color(red: 1.0, green: 0.85, blue: 0.35))
+                            .foregroundColor(filmFilter == .none ? .white.opacity(0.8) : filmAccent)
+                    } action: {
+                        VFHaptics.click()
+                        showFXMenu = false
+                        showFilmMenu.toggle()
                     }
-                }
-                .position(x: width - inset - 20, y: inset + 20)
 
-                // Below film — morphic / shader Lens FX
-                Button(action: {
-                    VFHaptics.click()
-                    showFilmMenu = false
-                    showFXMenu.toggle()
-                }) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.black.opacity(0.4))
-                            .frame(width: 32, height: 32)
+                    vfChromeButton(active: lensFX != .none, accent: fxAccent) {
                         Image(systemName: "water.waves")
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(lensFX == .none ? .white.opacity(0.8) : Color(red: 0.55, green: 0.88, blue: 0.95))
+                            .foregroundColor(lensFX == .none ? .white.opacity(0.8) : fxAccent)
+                    } action: {
+                        VFHaptics.click()
+                        showFilmMenu = false
+                        showFXMenu.toggle()
                     }
                 }
-                .position(x: width - inset - 20, y: inset + 60)
-
-                if showFilmMenu {
+                .padding(chromeInset)
+            }
+            .overlay {
+                if showFilmMenu || showFXMenu {
                     Color.clear
                         .contentShape(Rectangle())
                         .onTapGesture {
                             showFilmMenu = false
-                        }
-
-                    LeicaFilmPicker(
-                        selectedFilter: $filmFilter,
-                        isPresented: $showFilmMenu
-                    )
-                    .position(x: width - 110, y: inset + 140)
-                }
-
-                if showFXMenu {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
                             showFXMenu = false
                         }
-
-                    LensFXPicker(
-                        selectedFX: $lensFX,
-                        isPresented: $showFXMenu
-                    )
-                    .position(x: width - 110, y: inset + 190)
                 }
             }
+            .overlay(alignment: .topTrailing) {
+                Group {
+                    if showFilmMenu {
+                        LeicaFilmPicker(
+                            selectedFilter: $filmFilter,
+                            isPresented: $showFilmMenu
+                        )
+                    } else if showFXMenu {
+                        LensFXPicker(
+                            selectedFX: $lensFX,
+                            isPresented: $showFXMenu
+                        )
+                    }
+                }
+                .padding(.trailing, chromeInset)
+                .padding(.top, chromeInset + chromeHit + (showFXMenu ? chromeHit + 8 : 0) + 8)
+            }
         }
+    }
+
+    @ViewBuilder
+    private func vfChromeButton<Label: View>(
+        active: Bool,
+        accent: Color,
+        @ViewBuilder label: () -> Label,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(Color.black.opacity(active ? 0.55 : 0.4))
+                    .frame(width: 32, height: 32)
+                    .overlay(
+                        Circle()
+                            .stroke(active ? accent.opacity(0.45) : Color.white.opacity(0.12), lineWidth: 1)
+                    )
+                label()
+            }
+            .frame(width: chromeHit, height: chromeHit)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -535,6 +547,7 @@ struct LeicaFilmPicker: View {
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
                             .background(selectedFilter == filter ? Color.white.opacity(0.05) : Color.clear)
+                            .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                     }
@@ -544,7 +557,10 @@ struct LeicaFilmPicker: View {
 
             Spacer().frame(height: 6)
         }
-        .background(dsPickerChrome())
+        // NOTE: must be a chained modifier. `.background(dsPickerChrome())`
+        // resolves to `.background(self.dsPickerChrome())`, embedding the
+        // picker inside itself -> infinite recursion -> stack overflow crash.
+        .dsPickerChrome()
         .frame(width: 180)
         .scaleEffect(animateIn ? 1.0 : 0.8)
         .opacity(animateIn ? 1.0 : 0)
@@ -587,24 +603,40 @@ private struct DSLRPickerChrome: ViewModifier {
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color(hex: "0d0d0d"))
 
+                // Top + left inset shade (matches viewfinder DSLR recess)
                 VStack(spacing: 0) {
-                    LinearGradient(colors: [Color.black.opacity(0.5), Color.clear], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 10)
-                    Spacer()
+                    LinearGradient(colors: [Color.black.opacity(0.55), Color.clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 12)
+                    Spacer(minLength: 0)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
                 HStack(spacing: 0) {
-                    LinearGradient(colors: [Color.black.opacity(0.4), Color.clear], startPoint: .leading, endPoint: .trailing)
+                    LinearGradient(colors: [Color.black.opacity(0.45), Color.clear], startPoint: .leading, endPoint: .trailing)
                         .frame(width: 8)
-                    Spacer()
+                    Spacer(minLength: 0)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+                // Soft bottom/right lift
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    LinearGradient(colors: [Color.clear, Color.white.opacity(0.03)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 8)
                 }
                 .clipShape(RoundedRectangle(cornerRadius: 8))
 
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color(hex: "1a1a1a"), lineWidth: 2)
+                    .stroke(Color(hex: "2a2a2a"), lineWidth: 1)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(Color.black.opacity(0.7), lineWidth: 2)
+                            .padding(1)
+                    )
             }
         )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .shadow(color: .black.opacity(0.45), radius: 8, x: 0, y: 4)
     }
 }
 
@@ -652,22 +684,25 @@ struct LensFXPicker: View {
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
-                    sectionHeader("WARP")
+                    sectionHeader("WARP", subtitle: "DRAG TO MORPH")
                     ForEach(warpCases, id: \.self) { fx in
                         fxRow(fx)
                     }
 
-                    sectionHeader("LOOK")
+                    sectionHeader("LOOK", subtitle: "STYLE")
                     ForEach(lookCases, id: \.self) { fx in
                         fxRow(fx)
                     }
                 }
             }
-            .frame(maxHeight: 260)
+            .frame(maxHeight: 280)
 
             Spacer().frame(height: 6)
         }
-        .background(dsPickerChrome())
+        // NOTE: must be a chained modifier, NOT `.background(dsPickerChrome())`.
+        // That form resolves to `.background(self.dsPickerChrome())` - the picker
+        // becomes its own background -> infinite view recursion -> stack overflow.
+        .dsPickerChrome()
         .frame(width: 180)
         .scaleEffect(animateIn ? 1.0 : 0.8)
         .opacity(animateIn ? 1.0 : 0)
@@ -679,17 +714,30 @@ struct LensFXPicker: View {
         }
     }
 
-    private func sectionHeader(_ title: String) -> some View {
-        HStack {
-            Text(title)
-                .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                .foregroundColor(.white.opacity(0.32))
-                .tracking(0.8)
-            Spacer()
+    private func sectionHeader(_ title: String, subtitle: String) -> some View {
+        VStack(spacing: 4) {
+            if title == "LOOK" {
+                Rectangle()
+                    .fill(Color(hex: "2a2a2a"))
+                    .frame(height: 1)
+                    .padding(.horizontal, 8)
+                    .padding(.top, 4)
+            }
+            HStack(alignment: .firstTextBaseline) {
+                Text(title)
+                    .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.38))
+                    .tracking(1.0)
+                Spacer()
+                Text(subtitle)
+                    .font(.system(size: 7, weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.22))
+                    .tracking(0.4)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, title == "WARP" ? 8 : 6)
+            .padding(.bottom, 2)
         }
-        .padding(.horizontal, 14)
-        .padding(.top, 8)
-        .padding(.bottom, 2)
     }
 
     private func fxRow(_ fx: LensFXMode) -> some View {
@@ -710,7 +758,12 @@ struct LensFXPicker: View {
 
                 Spacer()
 
-                if fx != .none {
+                if fx.isTouchReactive {
+                    Text("TOUCH")
+                        .font(.system(size: 7, weight: .semibold, design: .monospaced))
+                        .foregroundColor(accent.opacity(selectedFX == fx ? 0.85 : 0.45))
+                        .tracking(0.3)
+                } else if fx != .none {
                     Text(fx.badge)
                         .font(.system(size: 9, weight: .regular, design: .monospaced))
                         .foregroundColor(.white.opacity(0.3))
@@ -719,6 +772,7 @@ struct LensFXPicker: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(selectedFX == fx ? Color.white.opacity(0.05) : Color.clear)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }

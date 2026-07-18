@@ -28,7 +28,8 @@ struct FilteredCameraPreview: UIViewRepresentable {
         // Pan drives morph FX; allow simultaneous recognition with tap/pinch
         // so a short tap still focuses and a drag warps the shader.
         let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
-        panGesture.maximumNumberOfTouches = 2
+        panGesture.maximumNumberOfTouches = 1
+        panGesture.cancelsTouchesInView = false
         panGesture.delegate = context.coordinator
         view.addGestureRecognizer(panGesture)
 
@@ -59,6 +60,13 @@ struct FilteredCameraPreview: UIViewRepresentable {
         weak var panGesture: UIPanGestureRecognizer?
         private var lastPanTime: CFAbsoluteTime = 0
         private var lastPanPoint: CGPoint = .zero
+        private var smoothedVelocity: CGPoint = .zero
+        /// True once the finger moved past the morph threshold this press.
+        private var morphEngaged = false
+        /// Skip focus tap when this press was a real morph drag.
+        private var suppressNextTap = false
+        /// ~10pt before morph claims the gesture (keeps focus taps snappy).
+        private let morphSlop: CGFloat = 10
 
         init(
             onTap: ((CGPoint) -> Void)?,
@@ -78,6 +86,10 @@ struct FilteredCameraPreview: UIViewRepresentable {
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
+            if suppressNextTap {
+                suppressNextTap = false
+                return
+            }
             let location = gesture.location(in: gesture.view)
             guard let view = gesture.view, view.bounds.width > 0, view.bounds.height > 0 else { return }
 
@@ -111,27 +123,50 @@ struct FilteredCameraPreview: UIViewRepresentable {
 
             let now = CFAbsoluteTimeGetCurrent()
             var velocity = CGPoint.zero
+            let translation = gesture.translation(in: view)
+            let travel = hypot(translation.x, translation.y)
 
             switch gesture.state {
             case .began:
                 lastPanTime = now
                 lastPanPoint = point
-                onMorphTouch?(point, .zero, true)
+                smoothedVelocity = .zero
+                morphEngaged = false
+                // Don't engage morph yet — wait for slop so taps stay focus-first.
 
             case .changed:
+                if !morphEngaged {
+                    guard travel >= morphSlop else { return }
+                    morphEngaged = true
+                    suppressNextTap = true
+                    lastPanTime = now
+                    lastPanPoint = point
+                    smoothedVelocity = .zero
+                    onMorphTouch?(point, .zero, true)
+                    return
+                }
+
                 let dt = max(1.0 / 120.0, now - lastPanTime)
-                velocity = CGPoint(
+                let instant = CGPoint(
                     x: (point.x - lastPanPoint.x) / CGFloat(dt),
                     y: (point.y - lastPanPoint.y) / CGFloat(dt)
                 )
-                // Clamp runaway values from tiny dt spikes
-                velocity.x = min(8, max(-8, velocity.x))
-                velocity.y = min(8, max(-8, velocity.y))
+                // EMA so wake/spin don't stutter on frame-time jitter
+                smoothedVelocity = CGPoint(
+                    x: min(8, max(-8, instant.x * 0.55 + smoothedVelocity.x * 0.45)),
+                    y: min(8, max(-8, instant.y * 0.55 + smoothedVelocity.y * 0.45))
+                )
+                velocity = smoothedVelocity
                 lastPanTime = now
                 lastPanPoint = point
                 onMorphTouch?(point, velocity, true)
 
             case .ended, .cancelled, .failed:
+                defer {
+                    morphEngaged = false
+                    smoothedVelocity = .zero
+                }
+                guard morphEngaged else { return }
                 let uiVel = gesture.velocity(in: view)
                 velocity = CGPoint(
                     x: min(8, max(-8, uiVel.x / view.bounds.width)),

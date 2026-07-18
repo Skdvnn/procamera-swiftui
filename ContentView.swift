@@ -170,6 +170,12 @@ enum CaptureFormat: CaseIterable {
     }
 }
 
+/// Reference-type gate so a simultaneous deck-swipe can read whether a compact
+/// meter already claimed the active drag (Bool @State would go stale mid-gesture).
+final class DeckScrubLock {
+    var active = false
+}
+
 struct ContentView: View {
     @StateObject private var camera = CameraManager()
     @Environment(\.colorScheme) var colorScheme  // Track color scheme changes
@@ -202,6 +208,12 @@ struct ContentView: View {
     @State private var captureFormat: CaptureFormat = .heic
     @State private var topCollapsed = false
     @State private var bottomCollapsed = false
+    /// Class so mid-drag deckSwipe.onEnded always sees the live scrub flag
+    /// (SwiftUI recreating the gesture would otherwise capture a stale Bool).
+    @State private var topMeterScrubLock = DeckScrubLock()
+    /// Same gate for expanded-bottom ISO/shutter scrubbers so a horizontal
+    /// drag with finger wobble never collapses the deck and sticks it shut.
+    @State private var bottomScrubLock = DeckScrubLock()
     @StateObject private var gallery = GalleryStore()
     @State private var showPhotoBook = false
 
@@ -264,14 +276,25 @@ struct ContentView: View {
                             if macroEnabled {
                                 isManualFocusEnabled = false
                             }
-                        }
+                        },
+                        onCompactScrubActive: { topMeterScrubLock.active = $0 }
                     )
                     .frame(height: topPanelHeight)
                     .padding(.horizontal, DS.pageMargin)
                     // Swipe up to minimize the dial deck, down to restore.
-                    // Dials claim drags starting on them, so this only catches
-                    // swipes that begin in the gaps or center display.
-                    .gesture(deckSwipe(collapseOnSwipeUp: true) { topCollapsed = $0 })
+                    // simultaneousGesture so compact-meter horizontal scrubs
+                    // can coexist; deckSwipe only acts on vertical-dominant flicks
+                    // and ignores drags already claimed as horizontal scrubs.
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(
+                        deckSwipe(
+                            collapseOnSwipeUp: true,
+                            isCollapsed: topCollapsed,
+                            // Compact top hosts FOCUS/EV scrubbers — stay strict.
+                            hostsHorizontalScrubbers: topCollapsed,
+                            scrubLock: topMeterScrubLock
+                        ) { topCollapsed = $0 }
+                    )
 
                     Spacer().frame(height: gaugeToViewfinderSpacing)
 
@@ -373,20 +396,25 @@ struct ContentView: View {
                     VStack(spacing: 0) {
                         if bottomCollapsed {
                         // COMPACT: single row - thumbnail | shutter | readout
+                        // Tall min height + full-width contentShape so swipe-up
+                        // works on the empty spacers, not only on chrome.
                         HStack(alignment: .center, spacing: 0) {
                             ThumbnailPill(image: lastCapturedImage) {
                                 Haptics.click()
                                 showPhotoBook = true
                             }
+                            // Keep gallery tap above the deck swipe hit-target
+                            .zIndex(2)
 
-                            Spacer()
+                            Spacer(minLength: 8)
 
                             ShutterButton(isCapturing: isCapturing) {
                                 Haptics.heavy()
                                 handleCapture()
                             }
+                            .zIndex(1)
 
-                            Spacer()
+                            Spacer(minLength: 8)
 
                             // Readout balances the thumbnail so the shutter stays centered
                             VStack(alignment: .trailing, spacing: 3) {
@@ -396,9 +424,13 @@ struct ContentView: View {
                             .font(.system(size: 10, weight: .semibold, design: .monospaced))
                             .foregroundColor(.white.opacity(0.6))
                             .frame(width: 88, alignment: .trailing)
+                            .allowsHitTesting(false)
                         }
                         .padding(.horizontal, DS.pageMargin)
-                        .padding(.vertical, 6)
+                        .padding(.vertical, 12)
+                        .frame(minHeight: 96)
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
                         } else {
                         // ROW 1: Zoom control (full width) - no top padding
                         LensRingControl(
@@ -433,6 +465,7 @@ struct ContentView: View {
                             HStack(spacing: 4) {
                                 ISOScrubberHorizontal(
                                     iso: $isoValue,
+                                    onScrubActive: { bottomScrubLock.active = $0 },
                                     onChanged: { iso in
                                         camera.setISO(Float(iso))
                                     }
@@ -440,6 +473,7 @@ struct ContentView: View {
 
                                 ShutterScrubber(
                                     shutterSpeed: $shutterSpeedIndex,
+                                    onScrubActive: { bottomScrubLock.active = $0 },
                                     onChanged: { idx in
                                         camera.setShutterSpeed(index: idx)
                                         // Also update exposure meter to reflect the change
@@ -515,6 +549,7 @@ struct ContentView: View {
                                     Haptics.click()
                                     showPhotoBook = true
                                 }
+                                .zIndex(2)
 
                                 Spacer()
 
@@ -538,14 +573,29 @@ struct ContentView: View {
                     .background {
                         ControlsGrain()
                     }
+                    // contentShape makes the whole deck (spacers, padding, and
+                    // background included) a valid swipe surface - critical for
+                    // the compact row, where most of the width is empty space.
+                    .contentShape(Rectangle())
                     // Swipe down for the super-compact deck, up to restore.
                     // Must be simultaneous: the scrubbers claim drags that start on
                     // them, but they only respond to horizontal movement, and this
                     // gesture only acts on clearly vertical swipes.
-                    .simultaneousGesture(deckSwipe(collapseOnSwipeUp: false) { bottomCollapsed = $0 })
+                    .simultaneousGesture(
+                        deckSwipe(
+                            collapseOnSwipeUp: false,
+                            isCollapsed: bottomCollapsed,
+                            // Expanded bottom hosts horizontal ISO/shutter scrubbers.
+                            // Collapsed compact row has none — keep swipe-up forgiving.
+                            hostsHorizontalScrubbers: !bottomCollapsed,
+                            scrubLock: bottomScrubLock
+                        ) { bottomCollapsed = $0 }
+                    )
                 }
                 .padding(.top, safeTop)
-                .padding(.bottom, safeBottom * 0.7)
+                // Keep the compact deck clear of the home indicator without
+                // eating the whole safe area (controls stay reachable).
+                .padding(.bottom, max(safeBottom * 0.85, 10))
 
                 if showFlash {
                     Color.white.ignoresSafeArea()
@@ -575,10 +625,13 @@ struct ContentView: View {
         }
         .fullScreenCover(isPresented: $showPhotoBook) {
             LibraryView(store: gallery)
+                .preferredColorScheme(.dark)
         }
     }
 
-    // Bind a captured frame into the Field Book with the live shot settings
+    // Bind a captured frame into the Field Book (All Frames / active book) with
+    // the live shot settings. Always lands in the master roll; if LibraryView
+    // has pinned an active book id in UserDefaults, also attach there.
     private func recordShot(_ img: UIImage) {
         let metadata = ShotMetadata(
             id: UUID(),
@@ -592,6 +645,21 @@ struct ContentView: View {
             focalLength: focalLength
         )
         gallery.add(image: img, metadata: metadata)
+        if let bookID = Self.activeBookID(),
+           let book = gallery.book(withID: bookID) {
+            gallery.add(metadata, to: book)
+        }
+    }
+
+    /// Shared with LibraryView via UserDefaults so capture can target the book
+    /// the user last opened without coupling the two modules at compile time.
+    private static func activeBookID() -> UUID? {
+        let defaults = UserDefaults.standard
+        if let s = defaults.string(forKey: "procamera.activeBookID"),
+           let id = UUID(uuidString: s) {
+            return id
+        }
+        return nil
     }
 
     private func syncFilmFilter(_ filter: FilmFilterMode) {
@@ -654,15 +722,53 @@ struct ContentView: View {
 
     // Vertical swipe that collapses/expands a control deck.
     // For the top deck a swipe up collapses; for the bottom deck a swipe down does.
-    private func deckSwipe(collapseOnSwipeUp: Bool, set: @escaping (Bool) -> Void) -> some Gesture {
-        DragGesture(minimumDistance: 20)
-            .onEnded { value in
+    // Collapsed bottom has no scrubbers → forgiving flicks.
+    // Collapsed top hosts FOCUS/EV compact meters → stay strict + honor scrubLock
+    // so horizontal scrub never expands/sticks the board open.
+    private func deckSwipe(
+        collapseOnSwipeUp: Bool,
+        isCollapsed: Bool,
+        hostsHorizontalScrubbers: Bool = false,
+        scrubLock: DeckScrubLock? = nil,
+        set: @escaping (Bool) -> Void
+    ) -> some Gesture {
+        let competing = hostsHorizontalScrubbers
+        // Collapsed + no scrubbers (bottom compact): very easy vertical flicks.
+        // Competing scrubbers: stricter axis lock so scrub never sticks the panel.
+        let dominance: CGFloat = competing ? 1.45 : (isCollapsed ? 0.45 : 1.0)
+        let threshold: CGFloat = competing ? 20 : (isCollapsed ? 10 : 24)
+        let minDistance: CGFloat = competing ? 12 : (isCollapsed ? 6 : 14)
+        return DragGesture(minimumDistance: minDistance)
+            .onChanged { value in
+                // CompactMeter / ISO scrub can leave scrubLock stuck true if SwiftUI
+                // cancels their gesture without onEnded — clear it once this drag
+                // is clearly vertical so expand/collapse stays reliable.
+                guard let lock = scrubLock, lock.active else { return }
+                let dx = value.translation.width
                 let dy = value.translation.height
-                guard abs(dy) > abs(value.translation.width) else { return }
+                if abs(dy) > 16, abs(dy) > abs(dx) * 1.25 {
+                    lock.active = false
+                }
+            }
+            .onEnded { value in
+                // Horizontal scrub claimed this drag — do not toggle.
+                guard scrubLock?.active != true else { return }
+                let dx = value.translation.width
+                let dy = value.translation.height
+                // Hard axis veto: horizontal-dominant travel never expands/collapses.
+                guard abs(dy) > abs(dx) * dominance else { return }
+                // Project flick momentum so short, quick vertical swipes still count
+                let predicted = value.predictedEndTranslation.height
+                let travel = ((predicted >= 0) == (dy >= 0) && abs(predicted) > abs(dy)) ? predicted : dy
+                // When scrubbers compete, ignore predicted horizontal flicks that
+                // only look vertical via momentum noise.
+                if competing, abs(value.predictedEndTranslation.width) > abs(travel) * 0.85 {
+                    return
+                }
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    if dy < -30 {
+                    if travel < -threshold {
                         set(collapseOnSwipeUp)
-                    } else if dy > 30 {
+                    } else if travel > threshold {
                         set(!collapseOnSwipeUp)
                     }
                 }
@@ -707,10 +813,15 @@ struct ContentView: View {
             let duration = durations[shutterSpeedIndex]
 
             isCapturing = true
-            camera.captureLongExposure(durationSeconds: duration) { img in
+            // Freeze film/FX at shutter — LE can take seconds; user may change pickers.
+            camera.captureLongExposure(
+                durationSeconds: duration,
+                filmFilter: shutterFilm,
+                lensFX: shutterFX
+            ) { img in
                 isCapturing = false
                 if let img = img {
-lastCapturedImage = img
+                    lastCapturedImage = img
                     photoCount += 1
                     recordShot(img)
                     camera.saveToPhotoLibrary(img) { _ in }
@@ -724,7 +835,7 @@ lastCapturedImage = img
             camera.capturePhoto(filmFilter: shutterFilm, lensFX: shutterFX) { img in
                 isCapturing = false
                 if let img = img {
-lastCapturedImage = img
+                    lastCapturedImage = img
                     photoCount += 1
                     recordShot(img)
                     // RAW mode already writes the DNG from CameraManager; still
@@ -1005,6 +1116,7 @@ struct TickerValue: View {
 // MARK: - ISO Scrubber Horizontal (Hybrid: Old Layout + Ticker Animation)
 struct ISOScrubberHorizontal: View {
     @Binding var iso: Int
+    var onScrubActive: ((Bool) -> Void)? = nil
     let onChanged: (Int) -> Void
 
     private let isoValues = [100, 200, 400, 800, 1600, 3200, 6400]
@@ -1012,6 +1124,7 @@ struct ISOScrubberHorizontal: View {
     @State private var isDragging = false
     @State private var startIndex: Int = 0
     @State private var tickerOffset: CGFloat = 0
+    @State private var scrubLocked = false
 
     private var currentIndex: Int {
         isoValues.firstIndex(of: iso) ?? 3
@@ -1113,18 +1226,27 @@ struct ISOScrubberHorizontal: View {
             }
             .contentShape(Rectangle())
             .gesture(
-                DragGesture()
+                DragGesture(minimumDistance: 4)
                     .onChanged { value in
+                        let dx = value.translation.width
+                        let dy = value.translation.height
+                        // Axis-lock: vertical deck swipes must reach the parent
+                        // simultaneousGesture unclaimed.
+                        if !scrubLocked {
+                            guard abs(dx) > 8, abs(dx) > abs(dy) * 1.25 else { return }
+                            scrubLocked = true
+                            onScrubActive?(true)
+                        }
                         if !isDragging {
                             isDragging = true
                             startIndex = currentIndex
                         }
-                        dragOffset = value.translation.width
+                        dragOffset = dx
                         // Horizontal ticker offset for film roll feel
-                        tickerOffset = value.translation.width * 0.15
+                        tickerOffset = dx * 0.15
 
                         let stepWidth: CGFloat = 35
-                        let steps = Int(-value.translation.width / stepWidth)
+                        let steps = Int(-dx / stepWidth)
                         let newIndex = max(0, min(isoValues.count - 1, startIndex + steps))
                         if newIndex != currentIndex {
                             Haptics.light()
@@ -1136,6 +1258,8 @@ struct ISOScrubberHorizontal: View {
                         }
                     }
                     .onEnded { _ in
+                        if scrubLocked { onScrubActive?(false) }
+                        scrubLocked = false
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) {
                             isDragging = false
                             dragOffset = 0
@@ -1581,76 +1705,110 @@ struct ShutterButton: View {
     let isCapturing: Bool
     let action: () -> Void
 
-    @State private var isPressed = false
-
     var body: some View {
         Button(action: action) {
-            ZStack {
-                // Collar - knurled chrome ring (stays fixed)
-                Circle()
-                    .fill(
-                        AngularGradient(
-                            colors: [
-                                Color(hex: "333333"),
-                                Color(hex: "4a4a4a"),
-                                Color(hex: "2a2a2a"),
-                                Color(hex: "404040"),
-                                Color(hex: "303030"),
-                                Color(hex: "333333")
-                            ],
-                            center: .center
-                        )
-                    )
-                    .frame(width: 74, height: 74)
-
-                // Collar outer edge
-                Circle()
-                    .stroke(Color(hex: "151515"), lineWidth: 1)
-                    .frame(width: 74, height: 74)
-
-                // Collar inner shadow - darkens when button sinks in
-                Circle()
-                    .stroke(
-                        Color.black.opacity(isPressed ? 0.6 : 0.15),
-                        lineWidth: isPressed ? 2 : 0.5
-                    )
-                    .frame(width: 65, height: 65)
-
-                // Button face - this is what moves when pressed
-                ZStack {
-                    MetalShutterSurface(size: 64, isPressed: isPressed)
-                        .clipShape(Circle())
-
-                    // Capturing flash
-                    if isCapturing {
-                        Circle()
-                            .fill(Color.white.opacity(0.12))
-                            .frame(width: 64, height: 64)
-                    }
-                }
-                .scaleEffect(isPressed ? 0.96 : 1.0)
-                .shadow(color: Color.black.opacity(isPressed ? 0.1 : 0.5), radius: isPressed ? 0.5 : 3, y: isPressed ? 0 : 2)
-            }
-            .shadow(color: Color.black.opacity(0.5), radius: 5, y: 3)
-            .animation(.spring(response: 0.12, dampingFraction: 0.65), value: isPressed)
+            // Label is a placeholder; chrome + press state live in the ButtonStyle
+            // so we never attach DragGesture(minDistance:0) that fights deckSwipe.
+            Color.clear.frame(width: 74, height: 74)
         }
-        .buttonStyle(PlainButtonStyle())
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in
-                    if !isPressed {
-                        isPressed = true
-                        let impact = UIImpactFeedbackGenerator(style: .heavy)
-                        impact.impactOccurred(intensity: 0.8)
-                    }
-                }
-                .onEnded { _ in
-                    isPressed = false
-                    let impact = UIImpactFeedbackGenerator(style: .rigid)
-                    impact.impactOccurred(intensity: 0.6)
-                }
-        )
+        .buttonStyle(ShutterChromeButtonStyle(isCapturing: isCapturing))
         .disabled(isCapturing)
+        .accessibilityLabel("Shutter")
+    }
+}
+
+private struct ShutterChromeButtonStyle: ButtonStyle {
+    let isCapturing: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        let isPressed = configuration.isPressed
+        return ZStack {
+            // Collar — dark machined ring; quiet so the silver face can read
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color(hex: "2c2c2c"),
+                            Color(hex: "1a1a1a"),
+                            Color(hex: "0c0c0c")
+                        ],
+                        center: .center,
+                        startRadius: 26,
+                        endRadius: 37
+                    )
+                )
+                .frame(width: 74, height: 74)
+                .overlay(
+                    Circle()
+                        .strokeBorder(
+                            AngularGradient(
+                                colors: [
+                                    Color.white.opacity(0.10),
+                                    Color.black.opacity(0.35),
+                                    Color.white.opacity(0.08),
+                                    Color.black.opacity(0.40),
+                                    Color.white.opacity(0.10)
+                                ],
+                                center: .center
+                            ),
+                            lineWidth: 5
+                        )
+                        .padding(2)
+                )
+
+            Circle()
+                .stroke(Color.black.opacity(0.85), lineWidth: 1)
+                .frame(width: 74, height: 74)
+
+            Circle()
+                .stroke(
+                    Color.black.opacity(isPressed ? 0.55 : 0.22),
+                    lineWidth: isPressed ? 2.5 : 1
+                )
+                .frame(width: 66, height: 66)
+
+            ZStack {
+                MetalShutterSurface(size: 64, isPressed: isPressed)
+                    .clipShape(Circle())
+                    .overlay(
+                        Circle()
+                            .strokeBorder(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(0.35),
+                                        Color.white.opacity(0.08),
+                                        Color.black.opacity(0.25)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 0.75
+                            )
+                    )
+
+                if isCapturing {
+                    Circle()
+                        .fill(Color.white.opacity(0.12))
+                        .frame(width: 64, height: 64)
+                }
+            }
+            .scaleEffect(isPressed ? 0.95 : 1.0)
+            .offset(y: isPressed ? 1.0 : 0)
+            .shadow(
+                color: Color.black.opacity(isPressed ? 0.12 : 0.35),
+                radius: isPressed ? 0.5 : 2.5,
+                y: isPressed ? 0 : 1.5
+            )
+        }
+        .shadow(color: Color.black.opacity(0.35), radius: 4, y: 2)
+        .animation(.spring(response: 0.12, dampingFraction: 0.65), value: isPressed)
+        .onChange(of: configuration.isPressed) { _, pressed in
+            if pressed {
+                UIImpactFeedbackGenerator(style: .heavy).impactOccurred(intensity: 0.8)
+            } else {
+                UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.6)
+            }
+        }
     }
 }
 
@@ -1938,7 +2096,6 @@ struct ThumbnailPill: View {
     // Uniform size for flash/thumbnail/WB
     private let pillWidth: CGFloat = 88
     private let pillHeight: CGFloat = 48
-    @State private var isPressed = false
 
     var body: some View {
         Button(action: action) {
@@ -1948,30 +2105,14 @@ struct ThumbnailPill: View {
                     .fill(Color.black)
                     .frame(width: pillWidth, height: pillHeight)
 
-                // Inner frame - darker when pressed
                 RoundedRectangle(cornerRadius: 22)
-                    .fill(Color(hex: isPressed ? "1a1a1a" : "242424"))
+                    .fill(Color(hex: "242424"))
                     .frame(width: pillWidth - 4, height: pillHeight - 4)
 
-                // Inner shadow when pressed
-                if isPressed {
-                    RoundedRectangle(cornerRadius: 22)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.black.opacity(0.3), Color.clear],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .frame(width: pillWidth - 4, height: pillHeight - 4)
-                }
-
-                // Inner stroke
                 RoundedRectangle(cornerRadius: 22)
-                    .stroke(Color(hex: isPressed ? "333333" : "444444"), lineWidth: 0.5)
+                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
                     .frame(width: pillWidth - 4, height: pillHeight - 4)
 
-                // Image or placeholder
                 if let img = image {
                     Image(uiImage: img)
                         .resizable()
@@ -1988,12 +2129,20 @@ struct ThumbnailPill: View {
         }
         .frame(width: pillWidth, height: pillHeight + 4)
         .contentShape(Rectangle())
-        .buttonStyle(.plain)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
-        )
+        // ButtonStyle press feedback — DragGesture(minDistance:0) was eating the
+        // tap and fighting the parent deckSwipe, so the gallery wouldn't open.
+        .buttonStyle(ThumbnailPillButtonStyle())
+        .accessibilityLabel("Library")
+        .accessibilityAddTraits(.isButton)
+    }
+}
+
+private struct ThumbnailPillButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .opacity(configuration.isPressed ? 0.88 : 1.0)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }
 
@@ -2995,6 +3144,7 @@ struct FStopScrubber: View {
 // MARK: - Shutter Speed Scrubber (Hybrid: Old Layout + Ticker Animation)
 struct ShutterScrubber: View {
     @Binding var shutterSpeed: Int
+    var onScrubActive: ((Bool) -> Void)? = nil
     let onChanged: (Int) -> Void
 
     private let speeds = ["4\"", "2\"", "1\"", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60", "1/125", "1/250", "1/500", "1/1000", "1/2000", "1/4000"]
@@ -3002,6 +3152,7 @@ struct ShutterScrubber: View {
     @State private var isDragging = false
     @State private var startIndex: Int = 0
     @State private var tickerOffset: CGFloat = 0
+    @State private var scrubLocked = false
 
     private var prevSpeed: String {
         shutterSpeed > 0 ? speeds[shutterSpeed - 1] : ""
@@ -3101,18 +3252,25 @@ struct ShutterScrubber: View {
             }
             .contentShape(Rectangle())
             .gesture(
-                DragGesture()
+                DragGesture(minimumDistance: 4)
                     .onChanged { value in
+                        let dx = value.translation.width
+                        let dy = value.translation.height
+                        if !scrubLocked {
+                            guard abs(dx) > 8, abs(dx) > abs(dy) * 1.25 else { return }
+                            scrubLocked = true
+                            onScrubActive?(true)
+                        }
                         if !isDragging {
                             isDragging = true
                             startIndex = shutterSpeed
                         }
-                        dragOffset = value.translation.width
+                        dragOffset = dx
                         // Horizontal ticker offset for film roll feel
-                        tickerOffset = value.translation.width * 0.15
+                        tickerOffset = dx * 0.15
 
                         let stepWidth: CGFloat = 30
-                        let steps = Int(-value.translation.width / stepWidth)
+                        let steps = Int(-dx / stepWidth)
                         let newIndex = max(0, min(speeds.count - 1, startIndex + steps))
                         if newIndex != shutterSpeed {
                             Haptics.light()
@@ -3123,6 +3281,8 @@ struct ShutterScrubber: View {
                         }
                     }
                     .onEnded { _ in
+                        if scrubLocked { onScrubActive?(false) }
+                        scrubLocked = false
                         withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) {
                             isDragging = false
                             dragOffset = 0

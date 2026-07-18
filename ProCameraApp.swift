@@ -33,7 +33,8 @@ class FingerTipSceneDelegate: NSObject, UIWindowSceneDelegate {
         }
     }
 
-    // Invitee tapped a Field Book share link
+    // Invitee tapped a Field Book share link.
+    // CloudBookManager no-ops on Shutter DEV / NoCloud (no CKContainer).
     func windowScene(_ windowScene: UIWindowScene,
                      userDidAcceptCloudKitShareWith cloudKitShareMetadata: CKShare.Metadata) {
         CloudBookManager.shared.acceptShare(metadata: cloudKitShareMetadata)

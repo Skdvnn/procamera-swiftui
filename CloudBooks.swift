@@ -7,19 +7,27 @@ import UIKit
 // custom zone in their private database and shares the book record; invitees
 // see it via the shared database and (with write permission) add their own
 // frames as child records.
+//
+// Shutter DEV (NoCloud entitlements) is not signed with our iCloud container.
+// CKContainer(identifier:) traps in that case, so container creation is gated
+// on the process entitlement — local Field Book library still works offline.
 final class CloudBookManager: ObservableObject {
     static let shared = CloudBookManager()
     static let containerID = "iCloud.com.skylardann.filmcam"
 
-    private let container = CKContainer(identifier: CloudBookManager.containerID)
-    private var privateDB: CKDatabase { container.privateCloudDatabase }
-    private var sharedDB: CKDatabase { container.sharedCloudDatabase }
+    /// nil when this build isn't entitled for `containerID` (e.g. Shutter DEV).
+    private let container: CKContainer?
+    private var privateDB: CKDatabase? { container?.privateCloudDatabase }
+    private var sharedDB: CKDatabase? { container?.sharedCloudDatabase }
     private let zoneID = CKRecordZone.ID(zoneName: "FieldBooks", ownerName: CKCurrentUserDefaultName)
 
     // Books other people shared with me
     @Published var sharedBooks: [SharedBookRef] = []
     @Published var isUploading = false
     @Published var lastError: String?
+
+    /// false on NoCloud / DEV builds — shelf still opens; share UI no-ops.
+    var isCloudAvailable: Bool { container != nil }
 
     private var zoneReady = false
 
@@ -36,9 +44,14 @@ final class CloudBookManager: ObservableObject {
     struct CloudShot: Identifiable {
         let metadata: ShotMetadata
         let thumb: UIImage?
+        /// Full-res when the CloudKit asset was still on disk at fetch time.
+        let image: UIImage?
         let recordID: CKRecord.ID
 
         var id: UUID { metadata.id }
+
+        /// Prefer full frame for lightbox; fall back to thumb.
+        var displayImage: UIImage? { image ?? thumb }
     }
 
     struct ShareContext: Identifiable {
@@ -48,7 +61,30 @@ final class CloudBookManager: ObservableObject {
         let title: String
     }
 
-    private init() {}
+    private enum CloudUnavailableError: LocalizedError {
+        case notEntitled
+
+        var errorDescription: String? {
+            "iCloud sharing isn't available in this build."
+        }
+    }
+
+    private init() {
+        // Must not call CKContainer(identifier:) unless the entitlement is present —
+        // otherwise LibraryView presentation crashes the whole app (SIGTRAP).
+        if Self.isEntitledForCloudKit {
+            container = CKContainer(identifier: Self.containerID)
+        } else {
+            container = nil
+        }
+    }
+
+    /// True only for the production bundle, which is signed with CloudKit
+    /// entitlements. Shutter DEV (`com.skylardann.filmcam.dev`) uses
+    /// `ProCamera.NoCloud.entitlements` — creating CKContainer there SIGTRAPs.
+    private static var isEntitledForCloudKit: Bool {
+        Bundle.main.bundleIdentifier == "com.skylardann.filmcam"
+    }
 
     // MARK: Owner: share a book
 
@@ -59,19 +95,24 @@ final class CloudBookManager: ObservableObject {
             DispatchQueue.main.async { completion(result) }
         }
 
+        guard let container = container, let privateDB = privateDB else {
+            finish(.failure(CloudUnavailableError.notEntitled))
+            return
+        }
+
         ensureZone { [weak self] zoneError in
             guard let self = self else { return }
             if let zoneError = zoneError { finish(.failure(zoneError)); return }
 
             let bookRecordID = CKRecord.ID(recordName: "book-\(book.id.uuidString)", zoneID: self.zoneID)
 
-            self.privateDB.fetch(withRecordID: bookRecordID) { existing, _ in
+            privateDB.fetch(withRecordID: bookRecordID) { existing, _ in
                 if let existing = existing, let shareRef = existing.share {
                     // Already shared before - reuse the existing share
-                    self.privateDB.fetch(withRecordID: shareRef.recordID) { shareRecord, error in
+                    privateDB.fetch(withRecordID: shareRef.recordID) { shareRecord, error in
                         if let share = shareRecord as? CKShare {
                             self.uploadMissingShots(for: book, bookRecordID: bookRecordID, store: store)
-                            finish(.success(ShareContext(share: share, container: self.container, title: book.title)))
+                            finish(.success(ShareContext(share: share, container: container, title: book.title)))
                         } else {
                             finish(.failure(error ?? CKError(.internalError)))
                         }
@@ -94,12 +135,12 @@ final class CloudBookManager: ObservableObject {
                     switch result {
                     case .success:
                         self.uploadMissingShots(for: book, bookRecordID: bookRecordID, store: store)
-                        finish(.success(ShareContext(share: share, container: self.container, title: book.title)))
+                        finish(.success(ShareContext(share: share, container: container, title: book.title)))
                     case .failure(let error):
                         finish(.failure(error))
                     }
                 }
-                self.privateDB.add(op)
+                privateDB.add(op)
             }
         }
     }
@@ -107,6 +148,7 @@ final class CloudBookManager: ObservableObject {
     // Upload the book's frames as child records, a few at a time.
     // Records that already exist on the server are skipped via the save policy.
     private func uploadMissingShots(for book: Book, bookRecordID: CKRecord.ID, store: GalleryStore) {
+        guard let privateDB = privateDB else { return }
         let shots = store.shots(in: book)
         guard !shots.isEmpty else { return }
 
@@ -155,6 +197,12 @@ final class CloudBookManager: ObservableObject {
     // MARK: Invitee: accept and browse
 
     func acceptShare(metadata: CKShare.Metadata) {
+        guard let container = container else {
+            DispatchQueue.main.async {
+                self.lastError = CloudUnavailableError.notEntitled.localizedDescription
+            }
+            return
+        }
         let op = CKAcceptSharesOperation(shareMetadatas: [metadata])
         op.acceptSharesResultBlock = { [weak self] result in
             DispatchQueue.main.async {
@@ -170,6 +218,7 @@ final class CloudBookManager: ObservableObject {
     }
 
     func refreshSharedBooks() {
+        guard let sharedDB = sharedDB else { return }
         sharedDB.fetchAllRecordZones { [weak self] zones, error in
             guard let self = self else { return }
             guard let zones = zones, error == nil else { return }
@@ -179,7 +228,7 @@ final class CloudBookManager: ObservableObject {
 
             for zone in zones {
                 group.enter()
-                self.queryRecords(type: "FieldBook", zoneID: zone.zoneID, database: self.sharedDB) { records in
+                self.queryRecords(type: "FieldBook", zoneID: zone.zoneID, database: sharedDB) { records in
                     for record in records {
                         let title = record["title"] as? String ?? "Shared Book"
                         found.append(SharedBookRef(recordID: record.recordID, title: title))
@@ -195,6 +244,10 @@ final class CloudBookManager: ObservableObject {
     }
 
     func loadShots(for ref: SharedBookRef, completion: @escaping ([CloudShot]) -> Void) {
+        guard let sharedDB = sharedDB else {
+            DispatchQueue.main.async { completion([]) }
+            return
+        }
         queryRecords(type: "FieldShot", zoneID: ref.zoneID, database: sharedDB) { records in
             let shots = records.compactMap { self.cloudShot(from: $0) }
                 .sorted { $0.metadata.date < $1.metadata.date }
@@ -205,6 +258,10 @@ final class CloudBookManager: ObservableObject {
     // Contribute a frame from the local roll into a book shared with me
     func addShot(_ shot: ShotMetadata, from store: GalleryStore, to ref: SharedBookRef,
                  completion: @escaping (Error?) -> Void) {
+        guard let sharedDB = sharedDB else {
+            DispatchQueue.main.async { completion(CloudUnavailableError.notEntitled) }
+            return
+        }
         let record = shotRecord(
             for: shot,
             zoneID: ref.zoneID,
@@ -267,19 +324,27 @@ final class CloudBookManager: ObservableObject {
             focalLength: record["focalLength"] as? Int ?? 24
         )
 
-        // Read the asset immediately - CloudKit cleans up asset temp files
+        // Read assets immediately - CloudKit cleans up asset temp files
         var thumb: UIImage?
-        if let asset = (record["thumb"] as? CKAsset) ?? (record["image"] as? CKAsset),
-           let url = asset.fileURL {
+        var image: UIImage?
+        if let asset = record["thumb"] as? CKAsset, let url = asset.fileURL {
             thumb = UIImage(contentsOfFile: url.path)
         }
+        if let asset = record["image"] as? CKAsset, let url = asset.fileURL {
+            image = UIImage(contentsOfFile: url.path)
+        }
+        if thumb == nil { thumb = image }
 
-        return CloudShot(metadata: metadata, thumb: thumb, recordID: record.recordID)
+        return CloudShot(metadata: metadata, thumb: thumb, image: image, recordID: record.recordID)
     }
 
     // MARK: Plumbing
 
     private func ensureZone(completion: @escaping (Error?) -> Void) {
+        guard let privateDB = privateDB else {
+            completion(CloudUnavailableError.notEntitled)
+            return
+        }
         guard !zoneReady else { completion(nil); return }
         let op = CKModifyRecordZonesOperation(recordZonesToSave: [CKRecordZone(zoneID: zoneID)],
                                               recordZoneIDsToDelete: nil)
@@ -380,7 +445,7 @@ struct SharedBookView: View {
     @State private var zoomedShot: CloudBookManager.CloudShot?
     @State private var showAddPicker = false
 
-    private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
+    private let accent = DS.accent
 
     var body: some View {
         ZStack {
@@ -405,11 +470,15 @@ struct SharedBookView: View {
                     Spacer()
                 } else if shots.isEmpty {
                     Spacer()
+                    Image(systemName: "person.2")
+                        .font(.system(size: 36, weight: .thin))
+                        .foregroundColor(.white.opacity(0.25))
                     Text("NO FRAMES YET")
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                         .tracking(3)
                         .foregroundColor(.white.opacity(0.5))
-                    Text("Be the first to add one")
+                        .padding(.top, 12)
+                    Text("Be the first to add one from your roll")
                         .font(.system(size: 10, weight: .regular, design: .monospaced))
                         .foregroundColor(.white.opacity(0.3))
                         .padding(.top, 6)
@@ -437,7 +506,7 @@ struct SharedBookView: View {
         }
         .overlay {
             if let shot = zoomedShot {
-                Lightbox(image: shot.thumb) { zoomedShot = nil }
+                Lightbox(image: shot.displayImage, accent: accent, onDismiss: { zoomedShot = nil })
             }
         }
         .sheet(isPresented: $showAddPicker) {
@@ -500,6 +569,10 @@ struct SharedBookView: View {
 
     private var header: some View {
         HStack(alignment: .center, spacing: 10) {
+            headerButton(icon: "books.vertical") {
+                dismiss()
+            }
+
             VStack(alignment: .leading, spacing: 3) {
                 Text(bookRef.title.uppercased())
                     .font(.system(size: 15, weight: .semibold, design: .monospaced))
@@ -520,10 +593,6 @@ struct SharedBookView: View {
 
             headerButton(icon: "arrow.clockwise") {
                 reload()
-            }
-
-            headerButton(icon: "chevron.left") {
-                dismiss()
             }
         }
     }
@@ -605,6 +674,18 @@ struct CloudPrintPage: View {
                 captionCell("EV", String(format: "%+.1f", shot.metadata.ev))
                 captionCell("LENS", "\(shot.metadata.focalLength)MM")
             }
+
+            if shot.metadata.filmFilter != "None" || shot.metadata.lensFX != "None" {
+                HStack(spacing: 6) {
+                    if shot.metadata.filmFilter != "None" {
+                        stampBadge(shot.metadata.filmFilter.uppercased())
+                    }
+                    if shot.metadata.lensFX != "None" {
+                        stampBadge(shot.metadata.lensFX.uppercased())
+                    }
+                    Spacer()
+                }
+            }
         }
         .padding(.horizontal, 10)
     }
@@ -619,6 +700,20 @@ struct CloudPrintPage: View {
                 .foregroundColor(.white.opacity(0.8))
         }
         .frame(maxWidth: .infinity)
+    }
+
+    private func stampBadge(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 8, weight: .bold, design: .monospaced))
+            .tracking(1)
+            .foregroundColor(accent.opacity(0.75))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 3)
+            .overlay(
+                RoundedRectangle(cornerRadius: 3)
+                    .stroke(accent.opacity(0.4), lineWidth: 1)
+            )
+            .rotationEffect(.degrees(-1.5))
     }
 
     private static let dateFormatter: DateFormatter = {
@@ -638,7 +733,7 @@ struct AddFramesPicker: View {
     @State private var selected: Set<UUID> = []
     @State private var isUploading = false
 
-    private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
+    private let accent = DS.accent
     private let columns = [GridItem(.adaptive(minimum: 90), spacing: 6)]
 
     var body: some View {
@@ -659,68 +754,81 @@ struct AddFramesPicker: View {
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
 
-                ScrollView {
-                    LazyVGrid(columns: columns, spacing: 6) {
-                        ForEach(store.shots) { shot in
-                            Button {
-                                if selected.contains(shot.id) {
-                                    selected.remove(shot.id)
-                                } else {
-                                    selected.insert(shot.id)
-                                }
-                            } label: {
-                                ZStack(alignment: .topTrailing) {
-                                    ZStack {
-                                        Rectangle().fill(Color.black)
-                                        if let thumb = store.thumbnail(for: shot) {
-                                            Image(uiImage: thumb)
-                                                .resizable()
-                                                .aspectRatio(contentMode: .fill)
+                if store.shots.isEmpty {
+                    Spacer()
+                    Text("NO LOCAL FRAMES")
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .tracking(2)
+                        .foregroundColor(.white.opacity(0.45))
+                    Text("Shoot a few frames, then come back")
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.3))
+                        .padding(.top, 6)
+                    Spacer()
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 6) {
+                            ForEach(store.shots) { shot in
+                                Button {
+                                    if selected.contains(shot.id) {
+                                        selected.remove(shot.id)
+                                    } else {
+                                        selected.insert(shot.id)
+                                    }
+                                } label: {
+                                    ZStack(alignment: .topTrailing) {
+                                        ZStack {
+                                            Rectangle().fill(Color.black)
+                                            if let thumb = store.thumbnail(for: shot) {
+                                                Image(uiImage: thumb)
+                                                    .resizable()
+                                                    .aspectRatio(contentMode: .fill)
+                                            }
+                                        }
+                                        .frame(height: 90)
+                                        .clipped()
+
+                                        if selected.contains(shot.id) {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .font(.system(size: 16))
+                                                .foregroundColor(accent)
+                                                .padding(4)
                                         }
                                     }
-                                    .frame(height: 90)
-                                    .clipped()
-
-                                    if selected.contains(shot.id) {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .font(.system(size: 16))
-                                            .foregroundColor(accent)
-                                            .padding(4)
-                                    }
-                                }
-                                .overlay(
-                                    Rectangle().stroke(
-                                        selected.contains(shot.id) ? accent.opacity(0.8) : Color.white.opacity(0.1),
-                                        lineWidth: selected.contains(shot.id) ? 1.5 : 0.5
+                                    .overlay(
+                                        Rectangle().stroke(
+                                            selected.contains(shot.id) ? accent.opacity(0.8) : Color.white.opacity(0.1),
+                                            lineWidth: selected.contains(shot.id) ? 1.5 : 0.5
+                                        )
                                     )
-                                )
+                                }
+                                .buttonStyle(.plain)
                             }
-                            .buttonStyle(.plain)
                         }
+                        .padding(.horizontal, 20)
                     }
-                    .padding(.horizontal, 20)
-                }
 
-                Button(action: upload) {
-                    HStack(spacing: 8) {
-                        if isUploading {
-                            ProgressView().tint(.black)
+                    Button(action: upload) {
+                        HStack(spacing: 8) {
+                            if isUploading {
+                                ProgressView().tint(.black)
+                            }
+                            Text(isUploading ? "UPLOADING…" : "ADD \(selected.count) TO BOOK")
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .tracking(2)
                         }
-                        Text(isUploading ? "UPLOADING…" : "ADD \(selected.count) TO BOOK")
-                            .font(.system(size: 12, weight: .bold, design: .monospaced))
-                            .tracking(2)
+                        .foregroundColor(.black)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 14)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(selected.isEmpty || isUploading ? accent.opacity(0.3) : accent)
+                        )
                     }
-                    .foregroundColor(.black)
-                    .frame(maxWidth: .infinity)
+                    .disabled(selected.isEmpty || isUploading)
+                    .padding(.horizontal, 20)
                     .padding(.vertical, 14)
-                    .background(
-                        RoundedRectangle(cornerRadius: 10)
-                            .fill(selected.isEmpty || isUploading ? accent.opacity(0.3) : accent)
-                    )
                 }
-                .disabled(selected.isEmpty || isUploading)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 14)
             }
         }
     }
