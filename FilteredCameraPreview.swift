@@ -146,9 +146,17 @@ class FilteredPreviewView: UIView {
 
         if image != nil {
             // Show Metal view, hide preview layer
+            let wasHidden = metalView?.isHidden ?? true
             metalView?.isHidden = false
             previewLayer?.isHidden = true
-            metalView?.setNeedsDisplay()
+            // Defer the first draw until after layout so drawableSize is non-zero
+            if wasHidden {
+                DispatchQueue.main.async { [weak self] in
+                    self?.metalView?.setNeedsDisplay()
+                }
+            } else {
+                metalView?.setNeedsDisplay()
+            }
         } else {
             // Show preview layer, hide Metal view
             metalView?.isHidden = true
@@ -170,6 +178,11 @@ extension FilteredPreviewView: MTKViewDelegate {
             return
         }
 
+        // First frame after un-hiding the MTKView often has a 0×0 drawable —
+        // rendering into that crashes Metal when Lens FX/film filters turn on.
+        let drawableSize = view.drawableSize
+        guard drawableSize.width > 1, drawableSize.height > 1 else { return }
+
         // Apply orientation correction for portrait mode
         // Video frames come in landscape orientation, rotate for portrait display
         let deviceOrientation = UIDevice.current.orientation
@@ -180,13 +193,21 @@ extension FilteredPreviewView: MTKViewDelegate {
         }
         // landscapeRight is the native orientation, no transform needed
 
-        let drawableSize = view.drawableSize
-        let imageSize = ciImage.extent.size
+        let extent = ciImage.extent
+        let imageSize = extent.size
+        guard !extent.isInfinite,
+              imageSize.width > 1,
+              imageSize.height > 1,
+              imageSize.width.isFinite,
+              imageSize.height.isFinite else {
+            return
+        }
 
         // Calculate scale to fill the view (aspect fill)
         let scaleX = drawableSize.width / imageSize.width
         let scaleY = drawableSize.height / imageSize.height
         let scale = max(scaleX, scaleY)
+        guard scale.isFinite, scale > 0 else { return }
 
         // Center the scaled image
         let scaledWidth = imageSize.width * scale

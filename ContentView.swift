@@ -408,6 +408,16 @@ struct ContentView: View {
                                     camera.switchToLens(focalLength: fl)
                                     let zoomMap: [Int: CGFloat] = [13: 0.5, 24: 1.0, 48: 2.0, 120: 5.0]
                                     zoomValue = zoomMap[fl] ?? CGFloat(fl) / 24.0
+                                    // After the lens/format swap settles, push the scrubber
+                                    // values again so shutter/ISO don't drift to auto/defaults
+                                    let iso = isoValue
+                                    let shutter = shutterSpeedIndex
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                        if camera.isManualExposure {
+                                            camera.setISO(Float(iso))
+                                            camera.setShutterSpeed(index: shutter)
+                                        }
+                                    }
                                 },
                                 onISOChanged: { iso in
                                     camera.setISO(Float(iso))
