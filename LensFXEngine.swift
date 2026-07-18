@@ -2,6 +2,22 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import UIKit
 
+extension UIImage.Orientation {
+    var cgImageOrientation: CGImagePropertyOrientation {
+        switch self {
+        case .up: return .up
+        case .upMirrored: return .upMirrored
+        case .down: return .down
+        case .downMirrored: return .downMirrored
+        case .left: return .left
+        case .leftMirrored: return .leftMirrored
+        case .right: return .right
+        case .rightMirrored: return .rightMirrored
+        @unknown default: return .up
+        }
+    }
+}
+
 // MARK: - Lens FX Mode
 // Live GPU shader effects applied to the camera feed (preview + captured photos).
 // Classic film color grades live in FilmFilterMode / CameraManager.FilmFilter —
@@ -272,7 +288,7 @@ final class LensFXEngine {
         // Bake the UIImage orientation into the pixels explicitly.
         // CIImage(cgImage:) / CIImage(image:) ignore UIImage.imageOrientation.
         if image.imageOrientation != .up {
-            input = input.oriented(CGImagePropertyOrientation(image.imageOrientation))
+            input = input.oriented(image.imageOrientation.cgImageOrientation)
         }
 
         let attemptDims: [CGFloat] = maxDimension > 2048
