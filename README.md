@@ -17,7 +17,7 @@ A professional-grade camera app built with SwiftUI featuring analog-style contro
 - **Timer Support** - 3s and 10s countdown modes
 - **Grid Overlay** - Rule of thirds composition guide
 - **Full-Bleed Mode** - Swipe the top dial panel up or the bottom controls down to collapse them into compact decks and give the viewfinder the screen
-- **Field Book Gallery** - Every shot is bound into an in-app photo book: black paper pages, corner-mounted prints with hand-placed tilt, silver-pen captions of the real shot data (ISO, shutter, EV, film stock, FX), a contact-sheet index, and a pinch-zoom lightbox
+- **Field Book Library** - Every shot is bound into an in-app photo book: black paper pages, corner-mounted prints with hand-placed tilt, silver-pen captions of the real shot data (ISO, shutter, EV, film stock, FX), a contact-sheet index, and a pinch-zoom lightbox. Create little books for trips and events, add frames from the master roll, and pin favorites to the front
 
 ## Design System
 

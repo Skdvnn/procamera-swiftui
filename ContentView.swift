@@ -548,7 +548,7 @@ struct ContentView: View {
             camera.selectedLensFX = newFX
         }
         .fullScreenCover(isPresented: $showPhotoBook) {
-            PhotoBookView(store: gallery)
+            LibraryView(store: gallery)
         }
     }
 
