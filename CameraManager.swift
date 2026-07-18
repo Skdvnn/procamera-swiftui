@@ -1123,11 +1123,22 @@ class CameraManager: NSObject, ObservableObject {
 
     private func applyFilmFilter(_ filmFilter: FilmFilter, to image: UIImage) -> UIImage {
         guard filmFilter != .none else { return image }
-        guard var ciImage = CIImage(image: image) else { return image }
+        // Prefer CIImage(image:) then fall back to CGImage — never silently skip
+        // a requested film bake because the UIImage bridge returned nil.
+        var ciImage: CIImage?
+        if let bridged = CIImage(image: image) {
+            ciImage = bridged
+        } else if let cg = image.cgImage {
+            ciImage = CIImage(cgImage: cg)
+        }
+        guard var ciImage else {
+            print("FilmFilter: BAKE FAILED for \(filmFilter.name) — could not build CIImage")
+            return image
+        }
 
         // Bake UIImage orientation into pixels; CIImage(image:) ignores it
         if image.imageOrientation != .up {
-            ciImage = ciImage.oriented(CGImagePropertyOrientation(image.imageOrientation))
+            ciImage = ciImage.oriented(image.imageOrientation.cgImageOrientation)
         }
 
 

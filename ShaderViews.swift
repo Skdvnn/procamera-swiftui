@@ -305,7 +305,7 @@ struct MetalShutterSurface: View {
 
     var body: some View {
         Rectangle()
-            .fill(Color.white)
+            .fill(Color(white: 0.58)) // mid base; shader owns the look
             .frame(width: size, height: size)
             .colorEffect(
                 ShaderLibrary.shutterButtonMetal(
@@ -313,10 +313,14 @@ struct MetalShutterSurface: View {
                     .float(pressAmount)
                 )
             )
+            .compositingGroup()
             .onChange(of: isPressed) { _, newValue in
                 withAnimation(.spring(response: 0.15, dampingFraction: 0.6)) {
                     pressAmount = newValue ? 1.0 : 0.0
                 }
+            }
+            .onAppear {
+                pressAmount = isPressed ? 1.0 : 0.0
             }
     }
 }

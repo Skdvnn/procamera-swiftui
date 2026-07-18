@@ -162,11 +162,13 @@ float noise(float2 st) {
 }
 
 // MARK: - Shutter Button Metal Surface
-// Photorealistic concave machined chrome shutter button
-// Key insight: real turned metal grooves are MICROSCOPIC - you never see individual rings.
-// What you see is the anisotropic specular reflection they produce: a bright crescent/arc
-// that sweeps across the concave surface. The surface reads as smooth polished metal
-// with a characteristic light band from the lathe-turned micro-texture.
+// Mid-value polished chrome — Leica / Hasselblad silver shutter release.
+// Lessons from prior passes:
+//   - sky/ground env split (v1–v3) → top/bottom read as different metals
+//   - unified bright (tint ~0.85, heavy env/spec) → blown silver
+//   - deep steel (tint ~0.52 + global pull-down) → muddy
+// Target: one cool-neutral tint, soft dome gradient, tight hotspot,
+// whisper lathe rings, mid body values that still look like real chrome.
 
 float metalNoise(float2 p) {
     float2 i = floor(p);
@@ -193,218 +195,113 @@ float metalNoise(float2 p) {
 
     if (dist > 0.50) return half4(0);
 
-    float2 radDir = dist > 0.001 ? dc / dist : float2(0);
+    float2 radDir = dist > 0.001 ? dc / dist : float2(0.0, -1.0);
     float angle = atan2(dc.y, dc.x);
 
+    // Mid silver — between blown unified (~0.85) and muddy steel (~0.52).
+    // Nudged slightly clearer than 0.66 so chrome reads polished, not dull.
+    float3 tint = float3(0.695, 0.70, 0.71);
+
     // ==========================================================
-    // CONVEX DOME - slightly raised, like a real shutter release
+    // CONVEX DOME
     // ==========================================================
-    // Gentle dome: center is highest, edges slope away.
-    // When pressed, dome flattens.
-    float dome = mix(0.30, 0.08, pressed); // nearly flat when fully pressed
+    float dome = mix(0.25, 0.05, pressed);
     float height = dome * (1.0 - r * r);
-
-    // Surface normal - dome normals tilt INWARD (toward center) at edges.
-    // This means center reflects straight back (bright), edges reflect
-    // away from viewer (darker, more fresnel).
-    float3 N = normalize(float3(radDir * r * dome * 2.0, 1.0));
+    float3 N = normalize(float3(radDir * r * dome * 2.4, 1.0));
 
     // ==========================================================
-    // LATHE TEXTURE - felt through lighting, not seen as rings
+    // LATHE — normal scatter + readable whisper rings
     // ==========================================================
-    // High frequency so individual lines merge into texture.
-    // The effect comes from how they scatter specular highlights,
-    // not from seeing individual bright/dark bands.
-    float gp = dist * size.x; // 0 to 32 for 64px button
+    float gp = dist * size.x;
 
-    // Dense concentric grooves - many frequencies layered
-    float lathe = sin(gp * 2.8) * 0.35
-                + sin(gp * 3.5 + 0.7) * 0.25
-                + sin(gp * 5.2) * 0.20
-                + sin(gp * 8.0 + 1.3) * 0.20;
+    float latheDeriv = cos(gp * 2.15) * 0.48
+                     + cos(gp * 4.0 + 0.9) * 0.34
+                     + cos(gp * 7.2 + 0.3) * 0.22;
+    float grooveNoise = metalNoise(float2(angle * 7.0, dist * 22.0));
+    latheDeriv *= mix(0.50, 1.0, grooveNoise);
 
-    // Circumferential noise breaks up any visible pattern
-    float latheNoise = metalNoise(float2(angle * 10.0, dist * 30.0));
-    lathe *= mix(0.4, 1.0, latheNoise);
+    // Concentric rings — soft enough to feel machined, strong enough to see
+    float latheVis = sin(gp * 2.0) * 0.5 + 0.5;
+    latheVis += sin(gp * 5.4 + 0.4) * 0.20;
 
-    // Derivative for normal perturbation
-    float latheDeriv = cos(gp * 2.8) * 0.35
-                     + cos(gp * 3.5 + 0.7) * 0.25
-                     + cos(gp * 5.2) * 0.20
-                     + cos(gp * 8.0 + 1.3) * 0.20;
-    latheDeriv *= mix(0.4, 1.0, latheNoise);
+    float microGrain = metalNoise(float2(dist * 120.0, angle * 4.0))
+                     + metalNoise(float2(dist * 220.0, angle * 8.0)) * 0.5;
+    microGrain = microGrain / 1.5 - 0.5;
 
-    // Additional noise-based micro grain
-    float microGrain = metalNoise(float2(dist * 100.0, angle * 3.0));
-    microGrain += metalNoise(float2(dist * 200.0, angle * 6.0)) * 0.5;
-    microGrain = (microGrain / 1.5 - 0.5);
-
-    float3 Ng = N;
-    // Moderate normal perturbation - enough to break up specular
-    Ng.xy += radDir * (latheDeriv * 0.14 + microGrain * 0.05);
-    Ng = normalize(Ng);
+    float3 Ng = normalize(float3(
+        N.xy + radDir * (latheDeriv * 0.14 + microGrain * 0.04),
+        N.z
+    ));
 
     // ==========================================================
-    // LIGHTING - simple, physically motivated
+    // LIGHTING — quiet sheen + pin hotspot (not a blown lobe)
     // ==========================================================
     float3 V = float3(0, 0, 1);
+    float3 L1 = normalize(float3(-0.32, -0.58, 0.76)); // key
+    float3 L2 = normalize(float3(0.48, 0.22, 0.84));   // fill
 
-    // Key light upper-left
-    float3 L1 = normalize(float3(-0.4, -0.5 - pressed * 0.1, 0.8));
-    // Fill light right
-    float3 L2 = normalize(float3(0.5, -0.25 - pressed * 0.1, 0.65));
-    // Rim from below
-    float3 L3 = normalize(float3(0.0, 0.45, 0.35));
+    float diff1 = max(dot(Ng, L1), 0.0);
+    float diff2 = max(dot(Ng, L2), 0.0);
 
-    // ==========================================================
-    // SPECULAR - soft Blinn-Phong, let the geometry do the work
-    // ==========================================================
-    // The convex dome creates a bright center highlight that
-    // fades toward edges. Soft, broad specular for natural look.
+    float3 H1 = normalize(L1 + V);
+    float3 H2 = normalize(L2 + V);
+    float NdH1 = max(dot(Ng, H1), 0.0);
+    float NdH2 = max(dot(Ng, H2), 0.0);
 
-    float3 specTotal = float3(0);
-    float diffTotal = 0.0;
-
-    // Light 1 - key (warm)
-    {
-        float NdL = max(dot(Ng, L1), 0.0);
-        float3 H = normalize(L1 + V);
-        float NdH = max(dot(Ng, H), 0.0);
-
-        // Broad glow + very tight hot peak - polished chrome throws
-        // a pinpoint specular, not a soft sheen
-        float soft = pow(NdH, 5.0) * 0.35;
-        float tight = pow(NdH, 180.0) * 0.90;
-        float spec = (soft + tight) * NdL;
-
-        specTotal += spec * float3(1.0, 0.97, 0.92) * 1.6;
-        diffTotal += NdL * 0.65;
-    }
-
-    // Light 2 - fill (cool)
-    {
-        float NdL = max(dot(Ng, L2), 0.0);
-        float3 H = normalize(L2 + V);
-        float NdH = max(dot(Ng, H), 0.0);
-
-        float soft = pow(NdH, 5.0) * 0.35;
-        float tight = pow(NdH, 180.0) * 0.75;
-        float spec = (soft + tight) * NdL;
-
-        specTotal += spec * float3(0.90, 0.93, 1.0) * 0.70;
-        diffTotal += NdL * 0.25;
-    }
-
-    // Light 3 - rim
-    {
-        float NdL = max(dot(Ng, L3), 0.0);
-        float3 H = normalize(L3 + V);
-        float NdH = max(dot(Ng, H), 0.0);
-
-        float spec = pow(NdH, 8.0) * NdL;
-        specTotal += spec * float3(0.85, 0.85, 0.9) * 0.35;
-        diffTotal += NdL * 0.1;
-    }
-
-    // ==========================================================
-    // CHROME MATERIAL
-    // ==========================================================
-    float3 F0 = float3(0.85, 0.83, 0.80);
-    F0 *= mix(1.0, 0.65, pressed);
+    // Soft lobe kept tiny — large softSpec was the "overexposed ball" look
+    float softSpec = pow(NdH1, 40.0) * 0.11 * diff1
+                   + pow(NdH2, 52.0) * 0.045 * diff2;
+    float tightSpec = pow(NdH1, 480.0) * 1.25 * diff1
+                    + pow(NdH2, 300.0) * 0.20 * diff2;
 
     float NdV = max(dot(N, V), 0.0);
-    float3 fresnel = F0 + (1.0 - F0) * pow(1.0 - NdV, 5.0);
-
-    // Very dark base - metal reads as dark with bright reflections
-    float3 chromeBase = mix(float3(0.06, 0.06, 0.07), float3(0.03, 0.03, 0.04), pressed);
+    float fresnel = 0.56 + 0.32 * pow(1.0 - NdV, 4.0);
 
     // ==========================================================
-    // ENVIRONMENT REFLECTION - the key to looking real
+    // ENVIRONMENT — mid studio luminance, single hue
     // ==========================================================
-    // Chrome is essentially a mirror. The convex dome focuses
-    // the sky reflection at center, camera body at edges.
     float3 reflDir = reflect(-V, Ng);
+    float envLum = 0.26
+                 + 0.11 * smoothstep(-0.9, 0.8, -reflDir.y)
+                 + 0.035 * (metalNoise(reflDir.xy * 3.0 + 1.7) - 0.5);
 
-    // Broad sky/ground
-    float skyMix = smoothstep(-0.15, 0.45, reflDir.y);
-    float3 envColor = mix(
-        float3(0.002, 0.002, 0.005), // near-black (camera body)
-        float3(0.58, 0.58, 0.64),    // bright overhead
-        skyMix
-    );
-    // Hard horizon band - mirrors reflect a sharp light/dark boundary,
-    // and that contrast edge is what makes chrome read as chrome
-    float horizon = 1.0 - smoothstep(0.0, 0.08, abs(reflDir.y - 0.12));
-    envColor += float3(0.30, 0.30, 0.33) * horizon;
-
-    // Organic variation
-    float env1 = metalNoise(reflDir.xy * 2.5 + 0.7);
-    float env2 = metalNoise(reflDir.xy * 5.0 + 2.3);
-    envColor *= (0.80 + (env1 * 0.55 + env2 * 0.35) * 0.5);
-
-    // Warm light source reflection
-    float warmZone = smoothstep(0.8, 0.0, length(reflDir.xy - float2(-0.25, 0.35)));
-    envColor += float3(0.25, 0.20, 0.14) * warmZone * warmZone;
+    // Very soft top-lit form; no sky/ground metal split
+    float formLift = mix(0.95, 1.035, smoothstep(0.85, 0.15, uv.y));
 
     // ==========================================================
     // COMPOSE
     // ==========================================================
     float3 result = float3(0);
+    result += tint * 0.20;                              // readable mid floor
+    result += tint * (diff1 * 0.17 + diff2 * 0.085);    // soft dome form
+    result += tint * envLum * fresnel * 0.40;           // restrained mirror
+    result += tint * softSpec * fresnel * 0.72;         // quiet polish
+    // Pin highlight only — body stays mid; hotspot goes near white
+    result += float3(1.0, 0.995, 0.99) * tightSpec * 0.90;
 
-    // Ambient (nearly black for chrome - all light comes from reflections)
-    result += chromeBase * 0.06;
-
-    // Diffuse (chrome has essentially none - it's all reflection)
-    result += chromeBase * diffTotal * 0.03;
-
-    // Specular (broad, natural arcs from bowl geometry)
-    result += fresnel * specTotal;
-
-    // Environment reflection (chrome is a mirror - this dominates)
-    result += fresnel * envColor * 1.05;
-
-    // Anisotropic lathe crescents: a bright arc sweeping toward the key
-    // light with a dark mirrored arc opposite - the signature look of
-    // machined, lathe-turned metal
+    // Turned-metal crescent (quiet)
     {
-        float2 keyDir = normalize(float2(-0.55, -0.60));
+        float2 keyDir = normalize(float2(-0.32, -0.58));
         float facing = dot(radDir, keyDir);
-        float annulus = smoothstep(0.18, 0.45, r) * smoothstep(0.95, 0.62, r);
-        float arcBright = pow(max(facing, 0.0), 2.5) * annulus;
-        float arcDark = pow(max(-facing, 0.0), 2.5) * annulus;
-        result += arcBright * float3(0.42, 0.41, 0.39) * (1.0 - pressed * 0.4);
-        result -= arcDark * float3(0.12, 0.12, 0.13);
+        float annulus = smoothstep(0.20, 0.50, r) * smoothstep(0.94, 0.55, r);
+        result += tint * pow(max(facing, 0.0), 3.0) * annulus * 0.12 * (1.0 - pressed * 0.4);
+        result *= 1.0 - pow(max(-facing, 0.0), 3.0) * annulus * 0.09;
     }
 
-    // Lathe texture - very subtle brightness modulation,
-    // the real effect is through the normal perturbation above
-    result *= (1.0 + lathe * 0.03 + microGrain * 0.015);
+    result *= 1.0 + (latheVis - 0.5) * 0.155;
+    result *= 1.0 + latheDeriv * 0.028 + microGrain * 0.018;
 
-    // ==========================================================
-    // DOME SHADING - center catches most light, edges fall off
-    // ==========================================================
-    // Gentle: a mirror's brightness comes from what it reflects,
-    // not from surface shading
-    float domeMod = 0.78 + height * 0.50;
-    result *= domeMod;
+    // Dome falloff + soft top light
+    result *= (0.91 + height * 0.46) * formLift;
 
-    // ==========================================================
-    // EDGE
-    // ==========================================================
-    // Machined chamfer catches light
-    float rimMask = smoothstep(0.83, 0.89, r) * smoothstep(0.98, 0.91, r);
-    result += rimMask * float3(0.30, 0.28, 0.26) * (diffTotal * 0.3 + 0.7);
+    // Machined chamfer, then collar gap
+    float rimMask = smoothstep(0.84, 0.90, r) * smoothstep(0.985, 0.92, r);
+    result += tint * rimMask * 0.20 * (0.65 + diff1 * 0.35);
 
-    // Gap shadow
-    float gapShadow = smoothstep(0.92, 0.99, r);
-    result *= (1.0 - gapShadow * 0.75);
+    float gapShadow = smoothstep(0.93, 0.995, r);
+    result *= 1.0 - gapShadow * 0.68;
 
-    // ==========================================================
-    // FINAL
-    // ==========================================================
-    result.r *= 1.0 + metalNoise(uv * 10.0) * 0.008;
-    result.b *= 1.0 - metalNoise(uv * 12.0 + 4.0) * 0.006;
-
+    result *= mix(1.0, 0.72, pressed);
     result = clamp(result, 0.0, 1.0);
 
     float mask = 1.0 - smoothstep(0.47, 0.50, dist);

@@ -39,11 +39,14 @@ struct Book: Codable, Identifiable, Equatable {
 final class GalleryStore: ObservableObject {
     @Published private(set) var shots: [ShotMetadata] = []
     @Published private(set) var books: [Book] = []
+    /// Bumped when a shot's JPEG bytes change so SwiftUI drops stale UIImage views.
+    @Published private(set) var imageRevisions: [UUID: Int] = [:]
 
     private let directory: URL
     private let indexURL: URL
     private let booksURL: URL
     private var thumbCache = NSCache<NSString, UIImage>()
+    private let ioQueue = DispatchQueue(label: "com.skylardann.filmcam.gallery", qos: .userInitiated)
 
     init() {
         let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -52,32 +55,42 @@ final class GalleryStore: ObservableObject {
         booksURL = directory.appendingPathComponent("books.json")
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         load()
+        // Older builds wrote into Documents/ProCameraBooks — pull those in once
+        // so the shelf isn't empty after the Field Book / GalleryStore switch.
+        migrateLegacyProCameraBooksIfNeeded()
+    }
+
+    func revision(for shot: ShotMetadata) -> Int {
+        imageRevisions[shot.id] ?? 0
     }
 
     // MARK: Shots
 
     func add(image: UIImage, metadata: ShotMetadata) {
         // Write files off the main thread, then publish
-        DispatchQueue.global(qos: .utility).async { [weak self] in
+        ioQueue.async { [weak self] in
             guard let self = self else { return }
 
             if let data = image.jpegData(compressionQuality: 0.9) {
-                try? data.write(to: self.imageURL(for: metadata.id))
+                try? data.write(to: self.imageURL(for: metadata.id), options: .atomic)
             }
             if let thumb = Self.thumbnail(from: image, longEdge: 900),
                let thumbData = thumb.jpegData(compressionQuality: 0.8) {
-                try? thumbData.write(to: self.thumbURL(for: metadata.id))
+                try? thumbData.write(to: self.thumbURL(for: metadata.id), options: .atomic)
             }
 
             DispatchQueue.main.async {
-                self.shots.append(metadata)
-                self.saveIndex()
+                if !self.shots.contains(where: { $0.id == metadata.id }) {
+                    self.shots.append(metadata)
+                    self.saveIndex()
+                }
             }
         }
     }
 
     func delete(_ shot: ShotMetadata) {
         shots.removeAll { $0.id == shot.id }
+        imageRevisions[shot.id] = nil
         saveIndex()
 
         // Strip the frame out of every book too
@@ -90,7 +103,7 @@ final class GalleryStore: ObservableObject {
         let imageURL = imageURL(for: shot.id)
         let thumbURL = thumbURL(for: shot.id)
         thumbCache.removeObject(forKey: shot.id.uuidString as NSString)
-        DispatchQueue.global(qos: .utility).async {
+        ioQueue.async {
             try? FileManager.default.removeItem(at: imageURL)
             try? FileManager.default.removeItem(at: thumbURL)
         }
@@ -113,6 +126,82 @@ final class GalleryStore: ObservableObject {
         return thumb
     }
 
+    /// Rewrite a shot's full-res JPEG + thumb on disk (used by post-capture Lens FX).
+    func replaceImage(_ image: UIImage, for shot: ShotMetadata, lensFXName: String? = nil,
+                      completion: ((Bool) -> Void)? = nil) {
+        ioQueue.async { [weak self] in
+            guard let self = self else {
+                DispatchQueue.main.async { completion?(false) }
+                return
+            }
+
+            guard let data = image.jpegData(compressionQuality: 0.9) else {
+                DispatchQueue.main.async { completion?(false) }
+                return
+            }
+
+            do {
+                try data.write(to: self.imageURL(for: shot.id), options: .atomic)
+                if let thumb = Self.thumbnail(from: image, longEdge: 900),
+                   let thumbData = thumb.jpegData(compressionQuality: 0.8) {
+                    try thumbData.write(to: self.thumbURL(for: shot.id), options: .atomic)
+                }
+            } catch {
+                DispatchQueue.main.async { completion?(false) }
+                return
+            }
+
+            DispatchQueue.main.async {
+                self.thumbCache.removeObject(forKey: shot.id.uuidString as NSString)
+                self.imageRevisions[shot.id, default: 0] += 1
+                if let lensFXName = lensFXName,
+                   let idx = self.shots.firstIndex(where: { $0.id == shot.id }) {
+                    let old = self.shots[idx]
+                    self.shots[idx] = ShotMetadata(
+                        id: old.id,
+                        date: old.date,
+                        iso: old.iso,
+                        shutter: old.shutter,
+                        aperture: old.aperture,
+                        ev: old.ev,
+                        filmFilter: old.filmFilter,
+                        lensFX: lensFXName,
+                        focalLength: old.focalLength
+                    )
+                    self.saveIndex()
+                } else {
+                    // Bytes changed even if metadata didn't — force observers
+                    self.objectWillChange.send()
+                }
+                completion?(true)
+            }
+        }
+    }
+
+    /// Bake a Lens FX onto an existing frame and persist the result.
+    func applyLensFX(_ fx: LensFXMode, to shot: ShotMetadata, completion: ((Bool) -> Void)? = nil) {
+        guard fx != .none else {
+            completion?(false)
+            return
+        }
+        guard let source = image(for: shot) else {
+            completion?(false)
+            return
+        }
+        // Render off-main, then reuse replaceImage (also io-bound) so disk + UI stay in sync.
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self = self else {
+                DispatchQueue.main.async { completion?(false) }
+                return
+            }
+            guard let rendered = LensFXEngine.shared.render(fx, on: source) else {
+                DispatchQueue.main.async { completion?(false) }
+                return
+            }
+            self.replaceImage(rendered, for: shot, lensFXName: fx.name, completion: completion)
+        }
+    }
+
     // MARK: Books
 
     @discardableResult
@@ -132,6 +221,14 @@ final class GalleryStore: ObservableObject {
         } else {
             add(shot, to: book)
         }
+    }
+
+    func renameBook(_ book: Book, to title: String) {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let i = books.firstIndex(where: { $0.id == book.id }) else { return }
+        books[i].title = trimmed
+        saveBooks()
     }
 
     func deleteBook(_ book: Book) {
@@ -226,6 +323,113 @@ final class GalleryStore: ObservableObject {
         }
     }
 
+    // MARK: Legacy migration (ProCameraBooks → PhotoBook)
+
+    private struct LegacyCatalog: Codable {
+        var books: [LegacyBook]
+        var shots: [LegacyShot]
+        var activeBookID: UUID?
+    }
+
+    private struct LegacyBook: Codable {
+        let id: UUID
+        var title: String
+        var createdAt: TimeInterval
+        var updatedAt: TimeInterval?
+        var coverShotID: UUID?
+        var shotIDs: [UUID]
+    }
+
+    private struct LegacyShot: Codable {
+        let id: UUID
+        let bookID: UUID
+        let createdAt: TimeInterval
+        let filename: String
+        let thumbFilename: String
+    }
+
+    /// One-time import from the pre–Field Book on-disk layout.
+    private func migrateLegacyProCameraBooksIfNeeded() {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        let legacyRoot = docs.appendingPathComponent("ProCameraBooks", isDirectory: true)
+        let catalogURL = legacyRoot.appendingPathComponent("catalog.json")
+        let flagURL = directory.appendingPathComponent(".migrated_procamerabooks_v1")
+
+        guard !FileManager.default.fileExists(atPath: flagURL.path),
+              FileManager.default.fileExists(atPath: catalogURL.path),
+              let data = try? Data(contentsOf: catalogURL),
+              let catalog = try? JSONDecoder().decode(LegacyCatalog.self, from: data)
+        else { return }
+
+        var existingShotIDs = Set(shots.map(\.id))
+        var importedAny = false
+        let fm = FileManager.default
+
+        for legacy in catalog.shots {
+            guard !existingShotIDs.contains(legacy.id) else { continue }
+            let bookDir = legacyRoot.appendingPathComponent(legacy.bookID.uuidString, isDirectory: true)
+            let srcImg = bookDir.appendingPathComponent(legacy.filename)
+            let srcThumb = bookDir.appendingPathComponent(legacy.thumbFilename)
+            guard fm.fileExists(atPath: srcImg.path) else { continue }
+
+            let dstImg = imageURL(for: legacy.id)
+            let dstThumb = thumbURL(for: legacy.id)
+            try? fm.copyItem(at: srcImg, to: dstImg)
+            if fm.fileExists(atPath: srcThumb.path) {
+                try? fm.copyItem(at: srcThumb, to: dstThumb)
+            } else if let img = UIImage(contentsOfFile: srcImg.path),
+                      let thumb = Self.thumbnail(from: img, longEdge: 900),
+                      let thumbData = thumb.jpegData(compressionQuality: 0.8) {
+                try? thumbData.write(to: dstThumb)
+            }
+
+            let meta = ShotMetadata(
+                id: legacy.id,
+                date: Date(timeIntervalSinceReferenceDate: legacy.createdAt),
+                iso: 0,
+                shutter: "—",
+                aperture: 0,
+                ev: 0,
+                filmFilter: "None",
+                lensFX: "None",
+                focalLength: 0
+            )
+            shots.append(meta)
+            existingShotIDs.insert(legacy.id)
+            importedAny = true
+        }
+
+        var existingBookIDs = Set(books.map(\.id))
+        for lb in catalog.books {
+            guard !existingBookIDs.contains(lb.id) else { continue }
+            // Skip empty placeholder rolls — All Frames already covers the master roll.
+            if lb.shotIDs.isEmpty && lb.title.localizedCaseInsensitiveContains("camera roll") {
+                continue
+            }
+            let pinned: Set<UUID> = lb.coverShotID.map { Set([$0]) } ?? []
+            // Only keep shot IDs that we actually have files for
+            let members = lb.shotIDs.filter { existingShotIDs.contains($0) }
+            books.append(Book(
+                id: lb.id,
+                title: lb.title,
+                createdAt: Date(timeIntervalSinceReferenceDate: lb.createdAt),
+                shotIDs: members,
+                pinnedShotIDs: pinned.intersection(existingShotIDs)
+            ))
+            existingBookIDs.insert(lb.id)
+            importedAny = true
+        }
+
+        if importedAny {
+            // Newest last to match GalleryStore.add append order
+            shots.sort { $0.date < $1.date }
+            saveIndex()
+            saveBooks()
+        }
+
+        try? Data("1".utf8).write(to: flagURL)
+    }
+
     private static func thumbnail(from image: UIImage, longEdge: CGFloat) -> UIImage? {
         let maxDim = max(image.size.width, image.size.height)
         guard maxDim > longEdge else { return image }
@@ -252,11 +456,13 @@ struct LibraryView: View {
     @State private var openedSharedBook: CloudBookManager.SharedBookRef?
     @State private var showNewBook = false
     @State private var newBookTitle = ""
+    @State private var bookPendingRename: Book?
+    @State private var renameTitle = ""
     @State private var pressedRouteID: String?
     /// Open a book and immediately present the file-frames picker
     @State private var pendingAddFrames = false
 
-    private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
+    private let accent = DS.accent
     private let booksPerShelf = 3
 
     enum BookRoute: Identifiable, Equatable {
@@ -316,7 +522,17 @@ struct LibraryView: View {
                 header
                     .padding(.horizontal, 20)
                     .padding(.top, 14)
-                    .padding(.bottom, 12)
+                    .padding(.bottom, 6)
+                    // Keep the close control tappable even while a book is open
+                    .opacity(route == nil && openedSharedBook == nil ? 1 : 0)
+                    .allowsHitTesting(route == nil && openedSharedBook == nil)
+
+                Text("TAP A COVER TO OPEN")
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .tracking(2.5)
+                    .foregroundColor(.white.opacity(0.28))
+                    .frame(maxWidth: .infinity)
+                    .padding(.bottom, 10)
                     .opacity(route == nil && openedSharedBook == nil ? 1 : 0)
 
                 ScrollView(showsIndicators: false) {
@@ -396,6 +612,19 @@ struct LibraryView: View {
         } message: {
             Text("Name your book — you'll pick frames from All Frames next.")
         }
+        .alert("Rename Book", isPresented: Binding(
+            get: { bookPendingRename != nil },
+            set: { if !$0 { bookPendingRename = nil } }
+        )) {
+            TextField("Title", text: $renameTitle)
+            Button("Save") {
+                if let book = bookPendingRename {
+                    store.renameBook(book, to: renameTitle)
+                }
+                bookPendingRename = nil
+            }
+            Button("Cancel", role: .cancel) { bookPendingRename = nil }
+        }
         .statusBarHidden(true)
     }
 
@@ -417,6 +646,12 @@ struct LibraryView: View {
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 withAnimation(.spring(response: 0.48, dampingFraction: 0.86)) {
                     route = .book(id)
+                }
+            },
+            onRename: { id in
+                if let book = store.books.first(where: { $0.id == id }) {
+                    bookPendingRename = book
+                    renameTitle = book.title
                 }
             },
             onDelete: { id in
@@ -727,6 +962,7 @@ struct ShelfRow: View {
     let onOpen: (ShelfItem) -> Void
     let onNew: () -> Void
     let onAddFrames: (UUID) -> Void
+    var onRename: ((UUID) -> Void)? = nil
     let onDelete: (UUID) -> Void
 
     @State private var rowAppeared = false
@@ -807,6 +1043,11 @@ struct ShelfRow: View {
                             onAddFrames(id)
                         } label: {
                             Label("Add frames…", systemImage: "plus.rectangle.on.rectangle")
+                        }
+                        Button {
+                            onRename?(id)
+                        } label: {
+                            Label("Rename", systemImage: "pencil")
                         }
                         Button(role: .destructive) {
                             onDelete(id)
@@ -1147,8 +1388,16 @@ struct PhotoBookView: View {
     @State private var isPreparingShare = false
     @State private var shareError: String?
     @State private var showAddFrames = false
+    @State private var frameShare: FrameSharePayload?
+    @State private var fxBusyShotID: UUID?
+    @State private var fxError: String?
 
-    private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
+    private let accent = DS.accent
+
+    private struct FrameSharePayload: Identifiable {
+        let id = UUID()
+        let items: [Any]
+    }
 
     private var book: Book? { store.book(withID: bookID) }
 
@@ -1240,7 +1489,17 @@ struct PhotoBookView: View {
         }
         .overlay {
             if let shot = zoomedShot {
-                Lightbox(image: store.image(for: shot)) { zoomedShot = nil }
+                // Resolve latest metadata so post-FX caption/revision stay live
+                let live = store.shots.first(where: { $0.id == shot.id }) ?? shot
+                Lightbox(
+                    image: store.image(for: live),
+                    revision: store.revision(for: live),
+                    accent: accent,
+                    isApplyingFX: fxBusyShotID == live.id,
+                    onApplyFX: { fx in applyLensFX(fx, to: live) },
+                    onShare: { shareFrame(live) },
+                    onDismiss: { zoomedShot = nil }
+                )
             }
         }
         .sheet(isPresented: $showAddFrames) {
@@ -1251,6 +1510,9 @@ struct PhotoBookView: View {
         .sheet(item: $shareContext) { context in
             CloudSharingSheet(share: context.share, container: context.container, title: context.title)
         }
+        .sheet(item: $frameShare) { payload in
+            ActivityShareSheet(items: payload.items)
+        }
         .alert("Couldn't share book", isPresented: Binding(
             get: { shareError != nil },
             set: { if !$0 { shareError = nil } }
@@ -1258,6 +1520,14 @@ struct PhotoBookView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(shareError ?? "")
+        }
+        .alert("Couldn't apply Lens FX", isPresented: Binding(
+            get: { fxError != nil },
+            set: { if !$0 { fxError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(fxError ?? "")
         }
         .onAppear {
             revealContent(after: 0.3)
@@ -1298,6 +1568,10 @@ struct PhotoBookView: View {
     // Upload the book to iCloud and show the system invite sheet
     private func prepareShare() {
         guard let book = book, !isPreparingShare else { return }
+        guard CloudBookManager.shared.isCloudAvailable else {
+            shareError = "iCloud sharing isn't available in this build."
+            return
+        }
         isPreparingShare = true
         CloudBookManager.shared.share(book: book, store: store) { result in
             isPreparingShare = false
@@ -1307,6 +1581,39 @@ struct PhotoBookView: View {
             case .failure(let error):
                 shareError = error.localizedDescription
             }
+        }
+    }
+
+    private func shareFrame(_ shot: ShotMetadata) {
+        let url = store.imageFileURL(for: shot)
+        if FileManager.default.fileExists(atPath: url.path) {
+            frameShare = FrameSharePayload(items: [url])
+        } else if let image = store.image(for: shot) {
+            frameShare = FrameSharePayload(items: [image])
+        }
+    }
+
+    private func applyLensFX(_ fx: LensFXMode, to shot: ShotMetadata) {
+        guard fxBusyShotID == nil else { return }
+        fxBusyShotID = shot.id
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        store.applyLensFX(fx, to: shot) { ok in
+            fxBusyShotID = nil
+            if ok {
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+                // Keep lightbox on the same shot; revision bump refreshes pixels
+                zoomedShot = store.shots.first(where: { $0.id == shot.id }) ?? shot
+            } else {
+                fxError = "The effect couldn’t be baked onto this frame."
+            }
+        }
+    }
+
+    private func clampPageAfterRemoval() {
+        // Pages: 0 = contact sheet, 1...n = prints. Max index == shot count.
+        let maxPage = bookShots.count
+        if currentPage > maxPage {
+            currentPage = maxPage
         }
     }
 
@@ -1330,13 +1637,13 @@ struct PhotoBookView: View {
                 bookID: bookID,
                 pageNumber: index,
                 accent: accent,
+                isApplyingFX: fxBusyShotID == shot.id,
                 onZoom: { zoomedShot = shot },
-                onRemoved: {
-                    if currentPage > max(shots.count - 1, 0) {
-                        currentPage = max(shots.count - 1, 0)
-                    }
-                }
+                onShare: { shareFrame(shot) },
+                onApplyFX: { fx in applyLensFX(fx, to: shot) },
+                onRemoved: { clampPageAfterRemoval() }
             )
+            .id("\(shot.id)-\(store.revision(for: shot))")
         } else {
             Color.clear
         }
@@ -1392,27 +1699,30 @@ struct PhotoBookView: View {
                 }
                 .padding(.trailing, 6)
 
-                Button(action: prepareShare) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.black.opacity(0.5))
-                            .frame(width: 34, height: 34)
-                        Circle()
-                            .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
-                            .frame(width: 34, height: 34)
-                        if isPreparingShare {
-                            ProgressView()
-                                .scaleEffect(0.6)
-                                .tint(.white.opacity(0.8))
-                        } else {
-                            Image(systemName: "person.crop.circle.badge.plus")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(.white.opacity(0.8))
+                // Hidden on Shutter DEV / NoCloud — CKContainer isn't entitled.
+                if CloudBookManager.shared.isCloudAvailable {
+                    Button(action: prepareShare) {
+                        ZStack {
+                            Circle()
+                                .fill(Color.black.opacity(0.5))
+                                .frame(width: 34, height: 34)
+                            Circle()
+                                .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
+                                .frame(width: 34, height: 34)
+                            if isPreparingShare {
+                                ProgressView()
+                                    .scaleEffect(0.6)
+                                    .tint(.white.opacity(0.8))
+                            } else {
+                                Image(systemName: "person.crop.circle.badge.plus")
+                                    .font(.system(size: 13, weight: .semibold))
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
                         }
                     }
+                    .disabled(isPreparingShare)
+                    .padding(.trailing, 6)
                 }
-                .disabled(isPreparingShare)
-                .padding(.trailing, 6)
             }
 
             Button(action: close) {
@@ -1744,9 +2054,26 @@ struct PageCurlView<Page: View>: UIViewControllerRepresentable {
     func updateUIViewController(_ pvc: UIPageViewController, context: Context) {
         context.coordinator.parent = self
 
-        guard let visible = pvc.viewControllers?.first as? IndexedHostingController<Page> else { return }
+        guard pageCount > 0 else { return }
 
-        let target = min(max(currentPage, 0), max(pageCount - 1, 0))
+        let target = min(max(currentPage, 0), pageCount - 1)
+
+        guard let visible = pvc.viewControllers?.first as? IndexedHostingController<Page> else {
+            pvc.setViewControllers([context.coordinator.controller(for: target)],
+                                   direction: .forward, animated: false)
+            return
+        }
+
+        // Drop stale pages when the book shrinks (delete / remove from book)
+        if visible.pageIndex >= pageCount {
+            pvc.setViewControllers([context.coordinator.controller(for: target)],
+                                   direction: .reverse, animated: false)
+            if currentPage != target {
+                DispatchQueue.main.async { self.currentPage = target }
+            }
+            return
+        }
+
         if visible.pageIndex != target {
             // External page change (contact-sheet jump, deletion clamp)
             let direction: UIPageViewController.NavigationDirection =
@@ -2019,7 +2346,10 @@ struct PrintPage: View {
     let bookID: UUID?
     let pageNumber: Int
     let accent: Color
+    var isApplyingFX: Bool = false
     let onZoom: () -> Void
+    var onShare: (() -> Void)? = nil
+    var onApplyFX: ((LensFXMode) -> Void)? = nil
     let onRemoved: () -> Void
 
     private var currentBook: Book? { store.book(withID: bookID) }
@@ -2083,6 +2413,32 @@ struct PrintPage: View {
 
     @ViewBuilder
     private var printMenu: some View {
+        Button {
+            onShare?()
+        } label: {
+            Label("Share frame", systemImage: "square.and.arrow.up")
+        }
+
+        if let onApplyFX = onApplyFX {
+            Menu {
+                ForEach(LensFXMode.pickerCases.filter { $0 != .none }, id: \.self) { fx in
+                    Button {
+                        onApplyFX(fx)
+                    } label: {
+                        if shot.lensFX == fx.name {
+                            Label(fx.name, systemImage: "checkmark")
+                        } else {
+                            Text(fx.name)
+                        }
+                    }
+                }
+            } label: {
+                Label("Apply Lens FX", systemImage: "wand.and.rays")
+            }
+        }
+
+        Divider()
+
         if let book = currentBook {
             // Inside a book: pin and remove-from-book
             Button {
@@ -2308,10 +2664,16 @@ struct BookPage<Content: View>: View {
 // MARK: - Lightbox (full-screen zoomable view)
 struct Lightbox: View {
     let image: UIImage?
+    var revision: Int = 0
+    var accent: Color = DS.accent
+    var isApplyingFX: Bool = false
+    var onApplyFX: ((LensFXMode) -> Void)? = nil
+    var onShare: (() -> Void)? = nil
     let onDismiss: () -> Void
 
     @State private var scale: CGFloat = 1.0
     @State private var lastScale: CGFloat = 1.0
+    @State private var showFXPicker = false
 
     var body: some View {
         ZStack {
@@ -2322,6 +2684,7 @@ struct Lightbox: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .scaleEffect(scale)
+                    .id("lightbox-\(revision)")
                     .gesture(
                         MagnificationGesture()
                             .onChanged { value in
@@ -2331,26 +2694,57 @@ struct Lightbox: View {
                                 lastScale = scale
                             }
                     )
+                    .opacity(isApplyingFX ? 0.4 : 1)
+            } else {
+                Text("FRAME UNAVAILABLE")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .tracking(2)
+                    .foregroundColor(.white.opacity(0.4))
+            }
+
+            if isApplyingFX {
+                VStack(spacing: 10) {
+                    ProgressView()
+                        .tint(accent)
+                    Text("BAKING LENS FX")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .tracking(2)
+                        .foregroundColor(accent.opacity(0.9))
+                }
             }
 
             VStack {
-                HStack {
-                    Spacer()
-                    Button(action: onDismiss) {
-                        ZStack {
-                            Circle().fill(Color.white.opacity(0.12)).frame(width: 34, height: 34)
-                            Image(systemName: "xmark")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(.white.opacity(0.9))
+                HStack(spacing: 10) {
+                    if onShare != nil {
+                        lightboxButton(icon: "square.and.arrow.up") {
+                            onShare?()
                         }
                     }
-                    .padding(.trailing, 20)
-                    .padding(.top, 16)
+                    if onApplyFX != nil {
+                        lightboxButton(icon: "wand.and.rays", accented: true) {
+                            showFXPicker = true
+                        }
+                        .disabled(isApplyingFX)
+                    }
+                    Spacer()
+                    lightboxButton(icon: "xmark", action: onDismiss)
                 }
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+
                 Spacer()
+
+                if showFXPicker, let onApplyFX = onApplyFX {
+                    lensFXTray(onApplyFX)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
             }
         }
         .onTapGesture {
+            if showFXPicker {
+                withAnimation(.easeOut(duration: 0.2)) { showFXPicker = false }
+                return
+            }
             if scale <= 1.01 { onDismiss() } else {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                     scale = 1.0
@@ -2359,4 +2753,73 @@ struct Lightbox: View {
             }
         }
     }
+
+    private func lightboxButton(icon: String, accented: Bool = false, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(Color.white.opacity(accented ? 0.18 : 0.12))
+                    .frame(width: 34, height: 34)
+                Image(systemName: icon)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundColor(accented ? accent : .white.opacity(0.9))
+            }
+        }
+    }
+
+    private func lensFXTray(_ onApplyFX: @escaping (LensFXMode) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("LENS FX")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .tracking(3)
+                .foregroundColor(.white.opacity(0.55))
+                .padding(.horizontal, 4)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(LensFXMode.pickerCases.filter { $0 != .none }, id: \.self) { fx in
+                        Button {
+                            showFXPicker = false
+                            onApplyFX(fx)
+                        } label: {
+                            Text(fx.name.uppercased())
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .tracking(1)
+                                .foregroundColor(.black)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 9)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .fill(accent)
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .padding(.horizontal, 2)
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 14)
+                .fill(Color(hex: "141414").opacity(0.94))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
+                )
+        )
+        .padding(.horizontal, 16)
+        .padding(.bottom, 28)
+    }
+}
+
+// MARK: - System share sheet
+struct ActivityShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
