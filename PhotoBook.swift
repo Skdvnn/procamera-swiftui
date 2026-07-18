@@ -115,12 +115,23 @@ final class GalleryStore: ObservableObject {
 
     // MARK: Books
 
-    func createBook(title: String) {
+    @discardableResult
+    func createBook(title: String) -> Book? {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        books.append(Book(id: UUID(), title: trimmed, createdAt: Date(),
-                          shotIDs: [], pinnedShotIDs: []))
+        guard !trimmed.isEmpty else { return nil }
+        let book = Book(id: UUID(), title: trimmed, createdAt: Date(),
+                        shotIDs: [], pinnedShotIDs: [])
+        books.append(book)
         saveBooks()
+        return book
+    }
+
+    func toggle(_ shot: ShotMetadata, in book: Book) {
+        if contains(shot, book: book) {
+            remove(shot, from: book)
+        } else {
+            add(shot, to: book)
+        }
     }
 
     func deleteBook(_ book: Book) {
@@ -370,10 +381,18 @@ struct LibraryView: View {
         }
         .alert("New Book", isPresented: $showNewBook) {
             TextField("Title (e.g. Big Sur Trip)", text: $newBookTitle)
-            Button("Create") { store.createBook(title: newBookTitle) }
+            Button("Create") {
+                if let book = store.createBook(title: newBookTitle) {
+                    newBookTitle = ""
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    withAnimation(.spring(response: 0.48, dampingFraction: 0.86)) {
+                        route = .book(book.id)
+                    }
+                }
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Name your book, then long-press frames in All Frames to add them.")
+            Text("Name your book — tap + inside to file frames from All Frames.")
         }
         .statusBarHidden(true)
     }
@@ -1017,6 +1036,7 @@ struct PhotoBookView: View {
     @State private var shareContext: CloudBookManager.ShareContext?
     @State private var isPreparingShare = false
     @State private var shareError: String?
+    @State private var showAddFrames = false
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
 
@@ -1111,6 +1131,11 @@ struct PhotoBookView: View {
         .overlay {
             if let shot = zoomedShot {
                 Lightbox(image: store.image(for: shot)) { zoomedShot = nil }
+            }
+        }
+        .sheet(isPresented: $showAddFrames) {
+            if let book = book {
+                LocalAddFramesPicker(store: store, book: book)
             }
         }
         .sheet(item: $shareContext) { context in
@@ -1220,8 +1245,23 @@ struct PhotoBookView: View {
 
             Spacer()
 
-            // Invite people into this book (user books only — not the master roll)
+            // File frames + invite (user books only — not the master roll)
             if book != nil {
+                Button(action: { showAddFrames = true }) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.black.opacity(0.5))
+                            .frame(width: 34, height: 34)
+                        Circle()
+                            .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
+                            .frame(width: 34, height: 34)
+                        Image(systemName: "plus")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                }
+                .padding(.trailing, 6)
+
                 Button(action: prepareShare) {
                     ZStack {
                         Circle()
@@ -1314,12 +1354,132 @@ struct PhotoBookView: View {
                 .foregroundColor(.white.opacity(0.5))
             Text(bookID == nil
                  ? "Every shot you take is bound into this book"
-                 : "Long-press frames in All Frames to add them here")
+                 : "Pull frames from All Frames with +")
                 .font(.system(size: 10, weight: .regular, design: .monospaced))
                 .foregroundColor(.white.opacity(0.3))
                 .multilineTextAlignment(.center)
+
+            if book != nil {
+                Button(action: { showAddFrames = true }) {
+                    Text("ADD FRAMES")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .tracking(2)
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 12)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(accent)
+                        )
+                }
+                .padding(.top, 4)
+            }
+
             Spacer()
             Spacer()
+        }
+    }
+}
+
+// MARK: - Local Add Frames Picker
+/// Tap frames from All Frames to file them into a local book (shared books already have this).
+struct LocalAddFramesPicker: View {
+    @ObservedObject var store: GalleryStore
+    let book: Book
+    @Environment(\.dismiss) private var dismiss
+
+    private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
+    private let columns = [GridItem(.adaptive(minimum: 90), spacing: 6)]
+
+    private var liveBook: Book? { store.book(withID: book.id) }
+
+    var body: some View {
+        ZStack {
+            Color(hex: "141414").ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("ADD FRAMES")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .tracking(3)
+                            .foregroundColor(.white.opacity(0.9))
+                        Text(book.title.uppercased())
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .tracking(2)
+                            .foregroundColor(.white.opacity(0.35))
+                    }
+                    Spacer()
+                    Button("Done") { dismiss() }
+                        .font(.system(size: 12, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.6))
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+
+                if store.shots.isEmpty {
+                    Spacer()
+                    Text("ALL FRAMES IS EMPTY")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .tracking(2)
+                        .foregroundColor(.white.opacity(0.4))
+                    Text("Shoot first, then file them here")
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.28))
+                        .padding(.top, 6)
+                    Spacer()
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 6) {
+                            ForEach(store.shots.reversed()) { shot in
+                                let inBook = liveBook.map { store.contains(shot, book: $0) } ?? false
+                                Button {
+                                    if let current = liveBook {
+                                        withAnimation(.easeInOut(duration: 0.15)) {
+                                            store.toggle(shot, in: current)
+                                        }
+                                    }
+                                } label: {
+                                    ZStack(alignment: .topTrailing) {
+                                        ZStack {
+                                            Rectangle().fill(Color.black)
+                                            if let thumb = store.thumbnail(for: shot) {
+                                                Image(uiImage: thumb)
+                                                    .resizable()
+                                                    .aspectRatio(contentMode: .fill)
+                                            }
+                                        }
+                                        .frame(height: 90)
+                                        .clipped()
+
+                                        if inBook {
+                                            Image(systemName: "checkmark.circle.fill")
+                                                .font(.system(size: 16))
+                                                .foregroundColor(accent)
+                                                .padding(4)
+                                        }
+                                    }
+                                    .overlay(
+                                        Rectangle().stroke(
+                                            inBook ? accent.opacity(0.8) : Color.white.opacity(0.1),
+                                            lineWidth: inBook ? 1.5 : 0.5
+                                        )
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 24)
+                    }
+
+                    Text("TAP TO ADD OR REMOVE")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .tracking(2)
+                        .foregroundColor(.white.opacity(0.3))
+                        .padding(.bottom, 16)
+                }
+            }
         }
     }
 }
@@ -1521,12 +1681,12 @@ struct PrintPage: View {
                 Label("Remove from this book", systemImage: "minus.circle")
             }
         } else {
-            // Master roll: add to books, or delete the frame everywhere
+            // Master roll: toggle book membership, or delete the frame everywhere
             if !store.books.isEmpty {
                 Menu {
                     ForEach(store.books) { book in
                         Button {
-                            store.add(shot, to: book)
+                            store.toggle(shot, in: book)
                         } label: {
                             if store.contains(shot, book: book) {
                                 Label(book.title, systemImage: "checkmark")
@@ -1536,7 +1696,7 @@ struct PrintPage: View {
                         }
                     }
                 } label: {
-                    Label("Add to book", systemImage: "book.closed")
+                    Label("Books", systemImage: "book.closed")
                 }
             }
 

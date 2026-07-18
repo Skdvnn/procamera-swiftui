@@ -76,8 +76,14 @@ class CameraManager: NSObject, ObservableObject {
     private var videoDataOutput: AVCaptureVideoDataOutput?
     private var longExposureAccumulator: CIImage?
     private var longExposureFrameCount: Int = 0
-    private var longExposureTargetFrames: Int = 0
+    private var longExposureStartTime: CFAbsoluteTime = 0
+    private var longExposureTargetDuration: TimeInterval = 0
     private var longExposureCompletion: ((UIImage?) -> Void)?
+    /// Frame-accumulation gate (video queue). Separate from the published UI flag.
+    private var isAccumulatingLongExposure = false
+    private var isFinalizingLongExposure = false
+    private var longExposureFilmFilter: FilmFilter = .none
+    private var longExposureLensFX: LensFXMode = .none
 
     // Film filter types (color grades / stocks — not GPU morph shaders)
     enum FilmFilter: Int, CaseIterable {
@@ -365,11 +371,21 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     // MARK: - Computational Long Exposure
-    func captureLongExposure(durationSeconds: Double, completion: @escaping (UIImage?) -> Void) {
+    /// - Parameters:
+    ///   - filmFilter / lensFX: Optional overrides frozen at shutter time (same as `capturePhoto`).
+    func captureLongExposure(
+        durationSeconds: Double,
+        filmFilter: FilmFilter? = nil,
+        lensFX: LensFXMode? = nil,
+        completion: @escaping (UIImage?) -> Void
+    ) {
         guard let device = videoDeviceInput?.device else {
             completion(nil)
             return
         }
+
+        longExposureFilmFilter = filmFilter ?? selectedFilmFilter
+        longExposureLensFX = lensFX ?? selectedLensFX
 
         // Get device's actual max exposure duration
         let maxHardwareDuration = CMTimeGetSeconds(device.activeFormat.maxExposureDuration)
@@ -390,6 +406,13 @@ class CameraManager: NSObject, ObservableObject {
         }
 
         let targetDuration = CMTime(seconds: duration, preferredTimescale: 1000000)
+        let captureFilm = longExposureFilmFilter
+        let captureFX = longExposureLensFX
+
+        DispatchQueue.main.async {
+            self.isLongExposureCapturing = true
+            self.longExposureProgress = 0.0
+        }
 
         sessionQueue.async {
             do {
@@ -400,10 +423,13 @@ class CameraManager: NSObject, ObservableObject {
                 device.setExposureModeCustom(duration: targetDuration, iso: targetISO) { _ in
                     // Now capture the photo
                     DispatchQueue.main.async {
-                        self.capturePhoto { image in
+                        self.longExposureProgress = 1.0
+                        self.capturePhoto(filmFilter: captureFilm, lensFX: captureFX) { image in
                             // Restore auto exposure or the preview stays at
                             // seconds-per-frame and the camera looks frozen
                             self.resetToAutoExposure()
+                            self.isLongExposureCapturing = false
+                            self.longExposureProgress = 0.0
                             completion(image)
                         }
                     }
@@ -412,7 +438,10 @@ class CameraManager: NSObject, ObservableObject {
                 device.unlockForConfiguration()
             } catch {
                 print("Error setting long exposure: \(error)")
-                DispatchQueue.main.async { completion(nil) }
+                DispatchQueue.main.async {
+                    self.isLongExposureCapturing = false
+                    completion(nil)
+                }
             }
         }
     }
@@ -423,39 +452,40 @@ class CameraManager: NSObject, ObservableObject {
             return
         }
 
-        // Calculate how many frames we need at 30fps
-        let fps: Double = 30.0
-        let frameCount = Int(targetDuration * fps)
-
+        // Wall-clock target: stop when real time elapses, not after N frames at 30fps.
+        // Per-frame exposure often uses hardware max (~1s), so a frame-count budget
+        // made "4s" LE take minutes and feel stuck.
         DispatchQueue.main.async {
             self.isLongExposureCapturing = true
             self.longExposureProgress = 0.0
         }
 
+        isFinalizingLongExposure = false
+        isAccumulatingLongExposure = true
         longExposureAccumulator = nil
         longExposureFrameCount = 0
-        longExposureTargetFrames = frameCount
+        longExposureStartTime = CFAbsoluteTimeGetCurrent()
+        longExposureTargetDuration = max(targetDuration, 0.1)
         longExposureCompletion = completion
 
-        // Set camera to max exposure per frame for best results
+        // Set camera to max exposure per frame for best light gathering
         sessionQueue.async {
             do {
                 try device.lockForConfiguration()
 
-                // Use hardware max exposure duration per frame for dark room support
                 let maxDuration = device.activeFormat.maxExposureDuration
-                let frameDuration = CMTime(seconds: 1.0/fps, preferredTimescale: 1000000)
+                let frameDuration = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 1000000)
                 // In dark rooms, use max hardware exposure duration to capture more light
                 let exposureDuration = CMTimeCompare(maxDuration, frameDuration) > 0 ? maxDuration : frameDuration
 
-                // Use user's selected ISO (clamped to device limits) instead of forcing minISO
-                // This allows proper exposure in dark rooms
                 let targetISO = max(device.activeFormat.minISO, min(self.isoValue, device.activeFormat.maxISO))
                 device.setExposureModeCustom(duration: exposureDuration, iso: targetISO) { _ in }
 
                 device.unlockForConfiguration()
             } catch {
                 print("Error setting up computational long exposure: \(error)")
+                self.isAccumulatingLongExposure = false
+                self.longExposureCompletion = nil
                 DispatchQueue.main.async {
                     self.isLongExposureCapturing = false
                     completion(nil)
@@ -464,27 +494,27 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
+    /// Running-average accumulator already stays in display range — just render it.
     private func normalizeAccumulator() -> UIImage? {
         guard let accumulator = longExposureAccumulator, longExposureFrameCount > 0 else { return nil }
 
-        let count = Float(longExposureFrameCount)
-
-        // Normalize by dividing by frame count
-        let colorMatrix = CIFilter.colorMatrix()
-        colorMatrix.inputImage = accumulator
-        let scale = 1.0 / count
-        colorMatrix.rVector = CIVector(x: CGFloat(scale), y: 0, z: 0, w: 0)
-        colorMatrix.gVector = CIVector(x: 0, y: CGFloat(scale), z: 0, w: 0)
-        colorMatrix.bVector = CIVector(x: 0, y: 0, z: CGFloat(scale), w: 0)
-        colorMatrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
-        colorMatrix.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
-
-        guard let normalizedImage = colorMatrix.outputImage,
-              let cgImage = ciContext.createCGImage(normalizedImage, from: normalizedImage.extent) else {
+        guard let cgImage = ciContext.createCGImage(accumulator, from: accumulator.extent) else {
             return nil
         }
 
         return UIImage(cgImage: cgImage)
+    }
+
+    private func scaledCIImage(_ image: CIImage, scale: Float) -> CIImage {
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = image
+        let s = CGFloat(scale)
+        matrix.rVector = CIVector(x: s, y: 0, z: 0, w: 0)
+        matrix.gVector = CIVector(x: 0, y: s, z: 0, w: 0)
+        matrix.bVector = CIVector(x: 0, y: 0, z: s, w: 0)
+        matrix.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        matrix.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        return matrix.outputImage ?? image
     }
 
     func startSession() {
@@ -1548,59 +1578,76 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             }
         }
 
-        // Handle long exposure frame capture
-        guard isLongExposureCapturing,
-              longExposureFrameCount < longExposureTargetFrames else {
-            if isLongExposureCapturing && longExposureFrameCount >= longExposureTargetFrames {
+        // Handle long exposure frame capture (wall-clock stop + running average)
+        guard isAccumulatingLongExposure else { return }
+
+        let elapsed = CFAbsoluteTimeGetCurrent() - longExposureStartTime
+        // Prefer at least one frame before stopping; bail if the sensor never delivers.
+        if elapsed >= longExposureTargetDuration {
+            if longExposureFrameCount > 0 || elapsed >= longExposureTargetDuration + 8 {
                 finalizeLongExposure()
             }
             return
         }
 
-        // Running accumulation — add frame to accumulator.
-        // Accumulate at reduced resolution: adding full-res frames at 30fps
-        // saturates the GPU and freezes the app during the exposure.
+        // Running average keeps values in 0…1 so periodic 8-bit flatten is safe.
+        // (Old path summed then divided — flatten crushed highlights → near-black.)
         let accumulationFrame = downscaled(ciImage, longEdge: 2048)
-        if let acc = longExposureAccumulator {
+        longExposureFrameCount += 1
+        let n = Float(longExposureFrameCount)
+        if let acc = longExposureAccumulator, n > 1 {
+            let scaledOld = scaledCIImage(acc, scale: (n - 1) / n)
+            let scaledNew = scaledCIImage(accumulationFrame, scale: 1 / n)
             let blend = CIFilter.additionCompositing()
-            blend.inputImage = accumulationFrame
-            blend.backgroundImage = acc
+            blend.inputImage = scaledNew
+            blend.backgroundImage = scaledOld
             longExposureAccumulator = blend.outputImage
         } else {
             longExposureAccumulator = accumulationFrame
         }
-        longExposureFrameCount += 1
 
-        // Render intermediate result every 30 frames to keep CIFilter chain shallow
+        // Keep the CIFilter graph shallow
         if longExposureFrameCount % 30 == 0, let acc = longExposureAccumulator {
             if let rendered = ciContext.createCGImage(acc, from: acc.extent) {
                 longExposureAccumulator = CIImage(cgImage: rendered)
             }
         }
 
-        let progress = Float(longExposureFrameCount) / Float(longExposureTargetFrames)
+        let progress = min(1.0, Float(elapsed / longExposureTargetDuration))
         DispatchQueue.main.async {
             self.longExposureProgress = progress
         }
     }
 
     private func finalizeLongExposure() {
-        guard isLongExposureCapturing else { return }
+        // Gate against repeated calls while the video queue is still delivering frames
+        guard isAccumulatingLongExposure, !isFinalizingLongExposure else { return }
+        isFinalizingLongExposure = true
+        isAccumulatingLongExposure = false
 
         DispatchQueue.main.async {
             self.isLongExposureCapturing = false
+            self.longExposureProgress = 1.0
         }
+
+        // Snapshot + bake BEFORE restoring exposure. resetToAutoExposure used to
+        // nil the accumulator first, so normalize always returned nil.
+        let captureFilmFilter = longExposureFilmFilter
+        let captureLensFX = longExposureLensFX
+        let completion = longExposureCompletion
+        longExposureCompletion = nil
+        isBakingStill = true
+
+        let resultImage = normalizeAccumulator()
+
+        longExposureAccumulator = nil
+        longExposureFrameCount = 0
+        longExposureTargetDuration = 0
 
         resetToAutoExposure()
 
-        let captureFilmFilter = selectedFilmFilter
-        let captureLensFX = selectedLensFX
-        isBakingStill = true
-
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-
-            let resultImage = self.normalizeAccumulator()
 
             let finalImage: UIImage?
             if let img = resultImage {
@@ -1612,13 +1659,11 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 finalImage = nil
             }
 
-            self.longExposureAccumulator = nil
-            self.longExposureFrameCount = 0
             self.isBakingStill = false
+            self.isFinalizingLongExposure = false
 
             DispatchQueue.main.async {
-                self.longExposureCompletion?(finalImage)
-                self.longExposureCompletion = nil
+                completion?(finalImage)
                 self.longExposureProgress = 0.0
             }
         }
@@ -1627,29 +1672,23 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     private func resetToAutoExposure() {
         guard let device = videoDeviceInput?.device else { return }
 
-        longExposureAccumulator = nil
-        longExposureFrameCount = 0
-        longExposureTargetFrames = 0
+        // Clear remembered manual shutter/ISO so lens/format switches cannot
+        // re-lock a multi-second exposure and freeze the live preview.
+        manualShutterIndex = nil
+        manualISOValue = nil
 
         sessionQueue.async {
             do {
                 try device.lockForConfiguration()
 
-                // Reset to auto exposure
                 if device.isExposureModeSupported(.continuousAutoExposure) {
                     device.exposureMode = .continuousAutoExposure
-                }
-
-                // Reset exposure duration to auto
-                if device.isExposureModeSupported(.autoExpose) {
-                    device.exposureMode = .autoExpose
                 }
 
                 device.unlockForConfiguration()
 
                 DispatchQueue.main.async {
                     self.isManualExposure = false
-                    self.longExposureProgress = 0.0
                 }
             } catch {
                 print("Error resetting to auto exposure: \(error)")

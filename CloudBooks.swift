@@ -413,6 +413,19 @@ struct SharedBookView: View {
                         .font(.system(size: 10, weight: .regular, design: .monospaced))
                         .foregroundColor(.white.opacity(0.3))
                         .padding(.top, 6)
+                    Button(action: { showAddPicker = true }) {
+                        Text("ADD FRAMES")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .tracking(2)
+                            .foregroundColor(.black)
+                            .padding(.horizontal, 18)
+                            .padding(.vertical, 12)
+                            .background(
+                                RoundedRectangle(cornerRadius: 10)
+                                    .fill(accent)
+                            )
+                    }
+                    .padding(.top, 10)
                     Spacer()
                 } else {
                     PageCurlView(pageCount: shots.count + 1, currentPage: $currentPage) { index in

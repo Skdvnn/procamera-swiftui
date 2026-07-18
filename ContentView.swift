@@ -707,10 +707,14 @@ struct ContentView: View {
             let duration = durations[shutterSpeedIndex]
 
             isCapturing = true
-            camera.captureLongExposure(durationSeconds: duration) { img in
+            camera.captureLongExposure(
+                durationSeconds: duration,
+                filmFilter: shutterFilm,
+                lensFX: shutterFX
+            ) { img in
                 isCapturing = false
                 if let img = img {
-lastCapturedImage = img
+                    lastCapturedImage = img
                     photoCount += 1
                     recordShot(img)
                     camera.saveToPhotoLibrary(img) { _ in }
