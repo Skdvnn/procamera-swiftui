@@ -123,13 +123,38 @@ final class LensFXEngine {
     /// Latest viewfinder touch; read on the capture/preview queue.
     private let touchLock = NSLock()
     private var _touch = MorphTouchState()
+    /// Last strong drag — shutter is outside the viewfinder, so force often
+    /// decays to 0 before bake; sticky touch keeps the morph the user shaped.
+    private var _stickyTouch = MorphTouchState()
+    private var stickyTouchTime: CFAbsoluteTime = 0
     private var lastDecayTime: CFAbsoluteTime = 0
+
+    /// Scoped overrides while applying an effect (still bake freezes these).
+    private var applyTouchOverride: MorphTouchState?
+    private var applyUprightTouch = false
 
     private init() {}
 
     var touch: MorphTouchState {
         touchLock.lock()
         defer { touchLock.unlock() }
+        return _touch
+    }
+
+    /// Snapshot morph uniforms for still bake (live or recent sticky drag).
+    func snapshotForCapture() -> MorphTouchState {
+        touchLock.lock()
+        defer { touchLock.unlock() }
+        if _touch.force > 0.15 {
+            return _touch
+        }
+        if CFAbsoluteTimeGetCurrent() - stickyTouchTime < 1.6, _stickyTouch.force > 0.08 {
+            var sticky = _stickyTouch
+            // Keep the warp readable in the still after finger-up → shutter
+            sticky.force = max(sticky.force, 0.55)
+            sticky.isActive = false
+            return sticky
+        }
         return _touch
     }
 
@@ -142,6 +167,10 @@ final class LensFXEngine {
         _touch.velX = velX
         _touch.velY = velY
         _touch.isActive = active
+        if force > 0.2 {
+            _stickyTouch = _touch
+            stickyTouchTime = CFAbsoluteTimeGetCurrent()
+        }
         touchLock.unlock()
     }
 
@@ -175,7 +204,14 @@ final class LensFXEngine {
     /// Map viewfinder-normalized UIKit point → CIImage point.
     /// Live FX runs on the landscape pixel buffer before the preview rotates
     /// with `.oriented(.right)` for portrait, so invert that here.
+    /// Still bakes use upright pixels — UIKit top-left → CI bottom-left.
     private func touchCenter(in extent: CGRect, touch: MorphTouchState) -> CGPoint {
+        if applyUprightTouch {
+            return CGPoint(
+                x: extent.minX + touch.x * extent.width,
+                y: extent.minY + (1.0 - touch.y) * extent.height
+            )
+        }
         let bufNX = touch.y
         let bufNY = touch.x
         return CGPoint(
@@ -184,9 +220,23 @@ final class LensFXEngine {
         )
     }
 
+    private func activeTouch() -> MorphTouchState {
+        applyTouchOverride ?? touch
+    }
+
     /// Apply the selected effect to a camera frame.
-    /// `time` animates time-varying effects in the live preview; pass 0 for stills.
-    func apply(_ fx: LensFXMode, to image: CIImage, time rawTime: TimeInterval) -> CIImage {
+    /// - Parameters:
+    ///   - time: Absolute clock for live preview (`CFAbsoluteTimeGetCurrent()`),
+    ///     or a relative phase for stills when `stillBake` is true.
+    ///   - touchOverride: Frozen morph uniforms for still capture.
+    ///   - stillBake: Skip decay; treat `time` as relative phase; upright touch space.
+    func apply(
+        _ fx: LensFXMode,
+        to image: CIImage,
+        time rawTime: TimeInterval,
+        touchOverride: MorphTouchState? = nil,
+        stillBake: Bool = false
+    ) -> CIImage {
         let extent = image.extent
         guard fx != .none,
               !extent.isInfinite,
@@ -197,13 +247,24 @@ final class LensFXEngine {
             return image
         }
 
-        let time = rawTime > 0 ? rawTime - startTime : 0
-        if rawTime > 0 {
-            decayTouchIfNeeded(now: rawTime)
+        let time: TimeInterval
+        if stillBake {
+            time = max(0, rawTime)
+        } else {
+            time = rawTime > 0 ? rawTime - startTime : 0
+            if rawTime > 0 {
+                decayTouchIfNeeded(now: rawTime)
+            }
         }
 
         lock.lock()
-        defer { lock.unlock() }
+        applyTouchOverride = touchOverride
+        applyUprightTouch = stillBake
+        defer {
+            applyTouchOverride = nil
+            applyUprightTouch = false
+            lock.unlock()
+        }
 
         // Keep the preview pipeline alive even if a single filter misbehaves
         let result: CIImage
@@ -254,7 +315,12 @@ final class LensFXEngine {
     /// to silently return nil (callers then saved the unfiltered still). This
     /// path retries with plain createCGImage, a software CIContext, and a
     /// smaller max dimension before giving up.
-    func render(_ fx: LensFXMode, on image: UIImage, maxDimension: CGFloat = 3072) -> UIImage? {
+    func render(
+        _ fx: LensFXMode,
+        on image: UIImage,
+        touch: MorphTouchState? = nil,
+        maxDimension: CGFloat = 3072
+    ) -> UIImage? {
         guard fx != .none else { return image }
 
         // Prefer CGImage → CIImage so we control orientation ourselves.
@@ -280,7 +346,13 @@ final class LensFXEngine {
             : [maxDimension, 1536]
 
         for dim in attemptDims {
-            if let rendered = renderAttempt(fx, input: input, maxDimension: dim, scale: image.scale) {
+            if let rendered = renderAttempt(
+                fx,
+                input: input,
+                maxDimension: dim,
+                scale: image.scale,
+                touch: touch
+            ) {
                 return rendered
             }
         }
@@ -293,7 +365,8 @@ final class LensFXEngine {
         _ fx: LensFXMode,
         input source: CIImage,
         maxDimension: CGFloat,
-        scale: CGFloat
+        scale: CGFloat,
+        touch: MorphTouchState?
     ) -> UIImage? {
         var input = source
 
@@ -308,9 +381,15 @@ final class LensFXEngine {
             y: -input.extent.minY
         ))
 
-        // Use a small positive time so time-based stills (liquid/chrome/VHS)
-        // aren't stuck at a degenerate t=0 phase.
-        var output = apply(fx, to: input, time: 0.35).cropped(to: input.extent)
+        // Relative phase only — do not pass an absolute clock (that used to
+        // smash sticky touch via decayTouchIfNeeded).
+        var output = apply(
+            fx,
+            to: input,
+            time: 0.35,
+            touchOverride: touch,
+            stillBake: true
+        ).cropped(to: input.extent)
 
         // Bake scanlines into VHS stills — live preview draws them via a
         // SwiftUI overlay that never reaches the capture pipeline.
@@ -438,7 +517,7 @@ final class LensFXEngine {
     // When touch force > 0, the warp centers on the finger with a localized
     // refraction bulge and a trailing wake from drag velocity.
     private func morphDistort(_ image: CIImage, extent: CGRect, time: TimeInterval, strength: CGFloat) -> CIImage {
-        let t = touch
+        let t = activeTouch()
         let force = t.force
         let center: CGPoint = force > 0.01
             ? touchCenter(in: extent, touch: t)
@@ -474,9 +553,11 @@ final class LensFXEngine {
             let speed = hypot(t.velX, t.velY)
             if speed > 0.15 {
                 let wake = CIFilter.bumpDistortion()
+                // UIKit +y is down; CI +y is up when baking upright stills
+                let wakeYSign: CGFloat = applyUprightTouch ? 1 : -1
                 let wakeCenter = CGPoint(
                     x: center.x - t.velX * extent.width * 0.12,
-                    y: center.y - t.velY * extent.height * 0.12
+                    y: center.y + wakeYSign * t.velY * extent.height * 0.12
                 )
                 wake.inputImage = output.clampedToExtent()
                 wake.center = wakeCenter
@@ -632,7 +713,7 @@ final class LensFXEngine {
 
     private func applyFisheye(to image: CIImage) -> CIImage {
         let extent = image.extent
-        let t = touch
+        let t = activeTouch()
         let center: CGPoint = t.force > 0.02
             ? touchCenter(in: extent, touch: t)
             : CGPoint(x: extent.midX, y: extent.midY)
@@ -707,7 +788,7 @@ final class LensFXEngine {
 
     private func applyKaleido(to image: CIImage, time: TimeInterval) -> CIImage {
         let extent = image.extent
-        let t = touch
+        let t = activeTouch()
         let center: CGPoint = t.force > 0.02
             ? touchCenter(in: extent, touch: t)
             : CGPoint(x: extent.midX, y: extent.midY)

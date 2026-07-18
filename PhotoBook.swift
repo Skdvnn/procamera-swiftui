@@ -253,6 +253,8 @@ struct LibraryView: View {
     @State private var showNewBook = false
     @State private var newBookTitle = ""
     @State private var pressedRouteID: String?
+    /// Open a book and immediately present the file-frames picker
+    @State private var pendingAddFrames = false
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
     private let booksPerShelf = 3
@@ -369,7 +371,8 @@ struct LibraryView: View {
                     onSelectShelfItem: { item in
                         switchBooks(to: item)
                     },
-                    onClose: closeBook
+                    onClose: closeBook,
+                    openAddFramesOnAppear: $pendingAddFrames
                 )
                 .transition(.identity)
                 .zIndex(2)
@@ -384,6 +387,7 @@ struct LibraryView: View {
             Button("Create") {
                 if let book = store.createBook(title: newBookTitle) {
                     newBookTitle = ""
+                    pendingAddFrames = true
                     UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                     withAnimation(.spring(response: 0.48, dampingFraction: 0.86)) {
                         route = .book(book.id)
@@ -392,7 +396,7 @@ struct LibraryView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Name your book — tap + inside to file frames from All Frames.")
+            Text("Name your book — you'll pick frames from All Frames next.")
         }
         .statusBarHidden(true)
     }
@@ -409,6 +413,13 @@ struct LibraryView: View {
             onNew: {
                 newBookTitle = ""
                 showNewBook = true
+            },
+            onAddFrames: { id in
+                pendingAddFrames = true
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                withAnimation(.spring(response: 0.48, dampingFraction: 0.86)) {
+                    route = .book(id)
+                }
             },
             onDelete: { id in
                 if let book = store.books.first(where: { $0.id == id }) {
@@ -676,6 +687,7 @@ struct ShelfRow: View {
     let onPress: (String?) -> Void
     let onOpen: (ShelfItem) -> Void
     let onNew: () -> Void
+    let onAddFrames: (UUID) -> Void
     let onDelete: (UUID) -> Void
 
     var body: some View {
@@ -741,6 +753,11 @@ struct ShelfRow: View {
                 .disabled(isActive)
                 .contextMenu {
                     if case .book(let id, _, _, _) = item {
+                        Button {
+                            onAddFrames(id)
+                        } label: {
+                            Label("Add frames…", systemImage: "plus.rectangle.on.rectangle")
+                        }
                         Button(role: .destructive) {
                             onDelete(id)
                         } label: {
@@ -1025,6 +1042,8 @@ struct PhotoBookView: View {
     var activeRouteID: String? = nil
     var onSelectShelfItem: ((ShelfItem) -> Void)? = nil
     var onClose: (() -> Void)? = nil
+    /// When true on appear/open, present the file-frames picker (shelf / new-book).
+    var openAddFramesOnAppear: Binding<Bool> = .constant(false)
 
     @Environment(\.dismiss) private var dismiss
 
@@ -1149,7 +1168,10 @@ struct PhotoBookView: View {
         } message: {
             Text(shareError ?? "")
         }
-        .onAppear { revealContent(after: 0.3) }
+        .onAppear {
+            revealContent(after: 0.3)
+            presentAddFramesIfRequested()
+        }
         .onChange(of: bookID) { _, _ in
             currentPage = 0
             if skipNextOpenMorph {
@@ -1161,8 +1183,17 @@ struct PhotoBookView: View {
                 contentRevealed = false
                 revealContent(after: 0.22)
             }
+            presentAddFramesIfRequested()
         }
         .statusBarHidden(true)
+    }
+
+    private func presentAddFramesIfRequested() {
+        guard book != nil, openAddFramesOnAppear.wrappedValue else { return }
+        openAddFramesOnAppear.wrappedValue = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            showAddFrames = true
+        }
     }
 
     private func revealContent(after delay: Double) {
@@ -1248,17 +1279,20 @@ struct PhotoBookView: View {
             // File frames + invite (user books only — not the master roll)
             if book != nil {
                 Button(action: { showAddFrames = true }) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.black.opacity(0.5))
-                            .frame(width: 34, height: 34)
-                        Circle()
-                            .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
-                            .frame(width: 34, height: 34)
-                        Image(systemName: "plus")
-                            .font(.system(size: 13, weight: .semibold))
-                            .foregroundColor(.white.opacity(0.8))
+                    HStack(spacing: 5) {
+                        Image(systemName: "plus.rectangle.on.rectangle")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("FILE")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .tracking(1)
                     }
+                    .foregroundColor(.black)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule()
+                            .fill(accent)
+                    )
                 }
                 .padding(.trailing, 6)
 
@@ -1354,14 +1388,14 @@ struct PhotoBookView: View {
                 .foregroundColor(.white.opacity(0.5))
             Text(bookID == nil
                  ? "Every shot you take is bound into this book"
-                 : "Pull frames from All Frames with +")
+                 : "File shots from All Frames into this book")
                 .font(.system(size: 10, weight: .regular, design: .monospaced))
                 .foregroundColor(.white.opacity(0.3))
                 .multilineTextAlignment(.center)
 
             if book != nil {
                 Button(action: { showAddFrames = true }) {
-                    Text("ADD FRAMES")
+                    Text("FILE FRAMES")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .tracking(2)
                         .foregroundColor(.black)
@@ -1400,11 +1434,11 @@ struct LocalAddFramesPicker: View {
             VStack(spacing: 0) {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text("ADD FRAMES")
+                        Text("FILE FRAMES")
                             .font(.system(size: 12, weight: .semibold, design: .monospaced))
                             .tracking(3)
                             .foregroundColor(.white.opacity(0.9))
-                        Text(book.title.uppercased())
+                        Text("\(book.title.uppercased())  ·  \(liveBook?.shotIDs.count ?? 0) IN BOOK")
                             .font(.system(size: 9, weight: .medium, design: .monospaced))
                             .tracking(2)
                             .foregroundColor(.white.opacity(0.35))
@@ -1473,7 +1507,7 @@ struct LocalAddFramesPicker: View {
                         .padding(.bottom, 24)
                     }
 
-                    Text("TAP TO ADD OR REMOVE")
+                    Text("TAP A FRAME TO FILE OR UNFILE")
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
                         .tracking(2)
                         .foregroundColor(.white.opacity(0.3))
@@ -1628,7 +1662,7 @@ struct ContactSheetPage: View {
     }
 }
 
-// MARK: - Print Page (one mounted photo)
+// MARK: - Print Page (photo-first leaf — the image itself curls)
 struct PrintPage: View {
     let store: GalleryStore
     let shot: ShotMetadata
@@ -1640,28 +1674,50 @@ struct PrintPage: View {
 
     private var currentBook: Book? { store.book(withID: bookID) }
     private var isPinned: Bool { store.isPinned(shot, in: currentBook) }
+    private var pageImage: UIImage? {
+        store.image(for: shot) ?? store.thumbnail(for: shot)
+    }
 
     var body: some View {
-        BookPage {
-            VStack(spacing: 0) {
-                Spacer(minLength: 8)
-
-                // The print, slightly tilted like it was mounted by hand
-                MountedPrint(image: store.thumbnail(for: shot))
-                    .aspectRatio(0.78, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
-                    .rotationEffect(.degrees(shot.printTilt))
-                    .onTapGesture { onZoom() }
-                    .contextMenu { printMenu }
-
-                Spacer(minLength: 14)
-
-                caption
-
-                Spacer(minLength: 8)
+        // Full-bleed photo leaf so UIPageViewController curls the frame,
+        // not a floating tilted card on a separate paper plate.
+        ZStack(alignment: .bottom) {
+            GeometryReader { geo in
+                ZStack {
+                    Color(hex: "121212")
+                    if let image = pageImage {
+                        Image(uiImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .clipped()
+                    }
+                }
             }
-            .padding(.horizontal, 6)
+            .contentShape(Rectangle())
+            .onTapGesture { onZoom() }
+            .contextMenu { printMenu }
+
+            // Caption rides on the photo so the curl surface stays one leaf
+            caption
+                .padding(.horizontal, 14)
+                .padding(.top, 28)
+                .padding(.bottom, 12)
+                .background(
+                    LinearGradient(
+                        colors: [Color.black.opacity(0.82), Color.black.opacity(0.35), Color.clear],
+                        startPoint: .bottom,
+                        endPoint: .top
+                    )
+                )
         }
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+        )
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder
@@ -1696,7 +1752,7 @@ struct PrintPage: View {
                         }
                     }
                 } label: {
-                    Label("Books", systemImage: "book.closed")
+                    Label("File in book…", systemImage: "book.closed")
                 }
             }
 
@@ -1709,7 +1765,7 @@ struct PrintPage: View {
         }
     }
 
-    // Silver-pen caption under the print: the real shot data
+    // Caption overlaid on the photo leaf
     private var caption: some View {
         VStack(spacing: 6) {
             HStack(spacing: 6) {
@@ -1730,7 +1786,7 @@ struct PrintPage: View {
             }
 
             Rectangle()
-                .fill(Color.white.opacity(0.08))
+                .fill(Color.white.opacity(0.12))
                 .frame(height: 0.5)
 
             HStack(spacing: 0) {
@@ -1752,7 +1808,6 @@ struct PrintPage: View {
                 }
             }
         }
-        .padding(.horizontal, 10)
     }
 
     private func captionCell(_ label: String, _ value: String) -> some View {

@@ -388,14 +388,14 @@ struct ContentView: View {
 
                             Spacer()
 
-                            // Readout balances the thumbnail so the shutter stays centered
-                            VStack(alignment: .trailing, spacing: 3) {
-                                Text("ISO \(isoValue)")
-                                Text(shutterSpeeds[shutterSpeedIndex])
-                            }
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.6))
-                            .frame(width: 88, alignment: .trailing)
+                            // Compact deck: WB where ISO/shutter readout used to sit
+                            // (ISO/shutter stay available in the expanded deck / top gauges)
+                            WBPill(
+                                whiteBalanceIndex: $whiteBalanceIndex,
+                                onChanged: { mode in
+                                    camera.setWhiteBalance(mode: mode)
+                                }
+                            )
                         }
                         .padding(.horizontal, DS.pageMargin)
                         .padding(.vertical, 6)
@@ -697,6 +697,10 @@ struct ContentView: View {
         syncCaptureControlsToCamera()
         let shutterFilm = cameraFilmFilter(from: filmFilter)
         let shutterFX = lensFX
+        // Freeze drag-to-morph before the finger leaves the viewfinder for shutter
+        let morphTouch = shutterFX.isTouchReactive
+            ? LensFXEngine.shared.snapshotForCapture()
+            : nil
 
         // Check if this is a long exposure (shutter speed index 0-3 = 4s, 2s, 1s, 1/2s)
         let isLongExposure = shutterSpeedIndex <= 3
@@ -725,10 +729,14 @@ struct ContentView: View {
             isCapturing = true
             withAnimation(.easeInOut(duration: 0.1)) { showFlash = true }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { showFlash = false }
-            camera.capturePhoto(filmFilter: shutterFilm, lensFX: shutterFX) { img in
+            camera.capturePhoto(
+                filmFilter: shutterFilm,
+                lensFX: shutterFX,
+                morphTouch: morphTouch
+            ) { img in
                 isCapturing = false
                 if let img = img {
-lastCapturedImage = img
+                    lastCapturedImage = img
                     photoCount += 1
                     recordShot(img)
                     // RAW mode already writes the DNG from CameraManager; still
@@ -1580,7 +1588,7 @@ struct Triangle: Shape {
     }
 }
 
-// MARK: - Shutter Button (classic brushed metal — restored from the early look)
+// MARK: - Shutter Button (machined steel — brush grain + knurled collar)
 struct ShutterButton: View {
     let isCapturing: Bool
     let action: () -> Void
@@ -1590,91 +1598,93 @@ struct ShutterButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Outer bezel — brushed metal collar
+                // Knurled steel collar
                 Circle()
                     .fill(
-                        LinearGradient(
+                        AngularGradient(
                             colors: [
-                                Color(white: 0.28),
-                                Color(white: 0.14),
-                                Color(white: 0.09),
-                                Color(white: 0.18)
+                                Color(red: 0.42, green: 0.43, blue: 0.45),
+                                Color(red: 0.22, green: 0.23, blue: 0.25),
+                                Color(red: 0.38, green: 0.39, blue: 0.42),
+                                Color(red: 0.18, green: 0.19, blue: 0.21),
+                                Color(red: 0.40, green: 0.41, blue: 0.44),
+                                Color(red: 0.42, green: 0.43, blue: 0.45)
                             ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
+                            center: .center
                         )
                     )
                     .frame(width: 76, height: 76)
                     .overlay {
-                        // Fine brush grain on the collar
                         Circle()
-                            .fill(Color(white: 0.22))
+                            .fill(Color(red: 0.32, green: 0.33, blue: 0.36))
                             .colorEffect(
                                 ShaderLibrary.metallicSurface(
                                     .float2(76, 76),
-                                    .float(isPressed ? 0.35 : 0.55),
-                                    .float2(0.28, 0.22)
+                                    .float(isPressed ? 0.55 : 0.85),
+                                    .float2(0.30, 0.18)
                                 )
                             )
                             .clipShape(Circle())
-                            .opacity(0.55)
                             .allowsHitTesting(false)
                     }
 
-                // Outer ring highlight
                 Circle()
                     .stroke(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(isPressed ? 0.18 : 0.32),
-                                Color.white.opacity(0.05)
+                                Color.white.opacity(isPressed ? 0.35 : 0.55),
+                                Color.white.opacity(0.08),
+                                Color.black.opacity(0.55)
                             ],
-                            startPoint: .top,
-                            endPoint: .bottom
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
                         ),
-                        lineWidth: 1.5
+                        lineWidth: 1.25
                     )
                     .frame(width: 76, height: 76)
 
-                // Inner face — this sinks on press
+                // Recess between collar and face
+                Circle()
+                    .stroke(Color.black.opacity(isPressed ? 0.75 : 0.45), lineWidth: isPressed ? 2.5 : 1.5)
+                    .frame(width: 66, height: 66)
+
+                // Raised steel face
                 ZStack {
+                    Circle()
+                        .fill(Color(red: 0.30, green: 0.31, blue: 0.34))
+                        .frame(width: 60, height: 60)
+                        .colorEffect(
+                            ShaderLibrary.metallicSurface(
+                                .float2(60, 60),
+                                .float(isPressed ? 0.4 : 0.75),
+                                .float2(0.34, 0.26)
+                            )
+                        )
+                        .clipShape(Circle())
+
+                    // Specular catch light
                     Circle()
                         .fill(
                             RadialGradient(
                                 colors: [
-                                    Color(white: isPressed ? 0.14 : 0.20),
-                                    Color(white: isPressed ? 0.07 : 0.11),
-                                    Color(white: isPressed ? 0.04 : 0.07)
+                                    Color.white.opacity(isPressed ? 0.08 : 0.22),
+                                    Color.clear
                                 ],
-                                center: UnitPoint(x: 0.35, y: 0.35),
+                                center: UnitPoint(x: 0.32, y: 0.28),
                                 startRadius: 0,
-                                endRadius: 35
+                                endRadius: 28
                             )
                         )
-                        .frame(width: 62, height: 62)
-                        .overlay {
-                            Circle()
-                                .fill(Color(white: 0.16))
-                                .colorEffect(
-                                    ShaderLibrary.metallicSurface(
-                                        .float2(62, 62),
-                                        .float(isPressed ? 0.25 : 0.45),
-                                        .float2(0.32, 0.28)
-                                    )
-                                )
-                                .clipShape(Circle())
-                                .opacity(0.4)
-                                .allowsHitTesting(false)
-                        }
+                        .frame(width: 60, height: 60)
+                        .blendMode(.screen)
 
-                    // Inner highlight ring
                     Circle()
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(isPressed ? 0.05 : 0.16),
+                                    Color.white.opacity(isPressed ? 0.12 : 0.38),
                                     Color.clear,
-                                    Color.black.opacity(0.25)
+                                    Color.black.opacity(0.4)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -1683,28 +1693,26 @@ struct ShutterButton: View {
                         )
                         .frame(width: 58, height: 58)
 
-                    // Soft lathe rings — mechanical, not mirror chrome
-                    ForEach(0..<3, id: \.self) { i in
+                    ForEach(0..<4, id: \.self) { i in
                         Circle()
-                            .stroke(Color.white.opacity(0.05), lineWidth: 0.5)
-                            .frame(width: CGFloat(48 - i * 10), height: CGFloat(48 - i * 10))
+                            .stroke(Color.white.opacity(0.06), lineWidth: 0.6)
+                            .frame(width: CGFloat(50 - i * 9), height: CGFloat(50 - i * 9))
                     }
 
-                    // Capturing flash
                     if isCapturing {
                         Circle()
-                            .fill(Color.white.opacity(0.18))
-                            .frame(width: 62, height: 62)
+                            .fill(Color.white.opacity(0.16))
+                            .frame(width: 60, height: 60)
                     }
                 }
-                .scaleEffect(isPressed ? 0.96 : 1.0)
+                .scaleEffect(isPressed ? 0.95 : 1.0)
                 .shadow(
-                    color: Color.black.opacity(isPressed ? 0.15 : 0.45),
-                    radius: isPressed ? 0.5 : 3,
+                    color: Color.black.opacity(isPressed ? 0.2 : 0.55),
+                    radius: isPressed ? 0.5 : 4,
                     y: isPressed ? 0 : 2
                 )
             }
-            .shadow(color: Color.black.opacity(0.5), radius: isPressed ? 3 : 7, y: isPressed ? 1 : 4)
+            .shadow(color: Color.black.opacity(0.55), radius: isPressed ? 2 : 8, y: isPressed ? 1 : 4)
             .animation(.spring(response: 0.12, dampingFraction: 0.65), value: isPressed)
         }
         .buttonStyle(PlainButtonStyle())

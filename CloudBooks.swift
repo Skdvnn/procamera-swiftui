@@ -567,7 +567,7 @@ struct SharedBookView: View {
     }
 }
 
-// MARK: - Cloud Print Page (mounted print for a cloud shot)
+// MARK: - Cloud Print Page (photo-first leaf — matches local books)
 struct CloudPrintPage: View {
     let shot: CloudBookManager.CloudShot
     let pageNumber: Int
@@ -575,24 +575,41 @@ struct CloudPrintPage: View {
     let onZoom: () -> Void
 
     var body: some View {
-        BookPage {
-            VStack(spacing: 0) {
-                Spacer(minLength: 8)
-
-                MountedPrint(image: shot.thumb)
-                    .aspectRatio(0.78, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
-                    .rotationEffect(.degrees(shot.metadata.printTilt))
-                    .onTapGesture { onZoom() }
-
-                Spacer(minLength: 14)
-
-                caption
-
-                Spacer(minLength: 8)
+        ZStack(alignment: .bottom) {
+            GeometryReader { geo in
+                ZStack {
+                    Color(hex: "121212")
+                    if let image = shot.thumb {
+                        Image(uiImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .clipped()
+                    }
+                }
             }
-            .padding(.horizontal, 6)
+            .contentShape(Rectangle())
+            .onTapGesture { onZoom() }
+
+            caption
+                .padding(.horizontal, 14)
+                .padding(.top, 28)
+                .padding(.bottom, 12)
+                .background(
+                    LinearGradient(
+                        colors: [Color.black.opacity(0.82), Color.black.opacity(0.35), Color.clear],
+                        startPoint: .bottom,
+                        endPoint: .top
+                    )
+                )
         }
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+        )
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
     }
 
     private var caption: some View {
@@ -609,7 +626,7 @@ struct CloudPrintPage: View {
             }
 
             Rectangle()
-                .fill(Color.white.opacity(0.08))
+                .fill(Color.white.opacity(0.12))
                 .frame(height: 0.5)
 
             HStack(spacing: 0) {
@@ -619,7 +636,6 @@ struct CloudPrintPage: View {
                 captionCell("LENS", "\(shot.metadata.focalLength)MM")
             }
         }
-        .padding(.horizontal, 10)
     }
 
     private func captionCell(_ label: String, _ value: String) -> some View {

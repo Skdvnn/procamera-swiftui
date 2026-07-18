@@ -84,6 +84,7 @@ class CameraManager: NSObject, ObservableObject {
     private var isFinalizingLongExposure = false
     private var longExposureFilmFilter: FilmFilter = .none
     private var longExposureLensFX: LensFXMode = .none
+    private var longExposureMorphTouch: MorphTouchState?
 
     // Film filter types (color grades / stocks — not GPU morph shaders)
     enum FilmFilter: Int, CaseIterable {
@@ -386,6 +387,10 @@ class CameraManager: NSObject, ObservableObject {
 
         longExposureFilmFilter = filmFilter ?? selectedFilmFilter
         longExposureLensFX = lensFX ?? selectedLensFX
+        let fx = longExposureLensFX
+        longExposureMorphTouch = fx.isTouchReactive
+            ? LensFXEngine.shared.snapshotForCapture()
+            : nil
 
         // Get device's actual max exposure duration
         let maxHardwareDuration = CMTimeGetSeconds(device.activeFormat.maxExposureDuration)
@@ -1345,14 +1350,23 @@ class CameraManager: NSObject, ObservableObject {
         applyLensFX(selectedLensFX, to: image)
     }
 
-    private func applyLensFX(_ lensFX: LensFXMode, to image: UIImage) -> UIImage {
+    private func applyLensFX(
+        _ lensFX: LensFXMode,
+        to image: UIImage,
+        touch: MorphTouchState? = nil
+    ) -> UIImage {
         guard lensFX != .none else { return image }
-        if let rendered = LensFXEngine.shared.render(lensFX, on: image) {
+        if let rendered = LensFXEngine.shared.render(lensFX, on: image, touch: touch) {
             return rendered
         }
         // Last-ditch: never silently ship the unfiltered still when an FX was
         // requested — try a more aggressive downscale via the engine again.
-        if let rendered = LensFXEngine.shared.render(lensFX, on: image, maxDimension: 1280) {
+        if let rendered = LensFXEngine.shared.render(
+            lensFX,
+            on: image,
+            touch: touch,
+            maxDimension: 1280
+        ) {
             print("LensFX: recovered bake at 1280px for \(lensFX.name)")
             return rendered
         }
@@ -1365,15 +1379,22 @@ class CameraManager: NSObject, ObservableObject {
     ///   - lensFX: Optional override frozen from the UI at shutter time.
     ///     Prefer passing these from ContentView so bake cannot miss a stale
     ///     `selectedLensFX` if the SwiftUI binding lagged the viewfinder.
+    ///   - morphTouch: Frozen drag-to-morph uniforms (Liquid/Chrome/Fisheye/Kaleido).
     func capturePhoto(
         filmFilter: FilmFilter? = nil,
         lensFX: LensFXMode? = nil,
+        morphTouch: MorphTouchState? = nil,
         completion: @escaping (UIImage?) -> Void
     ) {
         // Freeze the selections at shutter time. The user can change controls
         // while AVFoundation is delivering the still.
         let captureFilmFilter = filmFilter ?? selectedFilmFilter
         let captureLensFX = lensFX ?? selectedLensFX
+        let captureTouch: MorphTouchState? = {
+            if let morphTouch { return morphTouch }
+            guard captureLensFX.isTouchReactive else { return nil }
+            return LensFXEngine.shared.snapshotForCapture()
+        }()
         let shouldProcess = captureFormat != .raw
         let needsFXBake = shouldProcess && (captureLensFX != .none || captureFilmFilter != .none)
 
@@ -1381,7 +1402,7 @@ class CameraManager: NSObject, ObservableObject {
             isBakingStill = true
         }
 
-        print("LensFX capture: fx=\(captureLensFX.name) film=\(captureFilmFilter) format=\(captureFormat) process=\(shouldProcess)")
+        print("LensFX capture: fx=\(captureLensFX.name) film=\(captureFilmFilter) format=\(captureFormat) process=\(shouldProcess) touchForce=\(captureTouch?.force ?? 0)")
 
 
         photoCompletionHandler = { [weak self] image in
@@ -1399,7 +1420,8 @@ class CameraManager: NSObject, ObservableObject {
                 if shouldProcess {
                     filteredImage = self.applyLensFX(
                         captureLensFX,
-                        to: self.applyFilmFilter(captureFilmFilter, to: image)
+                        to: self.applyFilmFilter(captureFilmFilter, to: image),
+                        touch: captureTouch
                     )
                 } else {
                     filteredImage = image
@@ -1634,8 +1656,10 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         // nil the accumulator first, so normalize always returned nil.
         let captureFilmFilter = longExposureFilmFilter
         let captureLensFX = longExposureLensFX
+        let captureTouch = longExposureMorphTouch
         let completion = longExposureCompletion
         longExposureCompletion = nil
+        longExposureMorphTouch = nil
         isBakingStill = true
 
         let resultImage = normalizeAccumulator()
@@ -1653,7 +1677,8 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             if let img = resultImage {
                 finalImage = self.applyLensFX(
                     captureLensFX,
-                    to: self.applyFilmFilter(captureFilmFilter, to: img)
+                    to: self.applyFilmFilter(captureFilmFilter, to: img),
+                    touch: captureTouch
                 )
             } else {
                 finalImage = nil
