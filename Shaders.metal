@@ -260,12 +260,13 @@ float metalNoise(float2 p) {
         float3 H = normalize(L1 + V);
         float NdH = max(dot(Ng, H), 0.0);
 
-        // Broad glow + sharp metallic peak
-        float soft = pow(NdH, 5.0) * 0.40;
-        float tight = pow(NdH, 64.0) * 0.55;
+        // Broad glow + very tight hot peak - polished chrome throws
+        // a pinpoint specular, not a soft sheen
+        float soft = pow(NdH, 5.0) * 0.35;
+        float tight = pow(NdH, 180.0) * 0.90;
         float spec = (soft + tight) * NdL;
 
-        specTotal += spec * float3(1.0, 0.97, 0.92) * 1.5;
+        specTotal += spec * float3(1.0, 0.97, 0.92) * 1.6;
         diffTotal += NdL * 0.65;
     }
 
@@ -275,11 +276,11 @@ float metalNoise(float2 p) {
         float3 H = normalize(L2 + V);
         float NdH = max(dot(Ng, H), 0.0);
 
-        float soft = pow(NdH, 5.0) * 0.40;
-        float tight = pow(NdH, 64.0) * 0.55;
+        float soft = pow(NdH, 5.0) * 0.35;
+        float tight = pow(NdH, 180.0) * 0.75;
         float spec = (soft + tight) * NdL;
 
-        specTotal += spec * float3(0.90, 0.93, 1.0) * 0.65;
+        specTotal += spec * float3(0.90, 0.93, 1.0) * 0.70;
         diffTotal += NdL * 0.25;
     }
 
@@ -297,7 +298,7 @@ float metalNoise(float2 p) {
     // ==========================================================
     // CHROME MATERIAL
     // ==========================================================
-    float3 F0 = float3(0.60, 0.58, 0.55);
+    float3 F0 = float3(0.72, 0.70, 0.67);
     F0 *= mix(1.0, 0.65, pressed);
 
     float NdV = max(dot(N, V), 0.0);
@@ -316,10 +317,14 @@ float metalNoise(float2 p) {
     // Broad sky/ground
     float skyMix = smoothstep(-0.15, 0.45, reflDir.y);
     float3 envColor = mix(
-        float3(0.01, 0.01, 0.02),  // near-black (camera body)
-        float3(0.32, 0.32, 0.36),  // bright overhead
+        float3(0.005, 0.005, 0.01), // near-black (camera body)
+        float3(0.46, 0.46, 0.52),   // bright overhead
         skyMix
     );
+    // Hard horizon band - mirrors reflect a sharp light/dark boundary,
+    // and that contrast edge is what makes chrome read as chrome
+    float horizon = 1.0 - smoothstep(0.0, 0.10, abs(reflDir.y - 0.12));
+    envColor += float3(0.20, 0.20, 0.22) * horizon;
 
     // Organic variation
     float env1 = metalNoise(reflDir.xy * 2.5 + 0.7);
@@ -345,7 +350,20 @@ float metalNoise(float2 p) {
     result += fresnel * specTotal;
 
     // Environment reflection (chrome is a mirror)
-    result += fresnel * envColor * 0.50;
+    result += fresnel * envColor * 0.72;
+
+    // Anisotropic lathe crescents: a bright arc sweeping toward the key
+    // light with a dark mirrored arc opposite - the signature look of
+    // machined, lathe-turned metal
+    {
+        float2 keyDir = normalize(float2(-0.55, -0.60));
+        float facing = dot(radDir, keyDir);
+        float annulus = smoothstep(0.18, 0.45, r) * smoothstep(0.95, 0.62, r);
+        float arcBright = pow(max(facing, 0.0), 2.5) * annulus;
+        float arcDark = pow(max(-facing, 0.0), 2.5) * annulus;
+        result += arcBright * float3(0.30, 0.29, 0.28) * (1.0 - pressed * 0.4);
+        result -= arcDark * float3(0.08, 0.08, 0.09);
+    }
 
     // Lathe texture - very subtle brightness modulation,
     // the real effect is through the normal perturbation above

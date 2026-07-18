@@ -628,40 +628,45 @@ struct LensFXPicker: View {
                 .frame(height: 1)
                 .padding(.horizontal, 8)
 
-            // FX options - DSLR list style
-            ForEach(LensFXMode.allCases, id: \.self) { fx in
-                Button(action: {
-                    VFHaptics.click()
-                    selectedFX = fx
-                    dismissWithAnimation()
-                }) {
-                    HStack(spacing: 8) {
-                        // Selection indicator bracket
-                        Text(selectedFX == fx ? ">" : " ")
-                            .font(.system(size: 12, weight: .bold, design: .monospaced))
-                            .foregroundColor(accent)
-                            .frame(width: 12)
+            // FX options - DSLR list style, scrollable (more options than fit)
+            ScrollView(showsIndicators: false) {
+                VStack(spacing: 0) {
+                    ForEach(LensFXMode.allCases, id: \.self) { fx in
+                        Button(action: {
+                            VFHaptics.click()
+                            selectedFX = fx
+                            dismissWithAnimation()
+                        }) {
+                            HStack(spacing: 8) {
+                                // Selection indicator bracket
+                                Text(selectedFX == fx ? ">" : " ")
+                                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                    .foregroundColor(accent)
+                                    .frame(width: 12)
 
-                        // Effect name
-                        Text(fx.name.uppercased())
-                            .font(.system(size: 11, weight: selectedFX == fx ? .semibold : .regular, design: .monospaced))
-                            .foregroundColor(selectedFX == fx ? .white : .white.opacity(0.6))
+                                // Effect name
+                                Text(fx.name.uppercased())
+                                    .font(.system(size: 11, weight: selectedFX == fx ? .semibold : .regular, design: .monospaced))
+                                    .foregroundColor(selectedFX == fx ? .white : .white.opacity(0.6))
 
-                        Spacer()
+                                Spacer()
 
-                        // Badge label
-                        if fx != .none {
-                            Text(fx.badge)
-                                .font(.system(size: 9, weight: .regular, design: .monospaced))
-                                .foregroundColor(.white.opacity(0.3))
+                                // Badge label
+                                if fx != .none {
+                                    Text(fx.badge)
+                                        .font(.system(size: 9, weight: .regular, design: .monospaced))
+                                        .foregroundColor(.white.opacity(0.3))
+                                }
+                            }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(selectedFX == fx ? Color.white.opacity(0.05) : Color.clear)
                         }
+                        .buttonStyle(.plain)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(selectedFX == fx ? Color.white.opacity(0.05) : Color.clear)
                 }
-                .buttonStyle(.plain)
             }
+            .frame(maxHeight: 230)
 
             Spacer().frame(height: 6)
         }

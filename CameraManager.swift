@@ -21,8 +21,12 @@ class CameraManager: NSObject, ObservableObject {
     @Published var whiteBalance: AVCaptureDevice.WhiteBalanceGains?
     @Published var zoomFactor: CGFloat = 1.0
     @Published var isManualExposure: Bool = false
-    @Published var selectedFilmFilter: FilmFilter = .none
-    @Published var selectedLensFX: LensFXMode = .none
+    @Published var selectedFilmFilter: FilmFilter = .none {
+        didSet { refreshLivePreviewState() }
+    }
+    @Published var selectedLensFX: LensFXMode = .none {
+        didSet { refreshLivePreviewState() }
+    }
     @Published var isLongExposureCapturing: Bool = false
     @Published var longExposureProgress: Float = 0.0
     @Published var captureFormat: CaptureFormatType = .heic
@@ -299,7 +303,12 @@ class CameraManager: NSObject, ObservableObject {
                 device.setExposureModeCustom(duration: targetDuration, iso: targetISO) { _ in
                     // Now capture the photo
                     DispatchQueue.main.async {
-                        self.capturePhoto(completion: completion)
+                        self.capturePhoto { image in
+                            // Restore auto exposure or the preview stays at
+                            // seconds-per-frame and the camera looks frozen
+                            self.resetToAutoExposure()
+                            completion(image)
+                        }
                     }
                 }
 
@@ -979,14 +988,26 @@ class CameraManager: NSObject, ObservableObject {
         return UIImage(cgImage: cgImage, scale: image.scale, orientation: image.imageOrientation)
     }
 
-    // Cap live preview frames at ~1280px on the long edge; the viewfinder is
-    // much smaller than sensor resolution and filters cost per-pixel
-    private func downscaledForPreview(_ image: CIImage) -> CIImage {
+    // Applies the new filter selection on the very next frame and drops any
+    // stale filtered output, so toggling never appears stuck
+    private func refreshLivePreviewState() {
+        lastPreviewFrameTime = 0
+        if selectedFilmFilter == .none && selectedLensFX == .none {
+            filteredPreviewImage = nil
+        }
+    }
+
+    private func downscaled(_ image: CIImage, longEdge target: CGFloat) -> CIImage {
         let maxDim = max(image.extent.width, image.extent.height)
-        let target: CGFloat = 1280
         guard maxDim > target else { return image }
         let scale = target / maxDim
         return image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+    }
+
+    // Cap live preview frames at ~1280px on the long edge; the viewfinder is
+    // much smaller than sensor resolution and filters cost per-pixel
+    private func downscaledForPreview(_ image: CIImage) -> CIImage {
+        downscaled(image, longEdge: 1280)
     }
 
     // MARK: - Lens FX Processing
@@ -994,7 +1015,16 @@ class CameraManager: NSObject, ObservableObject {
     // Apply the selected lens FX to a captured still (time 0 = static variant of animated effects)
     func applyLensFX(to image: UIImage) -> UIImage {
         guard selectedLensFX != .none else { return image }
-        guard let ciImage = CIImage(image: image) else { return image }
+        guard var ciImage = CIImage(image: image) else { return image }
+
+        // Cap resolution: distortion FX on a full 12MP still can stall the GPU
+        // or fail the render entirely (silently returning the unfiltered image)
+        let maxDim = max(ciImage.extent.width, ciImage.extent.height)
+        let cap: CGFloat = 3072
+        if maxDim > cap {
+            let scale = cap / maxDim
+            ciImage = ciImage.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        }
 
         let output = LensFXEngine.shared.apply(selectedLensFX, to: ciImage, time: 0)
 
@@ -1008,12 +1038,17 @@ class CameraManager: NSObject, ObservableObject {
     func capturePhoto(completion: @escaping (UIImage?) -> Void) {
         photoCompletionHandler = { [weak self] image in
             guard let self = self, let image = image else {
-                completion(nil)
+                DispatchQueue.main.async { completion(nil) }
                 return
             }
-            // Apply film filter + lens FX before returning (skip for RAW)
-            let filteredImage = self.captureFormat == .raw ? image : self.applyLensFX(to: self.applyFilmFilter(to: image))
-            completion(filteredImage)
+            // Process off the AVFoundation delegate thread — filtering a full-res
+            // still there blocks the capture pipeline and freezes the camera.
+            // Deliver on main so SwiftUI state updates are safe.
+            DispatchQueue.global(qos: .userInitiated).async {
+                // Apply film filter + lens FX before returning (skip for RAW)
+                let filteredImage = self.captureFormat == .raw ? image : self.applyLensFX(to: self.applyFilmFilter(to: image))
+                DispatchQueue.main.async { completion(filteredImage) }
+            }
         }
 
         var settings: AVCapturePhotoSettings
@@ -1133,14 +1168,17 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             return
         }
 
-        // Running accumulation — add frame to accumulator
+        // Running accumulation — add frame to accumulator.
+        // Accumulate at reduced resolution: adding full-res frames at 30fps
+        // saturates the GPU and freezes the app during the exposure.
+        let accumulationFrame = downscaled(ciImage, longEdge: 2048)
         if let acc = longExposureAccumulator {
             let blend = CIFilter.additionCompositing()
-            blend.inputImage = ciImage
+            blend.inputImage = accumulationFrame
             blend.backgroundImage = acc
             longExposureAccumulator = blend.outputImage
         } else {
-            longExposureAccumulator = ciImage
+            longExposureAccumulator = accumulationFrame
         }
         longExposureFrameCount += 1
 

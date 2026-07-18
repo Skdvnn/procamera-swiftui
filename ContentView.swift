@@ -489,6 +489,9 @@ struct ContentView: View {
             .ignoresSafeArea()
         }
         .statusBarHidden(false)
+        // Require a second deliberate swipe for the home gesture so drags on
+        // the bottom control rows don't accidentally minimize the app
+        .defersSystemGestures(on: .bottom)
         .id(colorScheme)  // Force redraw on color scheme change
         .onAppear {
             camera.checkPermissions()

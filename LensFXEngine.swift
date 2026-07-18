@@ -10,6 +10,9 @@ enum LensFXMode: Int, CaseIterable {
     case none = 0
     case liquid       // Animated liquid-glass distortion
     case chrome       // Liquid-metal chrome tone mapping
+    case instant      // Faded instant-film look with vignette
+    case dream        // Orton-style glow blur
+    case fisheye      // Bulging wide-angle lens distortion
     case thermal      // Thermal camera palette
     case xray         // X-ray inversion
     case vhs          // Chromatic aberration + scanline overlay
@@ -21,6 +24,9 @@ enum LensFXMode: Int, CaseIterable {
         case .none: return "None"
         case .liquid: return "Liquid"
         case .chrome: return "Chrome"
+        case .instant: return "Instant"
+        case .dream: return "Dream"
+        case .fisheye: return "Fisheye"
         case .thermal: return "Thermal"
         case .xray: return "X-Ray"
         case .vhs: return "VHS"
@@ -34,6 +40,9 @@ enum LensFXMode: Int, CaseIterable {
         case .none: return ""
         case .liquid: return "H2O"
         case .chrome: return "AG"
+        case .instant: return "SX70"
+        case .dream: return "GLOW"
+        case .fisheye: return "180"
         case .thermal: return "IR"
         case .xray: return "XR"
         case .vhs: return "PAL"
@@ -71,6 +80,12 @@ final class LensFXEngine {
             return applyLiquid(to: image, time: time)
         case .chrome:
             return applyChrome(to: image, time: time)
+        case .instant:
+            return applyInstant(to: image)
+        case .dream:
+            return applyDream(to: image)
+        case .fisheye:
+            return applyFisheye(to: image)
         case .thermal:
             return applySimpleFilter(name: "CIThermal", to: image)
         case .xray:
@@ -202,6 +217,112 @@ final class LensFXEngine {
         bloom.radius = 6
         bloom.intensity = 0.4
         if let result = bloom.outputImage { output = result }
+
+        return output.cropped(to: extent)
+    }
+
+    // MARK: - Instant film (Polaroid look)
+
+    private func applyInstant(to image: CIImage) -> CIImage {
+        let extent = image.extent
+        var output = image
+
+        // Soft and slightly washed out
+        let controls = CIFilter.colorControls()
+        controls.inputImage = output
+        controls.saturation = 0.82
+        controls.brightness = 0.02
+        controls.contrast = 0.92
+        if let result = controls.outputImage { output = result }
+
+        // Warm cast with the slight green shadow shift of aged instant film
+        let tempTint = CIFilter.temperatureAndTint()
+        tempTint.inputImage = output
+        tempTint.neutral = CIVector(x: 6500, y: 0)
+        tempTint.targetNeutral = CIVector(x: 5300, y: -8)
+        if let result = tempTint.outputImage { output = result }
+
+        // Lifted blacks, rolled-off highlights — the faded print curve
+        let curve = CIFilter.toneCurve()
+        curve.inputImage = output
+        curve.point0 = CGPoint(x: 0.00, y: 0.10)
+        curve.point1 = CGPoint(x: 0.25, y: 0.28)
+        curve.point2 = CGPoint(x: 0.50, y: 0.52)
+        curve.point3 = CGPoint(x: 0.75, y: 0.78)
+        curve.point4 = CGPoint(x: 1.00, y: 0.93)
+        if let result = curve.outputImage { output = result }
+
+        // Heavy corner falloff like a cheap plastic lens
+        let vignette = CIFilter.vignette()
+        vignette.inputImage = output
+        vignette.intensity = 0.8
+        vignette.radius = 1.8
+        if let result = vignette.outputImage { output = result }
+
+        // Gentle halation glow on highlights
+        let bloom = CIFilter.bloom()
+        bloom.inputImage = output
+        bloom.radius = 4
+        bloom.intensity = 0.25
+        if let result = bloom.outputImage { output = result }
+
+        return output.cropped(to: extent)
+    }
+
+    // MARK: - Dream (Orton-style glow blur)
+
+    private func applyDream(to image: CIImage) -> CIImage {
+        let extent = image.extent
+
+        // Wide soft blur of the frame...
+        let blur = CIFilter.gaussianBlur()
+        blur.inputImage = image.clampedToExtent()
+        blur.radius = Float(extent.width * 0.012)
+        let blurred = (blur.outputImage ?? image).cropped(to: extent)
+
+        // ...dimmed, then screened over the sharp original: highlights bloom
+        // and halo while detail stays visible underneath
+        let dim = CIFilter.colorMatrix()
+        dim.inputImage = blurred
+        dim.rVector = CIVector(x: 0.65, y: 0, z: 0, w: 0)
+        dim.gVector = CIVector(x: 0, y: 0.65, z: 0, w: 0)
+        dim.bVector = CIVector(x: 0, y: 0, z: 0.65, w: 0)
+        dim.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+
+        let screen = CIFilter.screenBlendMode()
+        screen.inputImage = dim.outputImage
+        screen.backgroundImage = image
+
+        var output = (screen.outputImage ?? image).cropped(to: extent)
+
+        // Dreamy color push
+        let vibrance = CIFilter.vibrance()
+        vibrance.inputImage = output
+        vibrance.amount = 0.25
+        if let result = vibrance.outputImage { output = result }
+
+        return output.cropped(to: extent)
+    }
+
+    // MARK: - Fisheye lens distortion
+
+    private func applyFisheye(to image: CIImage) -> CIImage {
+        let extent = image.extent
+
+        let bump = CIFilter.bumpDistortion()
+        bump.inputImage = image.clampedToExtent()
+        bump.center = CGPoint(x: extent.midX, y: extent.midY)
+        bump.radius = Float(max(extent.width, extent.height) * 0.62)
+        bump.scale = 0.55
+
+        var output = (bump.outputImage ?? image).cropped(to: extent)
+
+        // Dark corners sell the ultra-wide lens
+        let vignette = CIFilter.vignette()
+        vignette.inputImage = output
+        vignette.intensity = 0.6
+        vignette.radius = 2.0
+        if let result = vignette.outputImage { output = result }
 
         return output.cropped(to: extent)
     }

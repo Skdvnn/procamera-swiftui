@@ -12,7 +12,7 @@ A professional-grade camera app built with SwiftUI featuring analog-style contro
 - **White Balance Presets** - Auto, Sunny, Cloudy, Shade, Lamp, Fluorescent
 - **ISO Control** - Quick-tap cycling through common values (100-3200)
 - **Live Histogram** - Real-time exposure feedback in glass container
-- **Lens FX** - Live GPU shader effects on the camera feed: Liquid glass distortion, Chrome, Thermal, X-Ray, VHS (chromatic aberration + scanlines), Kaleidoscope, and 8-Bit — baked into captured photos
+- **Lens FX** - Live GPU shader effects on the camera feed: Liquid glass distortion, Chrome, Instant film, Dream glow, Fisheye, Thermal, X-Ray, VHS (chromatic aberration + scanlines), Kaleidoscope, and 8-Bit — baked into captured photos
 - **Manual Focus** - Precise focus control with haptic feedback
 - **Timer Support** - 3s and 10s countdown modes
 - **Grid Overlay** - Rule of thirds composition guide
