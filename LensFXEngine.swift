@@ -3,24 +3,46 @@ import CoreImage.CIFilterBuiltins
 import UIKit
 
 // MARK: - Lens FX Mode
-// Live GPU effects applied to the camera feed (preview + captured photos).
-// These run in the CIImage pipeline rendered by FilteredCameraPreview's MTKView,
-// so they compose with the film simulation filters.
+// Live GPU shader effects applied to the camera feed (preview + captured photos).
+// Classic film color grades live in FilmFilterMode / CameraManager.FilmFilter —
+// Instant is kept here only so older raw values don't shift.
 enum LensFXMode: Int, CaseIterable {
     case none = 0
-    case liquid       // Animated liquid-glass distortion
-    case chrome       // Liquid-metal chrome tone mapping
-    case instant      // Faded instant-film look with vignette
+    case liquid       // Animated liquid-glass distortion (touch-reactive)
+    case chrome       // Liquid-metal chrome tone mapping (touch-reactive)
+    case instant      // Deprecated: use FilmFilter.instant — hidden from picker
     case dream        // Orton-style glow blur
-    case fisheye      // Bulging wide-angle lens distortion
+    case fisheye      // Bulging wide-angle lens distortion (touch-reactive)
     case thermal      // Thermal camera palette
     case xray         // X-ray inversion
     case vhs          // Chromatic aberration + scanline overlay
-    case kaleido      // Six-way kaleidoscope
+    case kaleido      // Six-way kaleidoscope (touch-reactive)
     case pixel8       // Chunky 8-bit pixellation
     case toon         // Comic-book ink and halftone
     case mirror       // Symmetry down the middle
     case negative     // Inverted film negative
+
+    /// Shown in the Lens FX picker (excludes legacy Instant film look).
+    static var pickerCases: [LensFXMode] {
+        allCases.filter { $0 != .instant }
+    }
+
+    /// Warp / morph shaders that respond to viewfinder touch.
+    var isTouchReactive: Bool {
+        switch self {
+        case .liquid, .chrome, .fisheye, .kaleido: return true
+        default: return false
+        }
+    }
+
+    /// Picker section: morphic warp vs stylistic look shaders.
+    var pickerSection: LensFXSection {
+        switch self {
+        case .none: return .warp
+        case .liquid, .chrome, .fisheye, .kaleido, .mirror: return .warp
+        case .dream, .thermal, .xray, .vhs, .pixel8, .toon, .negative, .instant: return .look
+        }
+    }
 
     var name: String {
         switch self {
@@ -61,6 +83,25 @@ enum LensFXMode: Int, CaseIterable {
     }
 }
 
+enum LensFXSection: String, CaseIterable {
+    case warp = "WARP"
+    case look = "LOOK"
+}
+
+/// Viewfinder touch driving morphic Lens FX (normalized UIKit coords).
+struct MorphTouchState {
+    /// 0…1 left→right in the viewfinder
+    var x: CGFloat = 0.5
+    /// 0…1 top→bottom in the viewfinder
+    var y: CGFloat = 0.5
+    /// 0…1 contact strength (decays after release)
+    var force: CGFloat = 0
+    /// Normalized velocity (viewfinder widths/sec-ish)
+    var velX: CGFloat = 0
+    var velY: CGFloat = 0
+    var isActive: Bool = false
+}
+
 // MARK: - Lens FX Engine
 final class LensFXEngine {
     static let shared = LensFXEngine()
@@ -76,7 +117,72 @@ final class LensFXEngine {
     // all sub-second precision once converted to Float for shader params
     private let startTime = CFAbsoluteTimeGetCurrent()
 
+    // Dedicated context for still bakes (retries + software fallback)
+    private let renderContext = CIContext(options: [.useSoftwareRenderer: false])
+
+    /// Latest viewfinder touch; read on the capture/preview queue.
+    private let touchLock = NSLock()
+    private var _touch = MorphTouchState()
+    private var lastDecayTime: CFAbsoluteTime = 0
+
     private init() {}
+
+    var touch: MorphTouchState {
+        touchLock.lock()
+        defer { touchLock.unlock() }
+        return _touch
+    }
+
+    /// Update from the viewfinder (normalized UIKit top-left coords + velocity).
+    func setTouch(x: CGFloat, y: CGFloat, force: CGFloat, velX: CGFloat, velY: CGFloat, active: Bool) {
+        touchLock.lock()
+        _touch.x = min(1, max(0, x))
+        _touch.y = min(1, max(0, y))
+        _touch.force = min(1, max(0, force))
+        _touch.velX = velX
+        _touch.velY = velY
+        _touch.isActive = active
+        touchLock.unlock()
+    }
+
+    /// Exponential settle after finger-up so the warp eases out naturally.
+    func decayTouchIfNeeded(now: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()) {
+        touchLock.lock()
+        defer { touchLock.unlock() }
+        guard !_touch.isActive, _touch.force > 0.001 else {
+            if !_touch.isActive && _touch.force <= 0.001 {
+                _touch.force = 0
+                _touch.velX = 0
+                _touch.velY = 0
+            }
+            lastDecayTime = now
+            return
+        }
+        let dt = lastDecayTime > 0 ? min(0.05, now - lastDecayTime) : 1.0 / 30.0
+        lastDecayTime = now
+        // ~half-life 0.18s
+        let k = pow(0.08, dt / 0.18)
+        _touch.force *= CGFloat(k)
+        _touch.velX *= CGFloat(k)
+        _touch.velY *= CGFloat(k)
+        if _touch.force < 0.001 {
+            _touch.force = 0
+            _touch.velX = 0
+            _touch.velY = 0
+        }
+    }
+
+    /// Map viewfinder-normalized UIKit point → CIImage point.
+    /// Live FX runs on the landscape pixel buffer before the preview rotates
+    /// with `.oriented(.right)` for portrait, so invert that here.
+    private func touchCenter(in extent: CGRect, touch: MorphTouchState) -> CGPoint {
+        let bufNX = touch.y
+        let bufNY = touch.x
+        return CGPoint(
+            x: extent.minX + bufNX * extent.width,
+            y: extent.minY + bufNY * extent.height
+        )
+    }
 
     /// Apply the selected effect to a camera frame.
     /// `time` animates time-varying effects in the live preview; pass 0 for stills.
@@ -92,6 +198,9 @@ final class LensFXEngine {
         }
 
         let time = rawTime > 0 ? rawTime - startTime : 0
+        if rawTime > 0 {
+            decayTouchIfNeeded(now: rawTime)
+        }
 
         lock.lock()
         defer { lock.unlock() }
@@ -136,6 +245,131 @@ final class LensFXEngine {
             return image
         }
         return result
+    }
+
+    /// Renders a still-image variant of an effect. Orientation metadata is
+    /// flattened before processing so the saved JPEG is not rotated twice.
+    ///
+    /// Under live-camera GPU load, a single `createCGImage` can fail and used
+    /// to silently return nil (callers then saved the unfiltered still). This
+    /// path retries with plain createCGImage, a software CIContext, and a
+    /// smaller max dimension before giving up.
+    func render(_ fx: LensFXMode, on image: UIImage, maxDimension: CGFloat = 3072) -> UIImage? {
+        guard fx != .none else { return image }
+
+        // Prefer CGImage → CIImage so we control orientation ourselves.
+        let base: CIImage?
+        if let cg = image.cgImage {
+            base = CIImage(cgImage: cg)
+        } else {
+            base = CIImage(image: image)
+        }
+        guard var input = base else {
+            print("LensFX render: could not build CIImage for \(fx.name)")
+            return nil
+        }
+
+        // Bake the UIImage orientation into the pixels explicitly.
+        // CIImage(cgImage:) / CIImage(image:) ignore UIImage.imageOrientation.
+        if image.imageOrientation != .up {
+            input = input.oriented(CGImagePropertyOrientation(image.imageOrientation))
+        }
+
+        let attemptDims: [CGFloat] = maxDimension > 2048
+            ? [maxDimension, 2048, 1536]
+            : [maxDimension, 1536]
+
+        for dim in attemptDims {
+            if let rendered = renderAttempt(fx, input: input, maxDimension: dim, scale: image.scale) {
+                return rendered
+            }
+        }
+
+        print("LensFX render: all attempts failed for \(fx.name) size=\(image.size)")
+        return nil
+    }
+
+    private func renderAttempt(
+        _ fx: LensFXMode,
+        input source: CIImage,
+        maxDimension: CGFloat,
+        scale: CGFloat
+    ) -> UIImage? {
+        var input = source
+
+        let longestEdge = max(input.extent.width, input.extent.height)
+        if longestEdge > maxDimension {
+            let s = maxDimension / longestEdge
+            input = input.transformed(by: CGAffineTransform(scaleX: s, y: s))
+        }
+        // Normalize origin so filters that use extent.mid as their center behave
+        input = input.transformed(by: CGAffineTransform(
+            translationX: -input.extent.minX,
+            y: -input.extent.minY
+        ))
+
+        // Use a small positive time so time-based stills (liquid/chrome/VHS)
+        // aren't stuck at a degenerate t=0 phase.
+        var output = apply(fx, to: input, time: 0.35).cropped(to: input.extent)
+
+        // Bake scanlines into VHS stills — live preview draws them via a
+        // SwiftUI overlay that never reaches the capture pipeline.
+        if fx == .vhs {
+            output = applyVHSScanlines(to: output)
+        }
+
+        guard output.extent.width > 1, output.extent.height > 1 else { return nil }
+
+        let contexts: [CIContext] = [
+            renderContext,
+            CIContext(options: [.useSoftwareRenderer: true])
+        ]
+
+        for context in contexts {
+            // Prefer plain createCGImage — RGBA8+forced sRGB has failed under
+            // device GPU contention even when the filter graph is valid.
+            if let cgImage = context.createCGImage(output, from: output.extent)
+                ?? context.createCGImage(
+                    output,
+                    from: output.extent,
+                    format: .RGBA8,
+                    colorSpace: CGColorSpace(name: CGColorSpace.sRGB)
+                ) {
+                return UIImage(cgImage: cgImage, scale: scale, orientation: .up)
+            }
+        }
+        return nil
+    }
+
+    /// Static scanline overlay matching the live VHS viewfinder treatment.
+    private func applyVHSScanlines(to image: CIImage) -> CIImage {
+        let extent = image.extent
+        guard extent.width > 1, extent.height > 1 else { return image }
+
+        // Horizontal stripe mask via striped generator + crop
+        let stripes = CIFilter.stripesGenerator()
+        stripes.center = CGPoint(x: 0, y: 0)
+        stripes.color0 = CIColor(red: 0, green: 0, blue: 0, alpha: 0.35)
+        stripes.color1 = CIColor(red: 0, green: 0, blue: 0, alpha: 0)
+        stripes.width = Float(max(1.5, extent.height / 280))
+        stripes.sharpness = 1
+
+        guard var stripeImage = stripes.outputImage?.transformed(
+            by: CGAffineTransform(rotationAngle: .pi / 2)
+        ) else { return image }
+
+        stripeImage = stripeImage
+            .transformed(by: CGAffineTransform(
+                translationX: -stripeImage.extent.minX,
+                y: -stripeImage.extent.minY
+            ))
+            .cropped(to: extent)
+
+        let over = CIFilter.sourceOverCompositing()
+        over.inputImage = stripeImage
+        over.backgroundImage = image
+        return (over.outputImage ?? image).cropped(to: extent)
+
     }
 
     // MARK: - Liquid glass distortion
@@ -201,22 +435,65 @@ final class LensFXEngine {
 
     // Heavy glass warp driven by the morphing texture, plus a slow breathing
     // twirl — reads as flowing liquid rather than static shimmer.
+    // When touch force > 0, the warp centers on the finger with a localized
+    // refraction bulge and a trailing wake from drag velocity.
     private func morphDistort(_ image: CIImage, extent: CGRect, time: TimeInterval, strength: CGFloat) -> CIImage {
-        let texture = morphingTexture(covering: extent, time: time)
+        let t = touch
+        let force = t.force
+        let center: CGPoint = force > 0.01
+            ? touchCenter(in: extent, touch: t)
+            : CGPoint(x: extent.midX, y: extent.midY)
+
+        // Velocity pulls the noise field (molten flow toward drag direction)
+        let velBoost = min(1.2, hypot(t.velX, t.velY) * 0.35)
+        let textureTime = time
+            + TimeInterval(t.velX) * 0.4
+            + TimeInterval(t.velY) * 0.25
+        let texture = morphingTexture(covering: extent, time: textureTime)
+
+        let glassScale = extent.width * strength * (1.0 + force * 1.8 + velBoost * 0.6)
 
         guard let glass = CIFilter(name: "CIGlassDistortion") else { return image }
         glass.setValue(image.clampedToExtent(), forKey: kCIInputImageKey)
         glass.setValue(texture, forKey: "inputTexture")
-        glass.setValue(CIVector(x: extent.midX, y: extent.midY), forKey: kCIInputCenterKey)
-        glass.setValue(extent.width * strength, forKey: kCIInputScaleKey)
+        glass.setValue(CIVector(x: center.x, y: center.y), forKey: kCIInputCenterKey)
+        glass.setValue(glassScale, forKey: kCIInputScaleKey)
 
         var output = (glass.outputImage ?? image).cropped(to: extent)
 
+        // Localized refraction bulge under the finger
+        if force > 0.02 {
+            let bump = CIFilter.bumpDistortion()
+            bump.inputImage = output.clampedToExtent()
+            bump.center = center
+            bump.radius = Float(min(extent.width, extent.height) * (0.18 + force * 0.28))
+            bump.scale = Float(0.35 + force * 0.85 + velBoost * 0.25)
+            output = (bump.outputImage ?? output).cropped(to: extent)
+
+            // Trailing wake opposite drag velocity
+            let speed = hypot(t.velX, t.velY)
+            if speed > 0.15 {
+                let wake = CIFilter.bumpDistortion()
+                let wakeCenter = CGPoint(
+                    x: center.x - t.velX * extent.width * 0.12,
+                    y: center.y - t.velY * extent.height * 0.12
+                )
+                wake.inputImage = output.clampedToExtent()
+                wake.center = wakeCenter
+                wake.radius = Float(min(extent.width, extent.height) * 0.14)
+                wake.scale = Float(min(0.7, speed * 0.35) * force)
+                output = (wake.outputImage ?? output).cropped(to: extent)
+            }
+        }
+
         let twirl = CIFilter.twirlDistortion()
         twirl.inputImage = output.clampedToExtent()
-        twirl.center = CGPoint(x: extent.midX, y: extent.midY)
-        twirl.radius = Float(min(extent.width, extent.height) * 0.75)
-        twirl.angle = Float(sin(time * 0.45)) * 0.9
+        twirl.center = center
+        let baseRadius = min(extent.width, extent.height) * (force > 0.02 ? 0.45 : 0.75)
+        twirl.radius = Float(baseRadius * (1.0 + force * 0.35))
+        let breath = Float(sin(time * 0.45)) * 0.9
+        let dragSpin = Float((t.velX - t.velY) * force * 0.8)
+        twirl.angle = breath + dragSpin
 
         output = (twirl.outputImage ?? output).cropped(to: extent)
         return output
@@ -355,12 +632,17 @@ final class LensFXEngine {
 
     private func applyFisheye(to image: CIImage) -> CIImage {
         let extent = image.extent
+        let t = touch
+        let center: CGPoint = t.force > 0.02
+            ? touchCenter(in: extent, touch: t)
+            : CGPoint(x: extent.midX, y: extent.midY)
+        let scaleBoost = Float(t.force * 0.45 + min(0.35, hypot(t.velX, t.velY) * 0.2))
 
         let bump = CIFilter.bumpDistortion()
         bump.inputImage = image.clampedToExtent()
-        bump.center = CGPoint(x: extent.midX, y: extent.midY)
-        bump.radius = Float(max(extent.width, extent.height) * 0.62)
-        bump.scale = 0.55
+        bump.center = center
+        bump.radius = Float(max(extent.width, extent.height) * (0.62 - t.force * 0.12))
+        bump.scale = 0.55 + scaleBoost
 
         var output = (bump.outputImage ?? image).cropped(to: extent)
 
@@ -425,12 +707,18 @@ final class LensFXEngine {
 
     private func applyKaleido(to image: CIImage, time: TimeInterval) -> CIImage {
         let extent = image.extent
+        let t = touch
+        let center: CGPoint = t.force > 0.02
+            ? touchCenter(in: extent, touch: t)
+            : CGPoint(x: extent.midX, y: extent.midY)
 
         let kaleido = CIFilter.kaleidoscope()
         kaleido.inputImage = image.clampedToExtent()
         kaleido.count = 6
-        kaleido.center = CGPoint(x: extent.midX, y: extent.midY)
-        kaleido.angle = Float(time * 0.15)
+        kaleido.center = center
+        let baseAngle = Float(time * 0.15)
+        let touchSpin = Float((t.velX - t.velY) * t.force * 0.6)
+        kaleido.angle = baseAngle + touchSpin
 
         return (kaleido.outputImage ?? image).cropped(to: extent)
     }
