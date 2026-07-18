@@ -155,10 +155,6 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    override init() {
-        super.init()
-    }
-
     func checkPermissions() {
         switch AVCaptureDevice.authorizationStatus(for: .video) {
         case .authorized:
