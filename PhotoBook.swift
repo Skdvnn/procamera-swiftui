@@ -284,7 +284,15 @@ struct LibraryView: View {
                 header
                     .padding(.horizontal, 20)
                     .padding(.top, 14)
-                    .padding(.bottom, 8)
+                    .padding(.bottom, 6)
+                    .opacity(route == nil ? 1 : 0)
+
+                Text("TAP A COVER TO OPEN")
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .tracking(2.5)
+                    .foregroundColor(.white.opacity(0.28))
+                    .frame(maxWidth: .infinity)
+                    .padding(.bottom, 10)
                     .opacity(route == nil ? 1 : 0)
 
                 ScrollView(showsIndicators: false) {
