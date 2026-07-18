@@ -115,12 +115,23 @@ final class GalleryStore: ObservableObject {
 
     // MARK: Books
 
-    func createBook(title: String) {
+    @discardableResult
+    func createBook(title: String) -> Book? {
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        books.append(Book(id: UUID(), title: trimmed, createdAt: Date(),
-                          shotIDs: [], pinnedShotIDs: []))
+        guard !trimmed.isEmpty else { return nil }
+        let book = Book(id: UUID(), title: trimmed, createdAt: Date(),
+                        shotIDs: [], pinnedShotIDs: [])
+        books.append(book)
         saveBooks()
+        return book
+    }
+
+    func toggle(_ shot: ShotMetadata, in book: Book) {
+        if contains(shot, book: book) {
+            remove(shot, from: book)
+        } else {
+            add(shot, to: book)
+        }
     }
 
     func deleteBook(_ book: Book) {
@@ -242,6 +253,8 @@ struct LibraryView: View {
     @State private var showNewBook = false
     @State private var newBookTitle = ""
     @State private var pressedRouteID: String?
+    /// Open a book and immediately present the file-frames picker
+    @State private var pendingAddFrames = false
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
     private let booksPerShelf = 3
@@ -303,41 +316,39 @@ struct LibraryView: View {
                 header
                     .padding(.horizontal, 20)
                     .padding(.top, 14)
-                    .padding(.bottom, 6)
-                    .opacity(route == nil && openedSharedBook == nil ? 1 : 0)
-
-                Text("TAP A COVER TO OPEN")
-                    .font(.system(size: 8, weight: .bold, design: .monospaced))
-                    .tracking(2.5)
-                    .foregroundColor(.white.opacity(0.28))
-                    .frame(maxWidth: .infinity)
-                    .padding(.bottom, 10)
+                    .padding(.bottom, 12)
                     .opacity(route == nil && openedSharedBook == nil ? 1 : 0)
 
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 0) {
+                        // Local ledge label — one job: your books
+                        shelfSectionLabel("YOUR BOOKS")
+                            .padding(.bottom, 10)
+
                         ForEach(Array(shelves.enumerated()), id: \.offset) { _, row in
                             shelfRow(for: row)
                         }
 
+                        if store.books.isEmpty {
+                            shelfEmptyHint
+                                .padding(.horizontal, 28)
+                                .padding(.top, 6)
+                                .padding(.bottom, 20)
+                        }
+
                         // Books others invited you into — same shelf language, own ledges
                         if !sharedShelves.isEmpty {
-                            Text("SHARED WITH ME")
-                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                                .tracking(3)
-                                .foregroundColor(.white.opacity(0.4))
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .padding(.horizontal, 22)
-                                .padding(.top, 10)
-                                .padding(.bottom, 8)
+                            shelfSectionLabel("SHARED WITH ME")
+                                .padding(.top, 14)
+                                .padding(.bottom, 10)
 
                             ForEach(Array(sharedShelves.enumerated()), id: \.offset) { _, row in
                                 shelfRow(for: row)
                             }
                         }
                     }
-                    .padding(.top, 8)
-                    .padding(.bottom, 36)
+                    .padding(.top, 4)
+                    .padding(.bottom, 40)
                 }
                 .opacity(route == nil && openedSharedBook == nil ? 1 : 0)
                 .allowsHitTesting(route == nil && openedSharedBook == nil)
@@ -358,7 +369,8 @@ struct LibraryView: View {
                     onSelectShelfItem: { item in
                         switchBooks(to: item)
                     },
-                    onClose: closeBook
+                    onClose: closeBook,
+                    openAddFramesOnAppear: $pendingAddFrames
                 )
                 .transition(.identity)
                 .zIndex(2)
@@ -370,10 +382,19 @@ struct LibraryView: View {
         }
         .alert("New Book", isPresented: $showNewBook) {
             TextField("Title (e.g. Big Sur Trip)", text: $newBookTitle)
-            Button("Create") { store.createBook(title: newBookTitle) }
+            Button("Create") {
+                if let book = store.createBook(title: newBookTitle) {
+                    newBookTitle = ""
+                    pendingAddFrames = true
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    withAnimation(.spring(response: 0.48, dampingFraction: 0.86)) {
+                        route = .book(book.id)
+                    }
+                }
+            }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Name your book, then long-press frames in All Frames to add them.")
+            Text("Name your book — you'll pick frames from All Frames next.")
         }
         .statusBarHidden(true)
     }
@@ -390,6 +411,13 @@ struct LibraryView: View {
             onNew: {
                 newBookTitle = ""
                 showNewBook = true
+            },
+            onAddFrames: { id in
+                pendingAddFrames = true
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                withAnimation(.spring(response: 0.48, dampingFraction: 0.86)) {
+                    route = .book(id)
+                }
             },
             onDelete: { id in
                 if let book = store.books.first(where: { $0.id == id }) {
@@ -478,42 +506,84 @@ struct LibraryView: View {
 
     private var header: some View {
         HStack(alignment: .center) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("LIBRARY")
-                    .font(.system(size: 15, weight: .semibold, design: .monospaced))
-                    .tracking(4)
-                    .foregroundColor(.white.opacity(0.9))
+            VStack(alignment: .leading, spacing: 4) {
+                Text("FIELD BOOK")
+                    .font(.system(size: 18, weight: .semibold, design: .monospaced))
+                    .tracking(3)
+                    .foregroundColor(.white.opacity(0.94))
                 Text(librarySubtitle)
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .tracking(2)
-                    .foregroundColor(.white.opacity(0.35))
+                    .foregroundColor(accent.opacity(0.55))
             }
 
             Spacer()
 
             Button(action: { dismiss() }) {
-                ZStack {
-                    Circle()
-                        .fill(Color.black.opacity(0.5))
-                        .frame(width: 34, height: 34)
-                    Circle()
-                        .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
-                        .frame(width: 34, height: 34)
-                    Image(systemName: "xmark")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(.white.opacity(0.8))
-                }
+                Text("CAMERA")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .tracking(1.5)
+                    .foregroundColor(accent.opacity(0.9))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(
+                        Capsule()
+                            .fill(Color.black.opacity(0.45))
+                            .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
+                    )
             }
         }
     }
 
-    private var librarySubtitle: String {
-        let local = store.books.count + 1
-        let shared = cloud.sharedBooks.count
-        if shared > 0 {
-            return "\(local) BOOKS  ·  \(shared) SHARED  ·  \(store.shots.count) FRAMES"
+    private func shelfSectionLabel(_ text: String) -> some View {
+        HStack(spacing: 10) {
+            Text(text)
+                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                .tracking(3)
+                .foregroundColor(.white.opacity(0.38))
+            Rectangle()
+                .fill(Color.white.opacity(0.08))
+                .frame(height: 0.5)
         }
-        return "\(local) BOOKS  ·  \(store.shots.count) FRAMES"
+        .padding(.horizontal, 22)
+    }
+
+    private var shelfEmptyHint: some View {
+        VStack(spacing: 8) {
+            Text("START A BOOK")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                .tracking(2)
+                .foregroundColor(accent.opacity(0.7))
+            Text("Tap NEW BOOK, then file frames from All Frames.\nLong-press any cover anytime to add more.")
+                .font(.system(size: 9, weight: .regular, design: .monospaced))
+                .foregroundColor(.white.opacity(0.32))
+                .multilineTextAlignment(.center)
+                .lineSpacing(3)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Color.black.opacity(0.28))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+                )
+        )
+    }
+
+    private var librarySubtitle: String {
+        let books = store.books.count
+        let shared = cloud.sharedBooks.count
+        let frames = store.shots.count
+        if shared > 0 {
+            return "\(frames) FRAMES  ·  \(books) BOOKS  ·  \(shared) SHARED"
+        }
+        if books == 0 {
+            return "\(frames) FRAME\(frames == 1 ? "" : "S")  ·  TAP A COVER"
+        }
+        return "\(frames) FRAMES  ·  \(books) BOOK\(books == 1 ? "" : "S")"
     }
 }
 
@@ -591,20 +661,26 @@ struct AlbumShelfRail: View {
     let onSelect: (ShelfItem) -> Void
 
     var body: some View {
-        VStack(spacing: 6) {
-            Text("YOUR SHELF")
-                .font(.system(size: 8, weight: .bold, design: .monospaced))
-                .tracking(2)
-                .foregroundColor(.white.opacity(0.3))
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Text("SHELF")
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .tracking(2.5)
+                    .foregroundColor(.white.opacity(0.32))
+                Rectangle()
+                    .fill(Color.white.opacity(0.08))
+                    .frame(height: 0.5)
+            }
+            .padding(.horizontal, 20)
 
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(alignment: .bottom, spacing: 14) {
+                HStack(alignment: .bottom, spacing: 16) {
                     ForEach(items) { item in
                         let isActive = activeRouteID == item.id
                         Button {
                             onSelect(item)
                         } label: {
-                                            BookCover(
+                            BookCover(
                                 title: item.title,
                                 count: item.count,
                                 coverImage: item.coverImage,
@@ -613,36 +689,29 @@ struct AlbumShelfRail: View {
                                 matchID: "rail-\(item.id)",
                                 namespace: namespace,
                                 isRailMiniature: true,
-                                coverHeight: 64,
+                                coverHeight: 70,
                                 subtitleOverride: item.subtitle,
                                 isShared: item.isShared
                             )
                             .overlay(
                                 RoundedRectangle(cornerRadius: 3)
-                                    .stroke(isActive ? accent.opacity(0.9) : Color.clear, lineWidth: 1.5)
+                                    .stroke(isActive ? accent.opacity(0.95) : Color.clear, lineWidth: 1.5)
                             )
-                            .opacity(isActive ? 1 : 0.72)
-                            .scaleEffect(isActive ? 1.06 : 1.0)
+                            .opacity(isActive ? 1 : 0.68)
+                            .scaleEffect(isActive ? 1.08 : 1.0)
+                            .animation(.spring(response: 0.32, dampingFraction: 0.82), value: isActive)
                         }
                         .buttonStyle(.plain)
                     }
                 }
                 .padding(.horizontal, 20)
-                .padding(.vertical, 4)
+                .padding(.vertical, 6)
             }
 
             // Mini ledge under the rail
-            Rectangle()
-                .fill(
-                    LinearGradient(
-                        colors: [Color(hex: "3a2c22"), Color(hex: "1a1511")],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .frame(height: 6)
-                .padding(.horizontal, 12)
-                .shadow(color: .black.opacity(0.4), radius: 4, y: 2)
+            ShelfLedge()
+                .padding(.horizontal, 14)
+                .scaleEffect(y: 0.7, anchor: .top)
         }
     }
 }
@@ -657,7 +726,10 @@ struct ShelfRow: View {
     let onPress: (String?) -> Void
     let onOpen: (ShelfItem) -> Void
     let onNew: () -> Void
+    let onAddFrames: (UUID) -> Void
     let onDelete: (UUID) -> Void
+
+    @State private var rowAppeared = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -665,6 +737,12 @@ struct ShelfRow: View {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                     shelfSlot(item: item, index: index)
                         .frame(maxWidth: .infinity)
+                        .offset(y: rowAppeared ? 0 : 14)
+                        .opacity(rowAppeared ? 1 : 0)
+                        .animation(
+                            .spring(response: 0.5, dampingFraction: 0.86).delay(Double(index) * 0.06),
+                            value: rowAppeared
+                        )
                 }
                 // Pad empty slots so a short bottom shelf still spans the ledge
                 if items.count < 3 {
@@ -673,14 +751,17 @@ struct ShelfRow: View {
                     }
                 }
             }
-            .padding(.horizontal, 18)
-            .padding(.bottom, 2)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 4)
 
             // The ledge the books sit on
             ShelfLedge()
-                .padding(.horizontal, 8)
+                .padding(.horizontal, 6)
+                .opacity(rowAppeared ? 1 : 0)
+                .animation(.easeOut(duration: 0.35).delay(0.08), value: rowAppeared)
         }
-        .padding(.bottom, 22)
+        .padding(.bottom, 28)
+        .onAppear { rowAppeared = true }
     }
 
     @ViewBuilder
@@ -722,6 +803,11 @@ struct ShelfRow: View {
                 .disabled(isActive)
                 .contextMenu {
                     if case .book(let id, _, _, _) = item {
+                        Button {
+                            onAddFrames(id)
+                        } label: {
+                            Label("Add frames…", systemImage: "plus.rectangle.on.rectangle")
+                        }
                         Button(role: .destructive) {
                             onDelete(id)
                         } label: {
@@ -752,17 +838,17 @@ struct ShelfLedge: View {
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color(hex: "5a4535").opacity(0.9),
-                            Color(hex: "3a2c22")
+                            Color(hex: "6a5340").opacity(0.95),
+                            Color(hex: "3f3126")
                         ],
                         startPoint: .top,
                         endPoint: .bottom
                     )
                 )
-                .frame(height: 5)
+                .frame(height: 6)
                 .overlay(
                     Rectangle()
-                        .fill(Color.white.opacity(0.08))
+                        .fill(Color.white.opacity(0.12))
                         .frame(height: 1),
                     alignment: .top
                 )
@@ -772,25 +858,32 @@ struct ShelfLedge: View {
                 .fill(
                     LinearGradient(
                         colors: [
-                            Color(hex: "2a211a"),
-                            Color(hex: "1a1511")
+                            Color(hex: "32271f"),
+                            Color(hex: "1c1612"),
+                            Color(hex: "14100d")
                         ],
                         startPoint: .top,
                         endPoint: .bottom
                     )
                 )
-                .frame(height: 14)
+                .frame(height: 16)
                 .overlay(
                     // Subtle grain lines
-                    HStack(spacing: 18) {
-                        ForEach(0..<12, id: \.self) { _ in
+                    HStack(spacing: 16) {
+                        ForEach(0..<14, id: \.self) { _ in
                             Rectangle()
-                                .fill(Color.white.opacity(0.015))
+                                .fill(Color.white.opacity(0.02))
                                 .frame(width: 1)
                         }
                     }
                 )
-                .shadow(color: .black.opacity(0.55), radius: 8, x: 0, y: 6)
+                .overlay(
+                    Rectangle()
+                        .fill(Color.black.opacity(0.35))
+                        .frame(height: 1),
+                    alignment: .bottom
+                )
+                .shadow(color: .black.opacity(0.6), radius: 10, x: 0, y: 7)
         }
         .clipShape(RoundedRectangle(cornerRadius: 2))
     }
@@ -807,7 +900,7 @@ struct BookCover: View {
     let namespace: Namespace.ID
     /// Compact rail miniatures use unique IDs and skip morph participation
     var isRailMiniature: Bool = false
-    var coverHeight: CGFloat = 168
+    var coverHeight: CGFloat = 176
     /// Destination of a shelf→open morph (hero cover). Shelf slots leave this false.
     var isOpenDestination: Bool = false
     var subtitleOverride: String? = nil
@@ -817,8 +910,8 @@ struct BookCover: View {
         coverBody
             .aspectRatio(0.68, contentMode: .fit)
             .frame(height: coverHeight)
-            .shadow(color: .black.opacity(isRailMiniature ? 0.35 : 0.55),
-                    radius: isRailMiniature ? 4 : 8, x: 2, y: isRailMiniature ? 3 : 6)
+            .shadow(color: .black.opacity(isRailMiniature ? 0.35 : 0.6),
+                    radius: isRailMiniature ? 4 : 10, x: 2, y: isRailMiniature ? 3 : 7)
             .modifier(BookCoverMatchModifier(
                 matchID: matchID,
                 namespace: namespace,
@@ -881,25 +974,26 @@ struct BookCover: View {
                 .clipped()
 
                 // Bottom title band
-                VStack(spacing: 2) {
+                VStack(spacing: 3) {
                     Text(title)
                         .font(.system(size: isRailMiniature ? 7 : 9, weight: .bold, design: .monospaced))
                         .tracking(isRailMiniature ? 0.5 : 1.2)
                         .lineLimit(2)
                         .multilineTextAlignment(.center)
-                        .foregroundColor(isMaster || isShared ? accent : .white.opacity(0.92))
+                        .foregroundColor(isMaster || isShared ? accent : .white.opacity(0.94))
                     if !isRailMiniature {
-                        Text(subtitleOverride ?? "\(count)")
-                            .font(.system(size: 8, weight: .medium, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.45))
+                        Text(coverSubtitle)
+                            .font(.system(size: 7, weight: .medium, design: .monospaced))
+                            .tracking(0.8)
+                            .foregroundColor(.white.opacity(0.48))
                     }
                 }
                 .padding(.horizontal, isRailMiniature ? 3 : 6)
-                .padding(.vertical, isRailMiniature ? 5 : 8)
+                .padding(.vertical, isRailMiniature ? 5 : 9)
                 .frame(maxWidth: .infinity)
                 .background(
                     LinearGradient(
-                        colors: [Color.black.opacity(0.05), Color.black.opacity(0.78)],
+                        colors: [Color.black.opacity(0.02), Color.black.opacity(0.82)],
                         startPoint: .top,
                         endPoint: .bottom
                     )
@@ -907,13 +1001,23 @@ struct BookCover: View {
             }
             .clipShape(RoundedRectangle(cornerRadius: 3))
             .overlay(
+                // Master roll gets a thin accent edge so it reads as the source book
+                RoundedRectangle(cornerRadius: 3)
+                    .stroke(
+                        isMaster
+                            ? accent.opacity(0.45)
+                            : Color.clear,
+                        lineWidth: isMaster && !isRailMiniature ? 1 : 0
+                    )
+            )
+            .overlay(
                 RoundedRectangle(cornerRadius: 3)
                     .stroke(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(0.28),
-                                Color.white.opacity(0.05),
-                                Color.black.opacity(0.4)
+                                Color.white.opacity(0.32),
+                                Color.white.opacity(0.06),
+                                Color.black.opacity(0.45)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -923,7 +1027,7 @@ struct BookCover: View {
             )
             .overlay(
                 LinearGradient(
-                    colors: [Color.white.opacity(0.14), Color.clear, Color.clear],
+                    colors: [Color.white.opacity(0.16), Color.clear, Color.clear],
                     startPoint: .topLeading,
                     endPoint: UnitPoint(x: 0.55, y: 0.45)
                 )
@@ -931,6 +1035,12 @@ struct BookCover: View {
                 .allowsHitTesting(false)
             )
         }
+    }
+
+    private var coverSubtitle: String {
+        if let subtitleOverride { return subtitleOverride }
+        if count == 0 { return "EMPTY" }
+        return "\(count) FRAME\(count == 1 ? "" : "S")"
     }
 }
 
@@ -967,27 +1077,44 @@ struct NewBookCover: View {
     let accent: Color
 
     var body: some View {
-        VStack(spacing: 10) {
-            Image(systemName: "plus")
-                .font(.system(size: 18, weight: .medium))
-                .foregroundColor(accent.opacity(0.75))
-            Text("NEW")
-                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                .tracking(2)
-                .foregroundColor(.white.opacity(0.45))
+        VStack(spacing: 12) {
+            ZStack {
+                Circle()
+                    .stroke(accent.opacity(0.45), lineWidth: 1)
+                    .frame(width: 36, height: 36)
+                Image(systemName: "plus")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(accent.opacity(0.85))
+            }
+            VStack(spacing: 3) {
+                Text("NEW BOOK")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .tracking(1.5)
+                    .foregroundColor(.white.opacity(0.55))
+                Text("START A SHELF")
+                    .font(.system(size: 7, weight: .medium, design: .monospaced))
+                    .tracking(1)
+                    .foregroundColor(.white.opacity(0.28))
+            }
         }
         .frame(maxWidth: .infinity)
         .aspectRatio(0.68, contentMode: .fit)
-        .frame(height: 168)
+        .frame(height: 176)
         .background(
             RoundedRectangle(cornerRadius: 3)
                 .strokeBorder(
-                    Color.white.opacity(0.22),
-                    style: StrokeStyle(lineWidth: 1.2, dash: [5, 4])
+                    accent.opacity(0.28),
+                    style: StrokeStyle(lineWidth: 1.1, dash: [4, 4])
                 )
                 .background(
                     RoundedRectangle(cornerRadius: 3)
-                        .fill(Color.white.opacity(0.03))
+                        .fill(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.04), Color.black.opacity(0.2)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
                 )
         )
         .contentShape(RoundedRectangle(cornerRadius: 3))
@@ -1006,6 +1133,8 @@ struct PhotoBookView: View {
     var activeRouteID: String? = nil
     var onSelectShelfItem: ((ShelfItem) -> Void)? = nil
     var onClose: (() -> Void)? = nil
+    /// When true on appear/open, present the file-frames picker (shelf / new-book).
+    var openAddFramesOnAppear: Binding<Bool> = .constant(false)
 
     @Environment(\.dismiss) private var dismiss
 
@@ -1017,6 +1146,7 @@ struct PhotoBookView: View {
     @State private var shareContext: CloudBookManager.ShareContext?
     @State private var isPreparingShare = false
     @State private var shareError: String?
+    @State private var showAddFrames = false
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
 
@@ -1113,6 +1243,11 @@ struct PhotoBookView: View {
                 Lightbox(image: store.image(for: shot)) { zoomedShot = nil }
             }
         }
+        .sheet(isPresented: $showAddFrames) {
+            if let book = book {
+                LocalAddFramesPicker(store: store, book: book)
+            }
+        }
         .sheet(item: $shareContext) { context in
             CloudSharingSheet(share: context.share, container: context.container, title: context.title)
         }
@@ -1124,7 +1259,10 @@ struct PhotoBookView: View {
         } message: {
             Text(shareError ?? "")
         }
-        .onAppear { revealContent(after: 0.3) }
+        .onAppear {
+            revealContent(after: 0.3)
+            presentAddFramesIfRequested()
+        }
         .onChange(of: bookID) { _, _ in
             currentPage = 0
             if skipNextOpenMorph {
@@ -1136,8 +1274,17 @@ struct PhotoBookView: View {
                 contentRevealed = false
                 revealContent(after: 0.22)
             }
+            presentAddFramesIfRequested()
         }
         .statusBarHidden(true)
+    }
+
+    private func presentAddFramesIfRequested() {
+        guard book != nil, openAddFramesOnAppear.wrappedValue else { return }
+        openAddFramesOnAppear.wrappedValue = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            showAddFrames = true
+        }
     }
 
     private func revealContent(after delay: Double) {
@@ -1167,7 +1314,12 @@ struct PhotoBookView: View {
     private func pageContent(at index: Int) -> some View {
         let shots = bookShots
         if index == 0 {
-            ContactSheetPage(store: store, shots: shots, accent: accent) { selected in
+            ContactSheetPage(
+                store: store,
+                shots: shots,
+                bookID: bookID,
+                accent: accent
+            ) { selected in
                 currentPage = selected + 1
             }
         } else if index - 1 < shots.count {
@@ -1212,16 +1364,34 @@ struct PhotoBookView: View {
                     .tracking(4)
                     .lineLimit(1)
                     .foregroundColor(.white.opacity(0.9))
-                Text("FIELD BOOK  ·  \(bookShots.count) FRAME\(bookShots.count == 1 ? "" : "S")")
+                Text(openBookSubtitle)
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .tracking(2)
-                    .foregroundColor(.white.opacity(0.35))
+                    .foregroundColor(currentPage == 0 ? accent.opacity(0.55) : .white.opacity(0.35))
             }
 
             Spacer()
 
-            // Invite people into this book (user books only — not the master roll)
+            // File frames + invite (user books only — not the master roll)
             if book != nil {
+                Button(action: { showAddFrames = true }) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "plus.rectangle.on.rectangle")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("FILE")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .tracking(1)
+                    }
+                    .foregroundColor(.black)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .background(
+                        Capsule()
+                            .fill(accent)
+                    )
+                }
+                .padding(.trailing, 6)
+
                 Button(action: prepareShare) {
                     ZStack {
                         Circle()
@@ -1275,21 +1445,49 @@ struct PhotoBookView: View {
         }
     }
 
+    private var openBookSubtitle: String {
+        let n = bookShots.count
+        if currentPage == 0 {
+            return "CONTACT SHEET  ·  \(n) FRAME\(n == 1 ? "" : "S")"
+        }
+        return "PRINT \(currentPage) OF \(n)"
+    }
+
     private var pageFooter: some View {
-        HStack {
-            Text(currentPage == 0 ? "INDEX" : "PAGE \(currentPage) / \(bookShots.count)")
-                .font(.system(size: 9, weight: .medium, design: .monospaced))
-                .tracking(2)
-                .foregroundColor(.white.opacity(0.4))
+        HStack(spacing: 12) {
+            Button {
+                guard currentPage != 0 else { return }
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                currentPage = 0
+            } label: {
+                Text(currentPage == 0 ? "INDEX" : "← INDEX")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .tracking(2)
+                    .foregroundColor(currentPage == 0 ? accent.opacity(0.75) : .white.opacity(0.55))
+            }
+            .buttonStyle(.plain)
+
+            if currentPage == 0 {
+                Text("SWIPE EDGE TO TURN")
+                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .tracking(1.5)
+                    .foregroundColor(.white.opacity(0.28))
+            } else {
+                Text("PAGE \(currentPage) / \(bookShots.count)")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .tracking(1.5)
+                    .foregroundColor(.white.opacity(0.4))
+            }
 
             Spacer()
 
-            // Page position ticks
+            // Index + prints as ticks (first tick = contact sheet)
             HStack(spacing: 3) {
-                ForEach(0...(min(bookShots.count, 24)), id: \.self) { i in
-                    Rectangle()
-                        .fill(i == pageTickIndex ? accent : Color.white.opacity(0.2))
-                        .frame(width: i == pageTickIndex ? 2 : 1, height: i == pageTickIndex ? 8 : 5)
+                ForEach(0...min(bookShots.count, 24), id: \.self) { i in
+                    let active = i == pageTickIndex
+                    Capsule()
+                        .fill(active ? accent : Color.white.opacity(i == 0 ? 0.35 : 0.18))
+                        .frame(width: active ? 3 : 1.5, height: active ? 9 : (i == 0 ? 6 : 5))
                 }
             }
         }
@@ -1303,23 +1501,224 @@ struct PhotoBookView: View {
     }
 
     private var emptyBook: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 18) {
             Spacer()
-            Image(systemName: "camera.aperture")
-                .font(.system(size: 40, weight: .thin))
-                .foregroundColor(.white.opacity(0.25))
-            Text("NO FRAMES YET")
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .tracking(3)
-                .foregroundColor(.white.opacity(0.5))
-            Text(bookID == nil
-                 ? "Every shot you take is bound into this book"
-                 : "Long-press frames in All Frames to add them here")
-                .font(.system(size: 10, weight: .regular, design: .monospaced))
-                .foregroundColor(.white.opacity(0.3))
-                .multilineTextAlignment(.center)
+
+            // Empty proof frame
+            RoundedRectangle(cornerRadius: 4)
+                .strokeBorder(
+                    Color.white.opacity(0.18),
+                    style: StrokeStyle(lineWidth: 1, dash: [5, 4])
+                )
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(Color.black.opacity(0.25))
+                )
+                .frame(width: 120, height: 150)
+                .overlay {
+                    Image(systemName: bookID == nil ? "camera.aperture" : "plus.rectangle.on.rectangle")
+                        .font(.system(size: 28, weight: .ultraLight))
+                        .foregroundColor(.white.opacity(0.28))
+                }
+
+            VStack(spacing: 8) {
+                Text("NO FRAMES YET")
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .tracking(3)
+                    .foregroundColor(.white.opacity(0.55))
+                Text(bookID == nil
+                     ? "Every shot you take lands in All Frames"
+                     : "File shots from All Frames into this book")
+                    .font(.system(size: 10, weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.32))
+                    .multilineTextAlignment(.center)
+            }
+
+            if book != nil {
+                Button(action: { showAddFrames = true }) {
+                    Text("FILE FRAMES")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .tracking(2)
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 13)
+                        .background(
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(accent)
+                        )
+                }
+                .padding(.top, 2)
+            } else {
+                Text("CLOSE THIS BOOK AND SHOOT")
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .tracking(1.5)
+                    .foregroundColor(accent.opacity(0.5))
+                    .padding(.top, 2)
+            }
+
             Spacer()
             Spacer()
+        }
+        .padding(.horizontal, 28)
+    }
+}
+
+// MARK: - Local Add Frames Picker
+/// Tap frames from All Frames to file them into a local book (shared books already have this).
+struct LocalAddFramesPicker: View {
+    @ObservedObject var store: GalleryStore
+    let book: Book
+    @Environment(\.dismiss) private var dismiss
+
+    private enum Filter: String, CaseIterable {
+        case all = "ALL"
+        case inBook = "IN BOOK"
+        case notFiled = "NOT FILED"
+    }
+
+    @State private var filter: Filter = .all
+
+    private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
+    private let columns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
+
+    private var liveBook: Book? { store.book(withID: book.id) }
+
+    private var filteredShots: [ShotMetadata] {
+        guard let liveBook else { return store.shots.reversed() }
+        let all = store.shots.reversed()
+        switch filter {
+        case .all: return Array(all)
+        case .inBook: return all.filter { store.contains($0, book: liveBook) }
+        case .notFiled: return all.filter { !store.contains($0, book: liveBook) }
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            Color(hex: "12100e").ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("FILE FRAMES")
+                            .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                            .tracking(3)
+                            .foregroundColor(.white.opacity(0.9))
+                        Text("\(book.title.uppercased())  ·  \(liveBook?.shotIDs.count ?? 0) IN BOOK")
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                            .tracking(2)
+                            .foregroundColor(accent.opacity(0.55))
+                    }
+                    Spacer()
+                    Button("Done") { dismiss() }
+                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                        .foregroundColor(accent.opacity(0.9))
+                }
+                .padding(.horizontal, 20)
+                .padding(.vertical, 16)
+
+                // Filter chips
+                HStack(spacing: 8) {
+                    ForEach(Filter.allCases, id: \.self) { mode in
+                        Button {
+                            filter = mode
+                        } label: {
+                            Text(mode.rawValue)
+                                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                .tracking(1)
+                                .foregroundColor(filter == mode ? .black : .white.opacity(0.45))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .background(
+                                    Capsule()
+                                        .fill(filter == mode ? accent : Color.white.opacity(0.06))
+                                )
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    Spacer()
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 12)
+
+                if store.shots.isEmpty {
+                    Spacer()
+                    Text("ALL FRAMES IS EMPTY")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .tracking(2)
+                        .foregroundColor(.white.opacity(0.4))
+                    Text("Shoot first, then file them here")
+                        .font(.system(size: 10, weight: .regular, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.28))
+                        .padding(.top, 6)
+                    Spacer()
+                } else if filteredShots.isEmpty {
+                    Spacer()
+                    Text(filter == .inBook ? "NOTHING FILED YET" : "ALL FRAMES ARE FILED")
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .tracking(2)
+                        .foregroundColor(.white.opacity(0.4))
+                    Spacer()
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: columns, spacing: 14) {
+                            ForEach(filteredShots) { shot in
+                                let inBook = liveBook.map { store.contains(shot, book: $0) } ?? false
+                                Button {
+                                    if let current = liveBook {
+                                        withAnimation(.easeInOut(duration: 0.15)) {
+                                            store.toggle(shot, in: current)
+                                        }
+                                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                                    }
+                                } label: {
+                                    VStack(spacing: 0) {
+                                        ZStack(alignment: .topTrailing) {
+                                            ZStack {
+                                                Color.black
+                                                if let thumb = store.thumbnail(for: shot) {
+                                                    Image(uiImage: thumb)
+                                                        .resizable()
+                                                        .aspectRatio(contentMode: .fill)
+                                                }
+                                            }
+                                            .aspectRatio(0.8, contentMode: .fit)
+                                            .clipped()
+
+                                            if inBook {
+                                                Image(systemName: "checkmark.circle.fill")
+                                                    .font(.system(size: 14))
+                                                    .foregroundColor(accent)
+                                                    .padding(5)
+                                            }
+                                        }
+                                        .padding(5)
+                                        .background(Color(white: 0.9))
+                                        .overlay(
+                                            Rectangle()
+                                                .stroke(inBook ? accent.opacity(0.7) : Color.clear, lineWidth: 1.5)
+                                        )
+                                        .shadow(color: .black.opacity(0.35), radius: 3, y: 2)
+                                    }
+                                }
+                                .buttonStyle(ContactCellButtonStyle())
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 24)
+                    }
+
+                    Text("TAP TO FILE OR UNFILE")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .tracking(2)
+                        .foregroundColor(.white.opacity(0.3))
+                        .padding(.bottom, 16)
+                }
+            }
         }
     }
 }
@@ -1419,56 +1818,201 @@ final class IndexedHostingController<Content: View>: UIHostingController<Content
     }
 }
 
-// MARK: - Contact Sheet (index page)
+// MARK: - Contact Sheet (index leaf — film proof sheet)
 struct ContactSheetPage: View {
     let store: GalleryStore
     let shots: [ShotMetadata]
+    var bookID: UUID? = nil
     let accent: Color
     let onSelect: (Int) -> Void
 
-    private let columns = [GridItem(.adaptive(minimum: 74), spacing: 8)]
+    private let columns = [
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10),
+        GridItem(.flexible(), spacing: 10)
+    ]
+
+    private var currentBook: Book? { store.book(withID: bookID) }
 
     var body: some View {
-        BookPage {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("CONTACT SHEET")
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .tracking(3)
-                    .foregroundColor(.white.opacity(0.4))
+        ZStack {
+            // Proof-sheet ground — slightly warmer than print leaves
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [Color(hex: "1c1916"), Color(hex: "141210")],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
 
-                ScrollView(showsIndicators: false) {
-                    LazyVGrid(columns: columns, spacing: 10) {
-                        ForEach(Array(shots.enumerated()), id: \.element.id) { index, shot in
-                            Button(action: { onSelect(index) }) {
-                                VStack(spacing: 3) {
-                                    ZStack {
-                                        Rectangle().fill(Color.black)
-                                        if let thumb = store.thumbnail(for: shot) {
-                                            Image(uiImage: thumb)
-                                                .resizable()
-                                                .aspectRatio(contentMode: .fill)
-                                        }
-                                    }
-                                    .frame(height: 74)
-                                    .clipped()
-                                    .overlay(Rectangle().stroke(Color.white.opacity(0.12), lineWidth: 0.5))
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Color.white.opacity(0.09), lineWidth: 0.5)
 
-                                    Text("Nº \(String(format: "%03d", index + 1))")
-                                        .font(.system(size: 7, weight: .medium, design: .monospaced))
-                                        .foregroundColor(accent.opacity(0.7))
-                                }
+            VStack(alignment: .leading, spacing: 0) {
+                contactHeader
+                    .padding(.horizontal, 14)
+                    .padding(.top, 14)
+                    .padding(.bottom, 12)
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.08))
+                    .frame(height: 0.5)
+                    .padding(.horizontal, 14)
+
+                if shots.isEmpty {
+                    Spacer()
+                    Text("NO FRAMES ON THIS SHEET")
+                        .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        .tracking(2)
+                        .foregroundColor(.white.opacity(0.3))
+                        .frame(maxWidth: .infinity)
+                    Spacer()
+                } else {
+                    ScrollView(showsIndicators: false) {
+                        LazyVGrid(columns: columns, spacing: 14) {
+                            ForEach(Array(shots.enumerated()), id: \.element.id) { index, shot in
+                                contactCell(shot: shot, index: index)
                             }
-                            .buttonStyle(.plain)
+                        }
+                        .padding(.horizontal, 14)
+                        .padding(.top, 14)
+                        .padding(.bottom, 18)
+                    }
+                }
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+    }
+
+    private var contactHeader: some View {
+        HStack(alignment: .firstTextBaseline) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("CONTACT SHEET")
+                    .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                    .tracking(2.5)
+                    .foregroundColor(.white.opacity(0.88))
+                Text(bookID == nil
+                     ? "TAP TO OPEN  ·  HOLD TO FILE  ·  \(shots.count)"
+                     : "TAP A FRAME TO OPEN  ·  \(shots.count) TOTAL")
+                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .tracking(1.0)
+                    .foregroundColor(.white.opacity(0.35))
+            }
+            Spacer()
+            Text("INDEX")
+                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                .tracking(2)
+                .foregroundColor(accent.opacity(0.7))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 3)
+                        .stroke(accent.opacity(0.35), lineWidth: 1)
+                )
+        }
+    }
+
+    private func contactCell(shot: ShotMetadata, index: Int) -> some View {
+        let pinned = store.isPinned(shot, in: currentBook)
+        return Button(action: { onSelect(index) }) {
+            VStack(spacing: 0) {
+                // White-border proof frame
+                ZStack(alignment: .topTrailing) {
+                    ZStack {
+                        Color.black
+                        if let thumb = store.thumbnail(for: shot) {
+                            Image(uiImage: thumb)
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
                         }
                     }
-                    .padding(.top, 2)
+                    .aspectRatio(0.8, contentMode: .fit)
+                    .clipped()
+
+                    HStack(spacing: 3) {
+                        if pinned {
+                            Image(systemName: "pin.fill")
+                                .font(.system(size: 7, weight: .bold))
+                                .foregroundColor(accent)
+                        }
+                        if shot.lensFX != "None" || shot.filmFilter != "None" {
+                            Circle()
+                                .fill(accent.opacity(0.95))
+                                .frame(width: 6, height: 6)
+                        }
+                    }
+                    .padding(5)
+                }
+                .padding(5)
+                .background(
+                    LinearGradient(
+                        colors: [Color(white: 0.94), Color(white: 0.82)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .shadow(color: .black.opacity(0.4), radius: 3, y: 2)
+
+                HStack(spacing: 4) {
+                    Text("Nº \(String(format: "%03d", index + 1))")
+                        .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                        .foregroundColor(accent.opacity(0.85))
+                    Spacer(minLength: 0)
+                    Text(Self.shortDate.string(from: shot.date).uppercased())
+                        .font(.system(size: 7, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.32))
+                        .lineLimit(1)
+                }
+                .padding(.top, 6)
+            }
+        }
+        .buttonStyle(ContactCellButtonStyle())
+        .contextMenu {
+            if bookID == nil, !store.books.isEmpty {
+                Menu {
+                    ForEach(store.books) { book in
+                        Button {
+                            store.toggle(shot, in: book)
+                        } label: {
+                            if store.contains(shot, book: book) {
+                                Label(book.title, systemImage: "checkmark")
+                            } else {
+                                Text(book.title)
+                            }
+                        }
+                    }
+                } label: {
+                    Label("File in book…", systemImage: "book.closed")
+                }
+            } else if let book = currentBook {
+                Button {
+                    store.togglePin(shot, in: book)
+                } label: {
+                    Label(pinned ? "Unpin" : "Pin to front", systemImage: pinned ? "pin.slash" : "pin")
                 }
             }
         }
     }
+
+    private static let shortDate: DateFormatter = {
+        let df = DateFormatter()
+        df.dateFormat = "d MMM"
+        return df
+    }()
 }
 
-// MARK: - Print Page (one mounted photo)
+private struct ContactCellButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .opacity(configuration.isPressed ? 0.9 : 1.0)
+            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+    }
+}
+
+// MARK: - Print Page (photo-first leaf — the image itself curls)
 struct PrintPage: View {
     let store: GalleryStore
     let shot: ShotMetadata
@@ -1480,28 +2024,61 @@ struct PrintPage: View {
 
     private var currentBook: Book? { store.book(withID: bookID) }
     private var isPinned: Bool { store.isPinned(shot, in: currentBook) }
+    private var pageImage: UIImage? {
+        store.image(for: shot) ?? store.thumbnail(for: shot)
+    }
 
     var body: some View {
-        BookPage {
-            VStack(spacing: 0) {
-                Spacer(minLength: 8)
-
-                // The print, slightly tilted like it was mounted by hand
-                MountedPrint(image: store.thumbnail(for: shot))
-                    .aspectRatio(0.78, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
-                    .rotationEffect(.degrees(shot.printTilt))
-                    .onTapGesture { onZoom() }
-                    .contextMenu { printMenu }
-
-                Spacer(minLength: 14)
-
-                caption
-
-                Spacer(minLength: 8)
+        // Full-bleed photo leaf so UIPageViewController curls the frame,
+        // not a floating tilted card on a separate paper plate.
+        ZStack(alignment: .bottom) {
+            GeometryReader { geo in
+                ZStack {
+                    Color(hex: "121212")
+                    if let image = pageImage {
+                        Image(uiImage: image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                            .frame(width: geo.size.width, height: geo.size.height)
+                            .clipped()
+                    }
+                }
             }
-            .padding(.horizontal, 6)
+            .contentShape(Rectangle())
+            .onTapGesture { onZoom() }
+            .contextMenu { printMenu }
+
+            // Caption rides on the photo so the curl surface stays one leaf
+            caption
+                .padding(.horizontal, 14)
+                .padding(.top, 28)
+                .padding(.bottom, 12)
+                .background(
+                    LinearGradient(
+                        colors: [Color.black.opacity(0.82), Color.black.opacity(0.35), Color.clear],
+                        startPoint: .bottom,
+                        endPoint: .top
+                    )
+                )
         }
+        .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 0.5)
+        )
+        // Soft edge highlight hints that the leaf can curl
+        .overlay(alignment: .trailing) {
+            LinearGradient(
+                colors: [Color.clear, Color.white.opacity(0.06)],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+            .frame(width: 18)
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            .allowsHitTesting(false)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder
@@ -1521,12 +2098,12 @@ struct PrintPage: View {
                 Label("Remove from this book", systemImage: "minus.circle")
             }
         } else {
-            // Master roll: add to books, or delete the frame everywhere
+            // Master roll: toggle book membership, or delete the frame everywhere
             if !store.books.isEmpty {
                 Menu {
                     ForEach(store.books) { book in
                         Button {
-                            store.add(shot, to: book)
+                            store.toggle(shot, in: book)
                         } label: {
                             if store.contains(shot, book: book) {
                                 Label(book.title, systemImage: "checkmark")
@@ -1536,7 +2113,7 @@ struct PrintPage: View {
                         }
                     }
                 } label: {
-                    Label("Add to book", systemImage: "book.closed")
+                    Label("File in book…", systemImage: "book.closed")
                 }
             }
 
@@ -1549,7 +2126,7 @@ struct PrintPage: View {
         }
     }
 
-    // Silver-pen caption under the print: the real shot data
+    // Caption overlaid on the photo leaf
     private var caption: some View {
         VStack(spacing: 6) {
             HStack(spacing: 6) {
@@ -1570,7 +2147,7 @@ struct PrintPage: View {
             }
 
             Rectangle()
-                .fill(Color.white.opacity(0.08))
+                .fill(Color.white.opacity(0.12))
                 .frame(height: 0.5)
 
             HStack(spacing: 0) {
@@ -1592,7 +2169,6 @@ struct PrintPage: View {
                 }
             }
         }
-        .padding(.horizontal, 10)
     }
 
     private func captionCell(_ label: String, _ value: String) -> some View {

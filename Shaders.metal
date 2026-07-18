@@ -123,6 +123,7 @@ float noise(float2 st) {
 }
 
 // MARK: - Metallic Surface Shader
+// Horizontal brush grain + hard specular — reads as machined steel, not plastic.
 [[ stitchable ]] half4 metallicSurface(
     float2 position,
     half4 color,
@@ -132,22 +133,32 @@ float noise(float2 st) {
 ) {
     float2 uv = position / size;
 
-    // Brushed metal texture
-    float brushed = noise(float2(uv.x * 200.0, uv.y * 20.0)) * roughness;
+    // Anisotropic brush: dense horizontal streaks + coarser lathe bands
+    float brushed = noise(float2(uv.x * 320.0, uv.y * 12.0)) * roughness;
+    float brushed2 = noise(float2(uv.x * 110.0, uv.y * 5.0)) * roughness * 0.55;
+    float micro = (noise(uv * 480.0) - 0.5) * roughness * 0.25;
 
-    // Specular highlight
+    // Specular highlight (cool steel)
     float2 lightDir = normalize(lightPos - uv);
-    float specular = pow(max(dot(lightDir, float2(0.0, 1.0)), 0.0), 32.0);
+    float ndl = max(dot(lightDir, float2(0.0, 1.0)), 0.0);
+    float soft = pow(ndl, 12.0) * 0.35;
+    float hard = pow(ndl, 64.0) * 0.55;
+    float specular = soft + hard;
 
-    // Fresnel effect at edges
-    float fresnel = pow(1.0 - abs(uv.x - 0.5) * 2.0, 2.0) * 0.3;
+    // Edge fresnel
+    float edge = length(uv - float2(0.5, 0.5)) * 2.0;
+    float fresnel = pow(smoothstep(0.55, 1.0, edge), 1.4) * 0.28;
 
     half3 result = color.rgb;
-    result += half3(brushed * 0.1);
-    result += half3(specular * 0.4);
-    result += half3(fresnel);
+    // Cool metal cast
+    result = mix(result, half3(result.r * 0.92, result.g * 0.95, result.b * 1.05), half(0.35));
+    result += half3((brushed * 0.16 + brushed2 * 0.10 + micro) * 1.1);
+    result += half3(specular * 0.62) * half3(0.95, 0.97, 1.0);
+    result += half3(fresnel) * half3(0.85, 0.88, 0.95);
+    // Contact shadow at bottom so it feels raised metal, not a flat fill
+    result *= half(1.0 - smoothstep(0.55, 1.05, uv.y) * 0.18);
 
-    return half4(result, color.a);
+    return half4(clamp(result, 0.0h, 1.0h), color.a);
 }
 
 // MARK: - Shutter Button Metal Surface

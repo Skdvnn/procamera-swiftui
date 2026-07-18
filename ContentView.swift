@@ -388,14 +388,14 @@ struct ContentView: View {
 
                             Spacer()
 
-                            // Readout balances the thumbnail so the shutter stays centered
-                            VStack(alignment: .trailing, spacing: 3) {
-                                Text("ISO \(isoValue)")
-                                Text(shutterSpeeds[shutterSpeedIndex])
-                            }
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.6))
-                            .frame(width: 88, alignment: .trailing)
+                            // Compact deck: WB where ISO/shutter readout used to sit
+                            // (ISO/shutter stay available in the expanded deck / top gauges)
+                            WBPill(
+                                whiteBalanceIndex: $whiteBalanceIndex,
+                                onChanged: { mode in
+                                    camera.setWhiteBalance(mode: mode)
+                                }
+                            )
                         }
                         .padding(.horizontal, DS.pageMargin)
                         .padding(.vertical, 6)
@@ -697,6 +697,10 @@ struct ContentView: View {
         syncCaptureControlsToCamera()
         let shutterFilm = cameraFilmFilter(from: filmFilter)
         let shutterFX = lensFX
+        // Freeze drag-to-morph before the finger leaves the viewfinder for shutter
+        let morphTouch = shutterFX.isTouchReactive
+            ? LensFXEngine.shared.snapshotForCapture()
+            : nil
 
         // Check if this is a long exposure (shutter speed index 0-3 = 4s, 2s, 1s, 1/2s)
         let isLongExposure = shutterSpeedIndex <= 3
@@ -707,10 +711,14 @@ struct ContentView: View {
             let duration = durations[shutterSpeedIndex]
 
             isCapturing = true
-            camera.captureLongExposure(durationSeconds: duration) { img in
+            camera.captureLongExposure(
+                durationSeconds: duration,
+                filmFilter: shutterFilm,
+                lensFX: shutterFX
+            ) { img in
                 isCapturing = false
                 if let img = img {
-lastCapturedImage = img
+                    lastCapturedImage = img
                     photoCount += 1
                     recordShot(img)
                     camera.saveToPhotoLibrary(img) { _ in }
@@ -721,10 +729,14 @@ lastCapturedImage = img
             isCapturing = true
             withAnimation(.easeInOut(duration: 0.1)) { showFlash = true }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { showFlash = false }
-            camera.capturePhoto(filmFilter: shutterFilm, lensFX: shutterFX) { img in
+            camera.capturePhoto(
+                filmFilter: shutterFilm,
+                lensFX: shutterFX,
+                morphTouch: morphTouch
+            ) { img in
                 isCapturing = false
                 if let img = img {
-lastCapturedImage = img
+                    lastCapturedImage = img
                     photoCount += 1
                     recordShot(img)
                     // RAW mode already writes the DNG from CameraManager; still
@@ -1576,7 +1588,7 @@ struct Triangle: Shape {
     }
 }
 
-// MARK: - Shutter Button (Figma style: large dark circle with subtle gradient)
+// MARK: - Shutter Button (machined steel — brush grain + knurled collar)
 struct ShutterButton: View {
     let isCapturing: Bool
     let action: () -> Void
@@ -1586,52 +1598,121 @@ struct ShutterButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Collar - knurled chrome ring (stays fixed)
+                // Knurled steel collar
                 Circle()
                     .fill(
                         AngularGradient(
                             colors: [
-                                Color(hex: "333333"),
-                                Color(hex: "4a4a4a"),
-                                Color(hex: "2a2a2a"),
-                                Color(hex: "404040"),
-                                Color(hex: "303030"),
-                                Color(hex: "333333")
+                                Color(red: 0.42, green: 0.43, blue: 0.45),
+                                Color(red: 0.22, green: 0.23, blue: 0.25),
+                                Color(red: 0.38, green: 0.39, blue: 0.42),
+                                Color(red: 0.18, green: 0.19, blue: 0.21),
+                                Color(red: 0.40, green: 0.41, blue: 0.44),
+                                Color(red: 0.42, green: 0.43, blue: 0.45)
                             ],
                             center: .center
                         )
                     )
-                    .frame(width: 74, height: 74)
+                    .frame(width: 76, height: 76)
+                    .overlay {
+                        Circle()
+                            .fill(Color(red: 0.32, green: 0.33, blue: 0.36))
+                            .colorEffect(
+                                ShaderLibrary.metallicSurface(
+                                    .float2(76, 76),
+                                    .float(isPressed ? 0.55 : 0.85),
+                                    .float2(0.30, 0.18)
+                                )
+                            )
+                            .clipShape(Circle())
+                            .allowsHitTesting(false)
+                    }
 
-                // Collar outer edge
-                Circle()
-                    .stroke(Color(hex: "151515"), lineWidth: 1)
-                    .frame(width: 74, height: 74)
-
-                // Collar inner shadow - darkens when button sinks in
                 Circle()
                     .stroke(
-                        Color.black.opacity(isPressed ? 0.6 : 0.15),
-                        lineWidth: isPressed ? 2 : 0.5
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(isPressed ? 0.35 : 0.55),
+                                Color.white.opacity(0.08),
+                                Color.black.opacity(0.55)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1.25
                     )
-                    .frame(width: 65, height: 65)
+                    .frame(width: 76, height: 76)
 
-                // Button face - this is what moves when pressed
+                // Recess between collar and face
+                Circle()
+                    .stroke(Color.black.opacity(isPressed ? 0.75 : 0.45), lineWidth: isPressed ? 2.5 : 1.5)
+                    .frame(width: 66, height: 66)
+
+                // Raised steel face
                 ZStack {
-                    MetalShutterSurface(size: 64, isPressed: isPressed)
+                    Circle()
+                        .fill(Color(red: 0.30, green: 0.31, blue: 0.34))
+                        .frame(width: 60, height: 60)
+                        .colorEffect(
+                            ShaderLibrary.metallicSurface(
+                                .float2(60, 60),
+                                .float(isPressed ? 0.4 : 0.75),
+                                .float2(0.34, 0.26)
+                            )
+                        )
                         .clipShape(Circle())
 
-                    // Capturing flash
+                    // Specular catch light
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    Color.white.opacity(isPressed ? 0.08 : 0.22),
+                                    Color.clear
+                                ],
+                                center: UnitPoint(x: 0.32, y: 0.28),
+                                startRadius: 0,
+                                endRadius: 28
+                            )
+                        )
+                        .frame(width: 60, height: 60)
+                        .blendMode(.screen)
+
+                    Circle()
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(isPressed ? 0.12 : 0.38),
+                                    Color.clear,
+                                    Color.black.opacity(0.4)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1
+                        )
+                        .frame(width: 58, height: 58)
+
+                    ForEach(0..<4, id: \.self) { i in
+                        Circle()
+                            .stroke(Color.white.opacity(0.06), lineWidth: 0.6)
+                            .frame(width: CGFloat(50 - i * 9), height: CGFloat(50 - i * 9))
+                    }
+
                     if isCapturing {
                         Circle()
-                            .fill(Color.white.opacity(0.12))
-                            .frame(width: 64, height: 64)
+                            .fill(Color.white.opacity(0.16))
+                            .frame(width: 60, height: 60)
                     }
                 }
-                .scaleEffect(isPressed ? 0.96 : 1.0)
-                .shadow(color: Color.black.opacity(isPressed ? 0.1 : 0.5), radius: isPressed ? 0.5 : 3, y: isPressed ? 0 : 2)
+                .scaleEffect(isPressed ? 0.95 : 1.0)
+                .shadow(
+                    color: Color.black.opacity(isPressed ? 0.2 : 0.55),
+                    radius: isPressed ? 0.5 : 4,
+                    y: isPressed ? 0 : 2
+                )
             }
-            .shadow(color: Color.black.opacity(0.5), radius: 5, y: 3)
+            .shadow(color: Color.black.opacity(0.55), radius: isPressed ? 2 : 8, y: isPressed ? 1 : 4)
             .animation(.spring(response: 0.12, dampingFraction: 0.65), value: isPressed)
         }
         .buttonStyle(PlainButtonStyle())
