@@ -100,6 +100,10 @@ final class GalleryStore: ObservableObject {
         UIImage(contentsOfFile: imageURL(for: shot.id).path)
     }
 
+    // File locations, used by the CloudKit uploader to build CKAssets
+    func imageFileURL(for shot: ShotMetadata) -> URL { imageURL(for: shot.id) }
+    func thumbFileURL(for shot: ShotMetadata) -> URL { thumbURL(for: shot.id) }
+
     func thumbnail(for shot: ShotMetadata) -> UIImage? {
         let key = shot.id.uuidString as NSString
         if let cached = thumbCache.object(forKey: key) { return cached }
@@ -226,9 +230,11 @@ final class GalleryStore: ObservableObject {
 // MARK: - Library (the bookshelf)
 struct LibraryView: View {
     @ObservedObject var store: GalleryStore
+    @ObservedObject private var cloud = CloudBookManager.shared
     @Environment(\.dismiss) private var dismiss
 
     @State private var route: BookRoute?
+    @State private var openedSharedBook: CloudBookManager.SharedBookRef?
     @State private var showNewBook = false
     @State private var newBookTitle = ""
 
@@ -296,8 +302,41 @@ struct LibraryView: View {
                     }
                     .padding(.horizontal, 20)
                     .padding(.bottom, 24)
+
+                    // Books other people invited you into
+                    if !cloud.sharedBooks.isEmpty {
+                        HStack {
+                            Text("SHARED WITH ME")
+                                .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                                .tracking(3)
+                                .foregroundColor(.white.opacity(0.4))
+                            Spacer()
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 12)
+
+                        LazyVGrid(columns: columns, spacing: 14) {
+                            ForEach(cloud.sharedBooks) { ref in
+                                BookCoverCard(
+                                    title: ref.title.uppercased(),
+                                    count: 0,
+                                    coverImage: nil,
+                                    accent: accent,
+                                    isMaster: false,
+                                    subtitleOverride: "SHARED BOOK"
+                                )
+                                .onTapGesture { openedSharedBook = ref }
+                            }
+                        }
+                        .padding(.horizontal, 20)
+                        .padding(.bottom, 24)
+                    }
                 }
             }
+        }
+        .onAppear { cloud.refreshSharedBooks() }
+        .fullScreenCover(item: $openedSharedBook) { ref in
+            SharedBookView(bookRef: ref, store: store)
         }
         .fullScreenCover(item: $route) { route in
             switch route {
@@ -356,6 +395,7 @@ struct BookCoverCard: View {
     let coverImage: UIImage?
     let accent: Color
     let isMaster: Bool
+    var subtitleOverride: String? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -390,7 +430,7 @@ struct BookCoverCard: View {
                     .tracking(2)
                     .lineLimit(1)
                     .foregroundColor(isMaster ? accent.opacity(0.85) : .white.opacity(0.75))
-                Text("\(count) FRAME\(count == 1 ? "" : "S")")
+                Text(subtitleOverride ?? "\(count) FRAME\(count == 1 ? "" : "S")")
                     .font(.system(size: 8, weight: .medium, design: .monospaced))
                     .tracking(1)
                     .foregroundColor(.white.opacity(0.3))
@@ -447,6 +487,9 @@ struct PhotoBookView: View {
 
     @State private var currentPage = 0
     @State private var zoomedShot: ShotMetadata?
+    @State private var shareContext: CloudBookManager.ShareContext?
+    @State private var isPreparingShare = false
+    @State private var shareError: String?
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
 
@@ -493,7 +536,33 @@ struct PhotoBookView: View {
                 Lightbox(image: store.image(for: shot)) { zoomedShot = nil }
             }
         }
+        .sheet(item: $shareContext) { context in
+            CloudSharingSheet(share: context.share, container: context.container, title: context.title)
+        }
+        .alert("Couldn't share book", isPresented: Binding(
+            get: { shareError != nil },
+            set: { if !$0 { shareError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(shareError ?? "")
+        }
         .statusBarHidden(true)
+    }
+
+    // Upload the book to iCloud and show the system invite sheet
+    private func prepareShare() {
+        guard let book = book, !isPreparingShare else { return }
+        isPreparingShare = true
+        CloudBookManager.shared.share(book: book, store: store) { result in
+            isPreparingShare = false
+            switch result {
+            case .success(let context):
+                shareContext = context
+            case .failure(let error):
+                shareError = error.localizedDescription
+            }
+        }
     }
 
     @ViewBuilder
@@ -538,6 +607,31 @@ struct PhotoBookView: View {
             }
 
             Spacer()
+
+            // Invite people into this book (user books only, not the master roll)
+            if book != nil {
+                Button(action: prepareShare) {
+                    ZStack {
+                        Circle()
+                            .fill(Color.black.opacity(0.5))
+                            .frame(width: 34, height: 34)
+                        Circle()
+                            .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
+                            .frame(width: 34, height: 34)
+                        if isPreparingShare {
+                            ProgressView()
+                                .scaleEffect(0.6)
+                                .tint(.white.opacity(0.8))
+                        } else {
+                            Image(systemName: "person.crop.circle.badge.plus")
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                    }
+                }
+                .disabled(isPreparingShare)
+                .padding(.trailing, 6)
+            }
 
             Button(action: { dismiss() }) {
                 ZStack {

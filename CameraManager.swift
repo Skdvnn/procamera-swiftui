@@ -605,38 +605,6 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    /// Restrict AF to near range when macro is on. Only applies in auto/continuous AF.
-    func setMacroEnabled(_ enabled: Bool) {
-        guard let device = videoDeviceInput?.device else { return }
-
-        sessionQueue.async {
-            do {
-                try device.lockForConfiguration()
-
-                if device.isAutoFocusRangeRestrictionSupported {
-                    device.autoFocusRangeRestriction = enabled ? .near : .none
-                }
-
-                // Macro only helps in auto AF — leave locked manual focus alone when disabling,
-                // but when enabling, switch to continuous AF so the near restriction can engage.
-                if enabled {
-                    if device.isFocusModeSupported(.continuousAutoFocus) {
-                        device.focusMode = .continuousAutoFocus
-                    } else if device.isFocusModeSupported(.autoFocus) {
-                        device.focusMode = .autoFocus
-                    }
-                    DispatchQueue.main.async {
-                        self.isManualFocus = false
-                    }
-                }
-
-                device.unlockForConfiguration()
-            } catch {
-                print("Error setting macro focus range: \(error)")
-            }
-        }
-    }
-
     func setZoom(_ factor: CGFloat) {
         guard let device = videoDeviceInput?.device else { return }
 
@@ -1186,11 +1154,8 @@ class CameraManager: NSObject, ObservableObject {
             // still there blocks the capture pipeline and freezes the camera.
             // Deliver on main so SwiftUI state updates are safe.
             DispatchQueue.global(qos: .userInitiated).async {
-                // Apply film filter + lens FX before returning (skip for RAW —
-                // the processed sibling is an unfiltered preview; DNG is the master)
-                let filteredImage = self.captureFormat == .raw
-                    ? image
-                    : self.applyLensFX(to: self.applyFilmFilter(to: image))
+                // Apply film filter + lens FX before returning (skip for RAW)
+                let filteredImage = self.captureFormat == .raw ? image : self.applyLensFX(to: self.applyFilmFilter(to: image))
                 DispatchQueue.main.async { completion(filteredImage) }
             }
         }
@@ -1207,20 +1172,11 @@ class CameraManager: NSObject, ObservableObject {
         case .jpeg:
             settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.jpeg])
         case .raw:
-            // Dual RAW+processed: DNG alone cannot decode via UIImage(data:),
-            // which previously returned nil and dropped the capture silently.
+            // Check if RAW is supported
             if let rawFormat = photoOutput.availableRawPhotoPixelFormatTypes.first {
-                let processedFormat: [String: Any]
-                if photoOutput.availablePhotoCodecTypes.contains(.hevc) {
-                    processedFormat = [AVVideoCodecKey: AVVideoCodecType.hevc]
-                } else {
-                    processedFormat = [AVVideoCodecKey: AVVideoCodecType.jpeg]
-                }
-                settings = AVCapturePhotoSettings(
-                    rawPixelFormatType: rawFormat,
-                    processedFormat: processedFormat
-                )
+                settings = AVCapturePhotoSettings(rawPixelFormatType: rawFormat)
             } else {
+                // Fallback to HEIC if RAW not supported
                 print("RAW not supported, falling back to HEIC")
                 if photoOutput.availablePhotoCodecTypes.contains(.hevc) {
                     settings = AVCapturePhotoSettings(format: [AVVideoCodecKey: AVVideoCodecType.hevc])
@@ -1263,56 +1219,17 @@ class CameraManager: NSObject, ObservableObject {
             }
         }
     }
-
-    private func saveRawDataToPhotoLibrary(_ data: Data) {
-        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
-            guard status == .authorized || status == .limited else { return }
-
-            PHPhotoLibrary.shared().performChanges {
-                let request = PHAssetCreationRequest.forAsset()
-                request.addResource(with: .photo, data: data, options: nil)
-            } completionHandler: { success, error in
-                if let error = error {
-                    print("Failed to save RAW: \(error)")
-                } else if !success {
-                    print("Failed to save RAW: unknown error")
-                }
-            }
-        }
-    }
 }
 
 extension CameraManager: AVCapturePhotoCaptureDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
-        if let error = error {
-            print("Photo capture error: \(error)")
-            // RAW half of a dual capture can fail independently; still wait for processed
-            if photo.isRawPhoto { return }
-            let handler = photoCompletionHandler
-            photoCompletionHandler = nil
-            handler?(nil)
-            return
-        }
-
-        // RAW half of a dual capture — persist DNG, wait for processed preview
-        if photo.isRawPhoto {
-            if let rawData = photo.fileDataRepresentation() {
-                saveRawDataToPhotoLibrary(rawData)
-            }
-            return
-        }
-
-        guard let imageData = photo.fileDataRepresentation(),
+        guard error == nil,
+              let imageData = photo.fileDataRepresentation(),
               let image = UIImage(data: imageData) else {
-            let handler = photoCompletionHandler
-            photoCompletionHandler = nil
-            handler?(nil)
+            photoCompletionHandler?(nil)
             return
         }
-
-        let handler = photoCompletionHandler
-        photoCompletionHandler = nil
-        handler?(image)
+        photoCompletionHandler?(image)
     }
 }
 

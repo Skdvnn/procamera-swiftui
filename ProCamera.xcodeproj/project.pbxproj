@@ -19,6 +19,7 @@
 		A1000016BBBBBBBB00000016 /* FilteredCameraPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000017BBBBBBBB00000017 /* FilteredCameraPreview.swift */; };
 		A100001ABBBBBBBB0000001A /* LensFXEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001BBBBBBBBB0000001B /* LensFXEngine.swift */; };
 		A100001CBBBBBBBB0000001C /* PhotoBook.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001DBBBBBBBB0000001D /* PhotoBook.swift */; };
+		A100001EBBBBBBBB0000001E /* CloudBooks.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001FBBBBBBBB0000001F /* CloudBooks.swift */; };
 		A1000018CCCCCCCC00000018 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1000019CCCCCCCC00000019 /* Assets.xcassets */; };
 		A1000020DDDDDDDD00000001 /* Fingertips in Frameworks */ = {isa = PBXBuildFile; productRef = A1000020DDDDDDDD00000002 /* Fingertips */; };
 /* End PBXBuildFile section */
@@ -38,6 +39,8 @@
 		A1000017BBBBBBBB00000017 /* FilteredCameraPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilteredCameraPreview.swift; sourceTree = "<group>"; };
 		A100001BBBBBBBBB0000001B /* LensFXEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LensFXEngine.swift; sourceTree = "<group>"; };
 		A100001DBBBBBBBB0000001D /* PhotoBook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoBook.swift; sourceTree = "<group>"; };
+		A100001FBBBBBBBB0000001F /* CloudBooks.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudBooks.swift; sourceTree = "<group>"; };
+		A1000021BBBBBBBB00000021 /* ProCamera.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ProCamera.entitlements; sourceTree = "<group>"; };
 		A1000019CCCCCCCC00000019 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -71,6 +74,8 @@
 				A1000017BBBBBBBB00000017 /* FilteredCameraPreview.swift */,
 				A100001BBBBBBBBB0000001B /* LensFXEngine.swift */,
 				A100001DBBBBBBBB0000001D /* PhotoBook.swift */,
+				A100001FBBBBBBBB0000001F /* CloudBooks.swift */,
+				A1000021BBBBBBBB00000021 /* ProCamera.entitlements */,
 				A100000CAAAAAAAA0000000C /* AnalogGaugeView.swift */,
 				A100000EAAAAAAAA0000000E /* ViewfinderOverlay.swift */,
 				A1000011AAAAAAAA00000011 /* ControlComponents.swift */,
@@ -172,6 +177,7 @@
 				A1000016BBBBBBBB00000016 /* FilteredCameraPreview.swift in Sources */,
 				A100001ABBBBBBBB0000001A /* LensFXEngine.swift in Sources */,
 				A100001CBBBBBBBB0000001C /* PhotoBook.swift in Sources */,
+				A100001EBBBBBBBB0000001E /* CloudBooks.swift in Sources */,
 				A100000BAAAAAAAA0000000B /* AnalogGaugeView.swift in Sources */,
 				A100000DAAAAAAAA0000000D /* ViewfinderOverlay.swift in Sources */,
 				A100000FAAAAAAAA0000000F /* ControlComponents.swift in Sources */,
@@ -311,6 +317,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = ProCamera.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
@@ -340,6 +347,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = ProCamera.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
