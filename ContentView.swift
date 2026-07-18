@@ -214,7 +214,7 @@ struct ContentView: View {
             let safeBottom = geo.safeAreaInsets.bottom
 
             // Layout measurements
-            let topPanelHeight: CGFloat = topCollapsed ? 72 : 110
+            let topPanelHeight: CGFloat = topCollapsed ? 64 : 110
             let gaugeToViewfinderSpacing: CGFloat = 5
             let viewfinderToControlsSpacing: CGFloat = 5
 
@@ -518,8 +518,10 @@ struct ContentView: View {
                         ControlsGrain()
                     }
                     // Swipe down for the super-compact deck, up to restore.
-                    // Scrubbers use horizontal drags, so vertical swipes pass through.
-                    .gesture(deckSwipe(collapseOnSwipeUp: false) { bottomCollapsed = $0 })
+                    // Must be simultaneous: the scrubbers claim drags that start on
+                    // them, but they only respond to horizontal movement, and this
+                    // gesture only acts on clearly vertical swipes.
+                    .simultaneousGesture(deckSwipe(collapseOnSwipeUp: false) { bottomCollapsed = $0 })
                 }
                 .padding(.top, safeTop)
                 .padding(.bottom, safeBottom * 0.7)

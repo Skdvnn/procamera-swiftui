@@ -559,25 +559,43 @@ struct AnalogDisplayPanel: View {
                 .stroke(Color(hex: "333333"), lineWidth: 0.5)
                 .padding(2)
 
-            // Content - centered vertically
-            HStack(spacing: 0) {
-                // Left: Focus dial
-                FocusDial(value: $focusPosition, onChanged: onFocusChanged)
-                    .frame(width: dialSize, height: dialSize)
+            if compact {
+                // Minimized: slim analog meters instead of dials
+                // (the dials don't render legibly below full size)
+                HStack(alignment: .center, spacing: 16) {
+                    CompactMeter(
+                        label: "FOCUS",
+                        value: CGFloat(focusPosition),
+                        display: isAutoFocus ? "AF" : String(format: "%.2f", focusPosition)
+                    )
 
-                Spacer()
+                    CompactMeter(
+                        label: "EV",
+                        value: CGFloat((exposureValue + 2) / 4),
+                        display: String(format: "%+.1f", exposureValue)
+                    )
 
-                if compact {
-                    // Minimized center: essential readouts only
-                    VStack(spacing: 3) {
-                        Text(String(format: "%+.1f EV", exposureValue))
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.85))
+                    VStack(alignment: .trailing, spacing: 3) {
                         Text("ISO \(iso)")
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.45))
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.85))
+                        Text(Self.speedLabels[max(0, min(Self.speedLabels.count - 1, shutterSpeedIndex))])
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.5))
                     }
-                } else {
+                    .frame(width: 58, alignment: .trailing)
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+            } else {
+                // Content - centered vertically
+                HStack(spacing: 0) {
+                    // Left: Focus dial
+                    FocusDial(value: $focusPosition, onChanged: onFocusChanged)
+                        .frame(width: 98, height: 98)
+
+                    Spacer()
+
                     // Center: Exposure meter with enhanced detail
                     CenterDisplay(
                         timerSeconds: timerSeconds,
@@ -589,20 +607,77 @@ struct AnalogDisplayPanel: View {
                         onTimerTap: onTimerTap,
                         onMacroTap: onMacroTap
                     )
+
+                    Spacer()
+
+                    // Right: Shutter Speed dial
+                    ShutterSpeedDial(value: $shutterSpeedIndex, onChanged: onShutterSpeedChanged)
+                        .frame(width: 98, height: 98)
                 }
-
-                Spacer()
-
-                // Right: Shutter Speed dial
-                ShutterSpeedDial(value: $shutterSpeedIndex, onChanged: onShutterSpeedChanged)
-                    .frame(width: dialSize, height: dialSize)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, compact ? 4 : 6)
         }
     }
 
-    private var dialSize: CGFloat { compact ? 60 : 98 }
+    private static let speedLabels = [
+        "4\"", "2\"", "1\"", "1/2", "1/4", "1/8", "1/15", "1/30",
+        "1/60", "1/125", "1/250", "1/500", "1/1000", "1/2000", "1/4000"
+    ]
+}
+
+// MARK: - Compact Meter (needle on a ticked track)
+struct CompactMeter: View {
+    let label: String
+    let value: CGFloat  // 0...1 needle position
+    let display: String
+
+    var body: some View {
+        VStack(spacing: 5) {
+            HStack {
+                Text(label)
+                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.4))
+                Spacer()
+                Text(display)
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.85))
+            }
+
+            GeometryReader { geo in
+                let width = geo.size.width
+                let clamped = min(max(value, 0), 1)
+
+                ZStack(alignment: .leading) {
+                    // Tick marks
+                    Canvas { ctx, size in
+                        let tickCount = 9
+                        for i in 0..<tickCount {
+                            let x = CGFloat(i) / CGFloat(tickCount - 1) * (size.width - 1)
+                            let isMajor = i % 2 == 0
+                            let rect = CGRect(x: x, y: isMajor ? 2 : 4,
+                                              width: 1, height: isMajor ? 8 : 4)
+                            ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.3 : 0.15)))
+                        }
+                    }
+
+                    // Track line
+                    Rectangle()
+                        .fill(Color.white.opacity(0.12))
+                        .frame(height: 1)
+                        .offset(y: 0)
+
+                    // Needle
+                    Capsule()
+                        .fill(Color(red: 1.0, green: 0.62, blue: 0.3))
+                        .frame(width: 2, height: 12)
+                        .offset(x: clamped * (width - 2))
+                        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: clamped)
+                }
+            }
+            .frame(height: 12)
+        }
+    }
 }
 
 // Legacy initializer for backward compatibility (without shutter speed)
