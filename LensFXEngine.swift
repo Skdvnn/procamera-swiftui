@@ -65,8 +65,12 @@ enum LensFXMode: Int, CaseIterable {
 final class LensFXEngine {
     static let shared = LensFXEngine()
 
+    // Serialize texture creation + effect graphs; preview + capture can hit this
+    // from different queues when the user taps an FX.
+    private let lock = NSLock()
+
     // Cached smooth-noise texture that drives the liquid glass distortion
-    private lazy var liquidTexture: CIImage = makeLiquidTexture()
+    private var liquidTexture: CIImage?
 
     // Epoch for animation: absolute timestamps are ~8e8 seconds, which loses
     // all sub-second precision once converted to Float for shader params
@@ -78,43 +82,70 @@ final class LensFXEngine {
     /// `time` animates time-varying effects in the live preview; pass 0 for stills.
     func apply(_ fx: LensFXMode, to image: CIImage, time rawTime: TimeInterval) -> CIImage {
         let extent = image.extent
-        guard fx != .none, !extent.isInfinite, extent.width > 0 else { return image }
+        guard fx != .none,
+              !extent.isInfinite,
+              extent.width > 1,
+              extent.height > 1,
+              extent.width.isFinite,
+              extent.height.isFinite else {
+            return image
+        }
 
         let time = rawTime > 0 ? rawTime - startTime : 0
 
+        lock.lock()
+        defer { lock.unlock() }
+
+        // Keep the preview pipeline alive even if a single filter misbehaves
+        let result: CIImage
         switch fx {
         case .none:
-            return image
+            result = image
         case .liquid:
-            return applyLiquid(to: image, time: time)
+            result = applyLiquid(to: image, time: time)
         case .chrome:
-            return applyChrome(to: image, time: time)
+            result = applyChrome(to: image, time: time)
         case .instant:
-            return applyInstant(to: image)
+            result = applyInstant(to: image)
         case .dream:
-            return applyDream(to: image)
+            result = applyDream(to: image)
         case .fisheye:
-            return applyFisheye(to: image)
+            result = applyFisheye(to: image)
         case .thermal:
-            return applySimpleFilter(name: "CIThermal", to: image)
+            result = applyThermal(to: image)
         case .xray:
-            return applySimpleFilter(name: "CIXRay", to: image)
+            result = applyXRay(to: image)
         case .vhs:
-            return applyVHS(to: image, time: time)
+            result = applyVHS(to: image, time: time)
         case .kaleido:
-            return applyKaleido(to: image, time: time)
+            result = applyKaleido(to: image, time: time)
         case .pixel8:
-            return applyPixel8(to: image)
+            result = applyPixel8(to: image)
         case .toon:
-            return applySimpleFilter(name: "CIComicEffect", to: image)
+            result = applySimpleFilter(name: "CIComicEffect", to: image)
         case .mirror:
-            return applyMirror(to: image)
+            result = applyMirror(to: image)
         case .negative:
-            return applyNegative(to: image)
+            result = applyNegative(to: image)
         }
+
+        let outExtent = result.extent
+        guard !outExtent.isInfinite,
+              outExtent.width > 1,
+              outExtent.height > 1 else {
+            return image
+        }
+        return result
     }
 
     // MARK: - Liquid glass distortion
+
+    private func liquidTextureImage() -> CIImage {
+        if let liquidTexture { return liquidTexture }
+        let made = makeLiquidTexture()
+        liquidTexture = made
+        return made
+    }
 
     private func makeLiquidTexture() -> CIImage {
         // Blurred white noise gives smooth organic blobs; glass distortion
@@ -150,11 +181,12 @@ final class LensFXEngine {
         let driftB = CGAffineTransform(translationX: -t * 28, y: t * 36)
             .scaledBy(x: 1.8, y: 1.8)
 
-        let layerA = liquidTexture
+        let base = liquidTextureImage()
+        let layerA = base
             .transformed(by: driftA)
             .applyingFilter("CIAffineTile")
             .cropped(to: extent)
-        let layerB = liquidTexture
+        let layerB = base
             .transformed(by: driftB)
             .applyingFilter("CIAffineTile")
             .cropped(to: extent)
@@ -467,12 +499,54 @@ final class LensFXEngine {
         return output.cropped(to: extent)
     }
 
+    // MARK: - Thermal / X-Ray (safe fallbacks)
+
+    private func applyThermal(to image: CIImage) -> CIImage {
+        if let filter = CIFilter(name: "CIThermal") {
+            filter.setValue(image, forKey: kCIInputImageKey)
+            if let output = filter.outputImage {
+                return output.cropped(to: image.extent)
+            }
+        }
+        // Fallback: false-color heat map if CIThermal isn't available
+        return applyFalseColorHeat(to: image)
+    }
+
+    private func applyXRay(to image: CIImage) -> CIImage {
+        if let filter = CIFilter(name: "CIXRay") {
+            filter.setValue(image, forKey: kCIInputImageKey)
+            if let output = filter.outputImage {
+                return output.cropped(to: image.extent)
+            }
+        }
+        // Fallback: invert + cool tint
+        return applyNegative(to: image)
+    }
+
+    private func applyFalseColorHeat(to image: CIImage) -> CIImage {
+        let extent = image.extent
+        let mono = CIFilter.photoEffectMono()
+        mono.inputImage = image
+        let base = mono.outputImage ?? image
+
+        let falseColor = CIFilter.falseColor()
+        falseColor.inputImage = base
+        falseColor.color0 = CIColor(red: 0.05, green: 0.0, blue: 0.35, alpha: 1)
+        falseColor.color1 = CIColor(red: 1.0, green: 0.85, blue: 0.1, alpha: 1)
+        return (falseColor.outputImage ?? image).cropped(to: extent)
+    }
+
     // MARK: - Helpers
 
     private func applySimpleFilter(name: String, to image: CIImage) -> CIImage {
         let extent = image.extent
         guard let filter = CIFilter(name: name) else { return image }
         filter.setValue(image, forKey: kCIInputImageKey)
-        return (filter.outputImage ?? image).cropped(to: extent)
+        guard let output = filter.outputImage else { return image }
+        let outExtent = output.extent
+        if outExtent.isInfinite || outExtent.width < 1 || outExtent.height < 1 {
+            return image
+        }
+        return output.cropped(to: extent)
     }
 }

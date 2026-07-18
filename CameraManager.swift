@@ -22,10 +22,16 @@ class CameraManager: NSObject, ObservableObject {
     @Published var zoomFactor: CGFloat = 1.0
     @Published var isManualExposure: Bool = false
     @Published var selectedFilmFilter: FilmFilter = .none {
-        didSet { refreshLivePreviewState() }
+        didSet {
+            syncPipelineSelection()
+            refreshLivePreviewState()
+        }
     }
     @Published var selectedLensFX: LensFXMode = .none {
-        didSet { refreshLivePreviewState() }
+        didSet {
+            syncPipelineSelection()
+            refreshLivePreviewState()
+        }
     }
     @Published var isLongExposureCapturing: Bool = false
     @Published var longExposureProgress: Float = 0.0
@@ -39,6 +45,15 @@ class CameraManager: NSObject, ObservableObject {
     // Live histogram - real luminance bins computed from preview frames
     @Published var histogramBins: [Float] = []
     private var lastHistogramTime: CFAbsoluteTime = 0
+
+    // Thread-safe copies for the video-data callback (don't read @Published off-main)
+    private let pipelineLock = NSLock()
+    private var pipelineFilmFilter: FilmFilter = .none
+    private var pipelineLensFX: LensFXMode = .none
+
+    // Remember the user's manual exposure so lens/format switches can re-apply it
+    private var manualShutterIndex: Int?
+    private var manualISOValue: Float?
 
     // Capture format types
     enum CaptureFormatType: Int, CaseIterable {
@@ -86,6 +101,11 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+
+    override init() {
+        super.init()
+        syncPipelineSelection()
+    }
 
     // Device capabilities
     @Published var minISO: Float = 50
@@ -233,14 +253,73 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     private func updateDeviceCapabilities(device: AVCaptureDevice) {
+        let minISO = device.activeFormat.minISO
+        let maxISO = device.activeFormat.maxISO
+        let minBias = device.minExposureTargetBias
+        let maxBias = device.maxExposureTargetBias
+        let minDuration = device.activeFormat.minExposureDuration
+        let maxDuration = device.activeFormat.maxExposureDuration
         DispatchQueue.main.async {
-            self.minISO = device.activeFormat.minISO
-            self.maxISO = device.activeFormat.maxISO
-            self.minExposure = device.minExposureTargetBias
-            self.maxExposure = device.maxExposureTargetBias
-            self.minShutterDuration = device.activeFormat.minExposureDuration
-            self.maxShutterDuration = device.activeFormat.maxExposureDuration
+            self.minISO = minISO
+            self.maxISO = maxISO
+            self.minExposure = minBias
+            self.maxExposure = maxBias
+            self.minShutterDuration = minDuration
+            self.maxShutterDuration = maxDuration
         }
+    }
+
+    private func syncPipelineSelection() {
+        pipelineLock.lock()
+        pipelineFilmFilter = selectedFilmFilter
+        pipelineLensFX = selectedLensFX
+        pipelineLock.unlock()
+    }
+
+    private func currentPipelineSelection() -> (FilmFilter, LensFXMode) {
+        pipelineLock.lock()
+        defer { pipelineLock.unlock() }
+        return (pipelineFilmFilter, pipelineLensFX)
+    }
+
+    /// Re-apply stored manual ISO/shutter after a lens or format change.
+    /// Switching devices/formats drops custom exposure; without this the UI
+    /// still shows the old shutter/ISO while the sensor has gone back to auto.
+    private func reapplyManualExposure(on device: AVCaptureDevice) {
+        guard isManualExposure || manualISOValue != nil || manualShutterIndex != nil else { return }
+        guard device.isExposureModeSupported(.custom) else { return }
+
+        let duration: CMTime
+        if let index = manualShutterIndex,
+           index >= 0, index < CameraManager.shutterSpeedValues.count {
+            duration = clampDuration(CameraManager.shutterSpeedValues[index], to: device)
+        } else {
+            duration = clampDuration(AVCaptureDevice.currentExposureDuration, to: device)
+        }
+
+        let isoSource = manualISOValue ?? isoValue
+        let iso = max(device.activeFormat.minISO, min(isoSource, device.activeFormat.maxISO))
+
+        do {
+            try device.lockForConfiguration()
+            device.setExposureModeCustom(duration: duration, iso: iso) { _ in }
+            device.unlockForConfiguration()
+            DispatchQueue.main.async {
+                self.shutterSpeed = duration
+                self.isoValue = iso
+                self.isManualExposure = true
+            }
+        } catch {
+            print("Error reapplying manual exposure: \(error)")
+        }
+    }
+
+    private func clampDuration(_ duration: CMTime, to device: AVCaptureDevice) -> CMTime {
+        let minDuration = device.activeFormat.minExposureDuration
+        let maxDuration = device.activeFormat.maxExposureDuration
+        if CMTimeCompare(duration, minDuration) < 0 { return minDuration }
+        if CMTimeCompare(duration, maxDuration) > 0 { return maxDuration }
+        return duration
     }
 
     // MARK: - Long Exposure Format Selection
@@ -488,15 +567,27 @@ class CameraManager: NSObject, ObservableObject {
         guard let device = videoDeviceInput?.device else { return }
         guard device.isExposureModeSupported(.custom) else { return }
 
-        let clampedISO = max(device.activeFormat.minISO, min(value, device.activeFormat.maxISO))
+        manualISOValue = value
 
         sessionQueue.async {
+            // Prefer the remembered shutter so ISO tweaks don't inherit a weird
+            // auto duration after a lens switch
+            let duration: CMTime
+            if let index = self.manualShutterIndex,
+               index >= 0, index < CameraManager.shutterSpeedValues.count {
+                duration = self.clampDuration(CameraManager.shutterSpeedValues[index], to: device)
+            } else {
+                duration = self.clampDuration(AVCaptureDevice.currentExposureDuration, to: device)
+            }
+            let clampedISO = max(device.activeFormat.minISO, min(value, device.activeFormat.maxISO))
+
             do {
                 try device.lockForConfiguration()
-                device.setExposureModeCustom(duration: AVCaptureDevice.currentExposureDuration, iso: clampedISO) { _ in }
+                device.setExposureModeCustom(duration: duration, iso: clampedISO) { _ in }
                 device.unlockForConfiguration()
                 DispatchQueue.main.async {
                     self.isoValue = clampedISO
+                    self.shutterSpeed = duration
                     self.isManualExposure = true
                 }
             } catch {
@@ -510,27 +601,21 @@ class CameraManager: NSObject, ObservableObject {
         guard index >= 0 && index < CameraManager.shutterSpeedValues.count else { return }
         guard device.isExposureModeSupported(.custom) else { return }
 
+        manualShutterIndex = index
         let targetDuration = CameraManager.shutterSpeedValues[index]
 
-        // Clamp to device capabilities
-        let minDuration = device.activeFormat.minExposureDuration
-        let maxDuration = device.activeFormat.maxExposureDuration
-
-        var clampedDuration = targetDuration
-        if CMTimeCompare(targetDuration, minDuration) < 0 {
-            clampedDuration = minDuration
-        }
-        if CMTimeCompare(targetDuration, maxDuration) > 0 {
-            clampedDuration = maxDuration
-        }
-
         sessionQueue.async {
+            let clampedDuration = self.clampDuration(targetDuration, to: device)
+            let isoSource = self.manualISOValue ?? self.isoValue
+            let clampedISO = max(device.activeFormat.minISO, min(isoSource, device.activeFormat.maxISO))
+
             do {
                 try device.lockForConfiguration()
-                device.setExposureModeCustom(duration: clampedDuration, iso: AVCaptureDevice.currentISO) { _ in }
+                device.setExposureModeCustom(duration: clampedDuration, iso: clampedISO) { _ in }
                 device.unlockForConfiguration()
                 DispatchQueue.main.async {
                     self.shutterSpeed = clampedDuration
+                    self.isoValue = clampedISO
                     self.isManualExposure = true
                 }
             } catch {
@@ -541,6 +626,9 @@ class CameraManager: NSObject, ObservableObject {
 
     func setAutoExposure() {
         guard let device = videoDeviceInput?.device else { return }
+
+        manualISOValue = nil
+        manualShutterIndex = nil
 
         sessionQueue.async {
             do {
@@ -686,7 +774,7 @@ class CameraManager: NSObject, ObservableObject {
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
 
-            // If already on the right device, just adjust zoom
+            // If already on the right device, just adjust zoom — keep exposure as-is
             if let currentDevice = self.videoDeviceInput?.device,
                currentDevice.deviceType == deviceType {
                 do {
@@ -694,6 +782,9 @@ class CameraManager: NSObject, ObservableObject {
                     currentDevice.videoZoomFactor = max(currentDevice.minAvailableVideoZoomFactor,
                                                         min(zoomWithinLens, currentDevice.activeFormat.videoMaxZoomFactor))
                     currentDevice.unlockForConfiguration()
+                    // Zoom-only changes can still perturb locked exposure on some
+                    // formats; reassert the user's shutter/ISO if they set them.
+                    self.reapplyManualExposure(on: currentDevice)
                     DispatchQueue.main.async { self.zoomFactor = zoomWithinLens }
                 } catch {
                     print("Error setting zoom: \(error)")
@@ -717,6 +808,7 @@ class CameraManager: NSObject, ObservableObject {
                         device.videoZoomFactor = max(device.minAvailableVideoZoomFactor,
                                                      min(fallbackZoom, device.activeFormat.videoMaxZoomFactor))
                         device.unlockForConfiguration()
+                        self.reapplyManualExposure(on: device)
                         DispatchQueue.main.async { self.zoomFactor = fallbackZoom }
                     } catch {}
                 }
@@ -735,10 +827,11 @@ class CameraManager: NSObject, ObservableObject {
                 if self.session.canAddInput(newInput) {
                     self.session.addInput(newInput)
                     self.videoDeviceInput = newInput
-                    self.updateDeviceCapabilities(device: newDevice)
 
-                    // Select best format for this lens
+                    // Select best format for this lens (changes activeFormat and
+                    // clears custom exposure — must reapply afterwards)
                     self.selectBestFormatForLongExposure(device: newDevice)
+                    self.updateDeviceCapabilities(device: newDevice)
                     self.updateMaxPhotoDimensions(for: newDevice)
 
                     // Apply zoom within this lens
@@ -746,13 +839,15 @@ class CameraManager: NSObject, ObservableObject {
                     newDevice.videoZoomFactor = max(newDevice.minAvailableVideoZoomFactor,
                                                     min(zoomWithinLens, newDevice.activeFormat.videoMaxZoomFactor))
                     newDevice.unlockForConfiguration()
+
+                    // Restore the shutter/ISO the UI is still showing
+                    self.reapplyManualExposure(on: newDevice)
                 }
 
                 self.session.commitConfiguration()
 
                 DispatchQueue.main.async {
                     self.zoomFactor = zoomWithinLens
-                    self.isManualExposure = false
                 }
             } catch {
                 print("Error switching lens: \(error)")
@@ -835,12 +930,13 @@ class CameraManager: NSObject, ObservableObject {
     // MARK: - Film Filter Processing
 
     // Apply filter to CIImage (for live preview)
-    func applyFilmFilter(to ciImage: CIImage) -> CIImage {
-        guard selectedFilmFilter != .none else { return ciImage }
+    func applyFilmFilter(to ciImage: CIImage, filter: FilmFilter? = nil) -> CIImage {
+        let activeFilter = filter ?? selectedFilmFilter
+        guard activeFilter != .none else { return ciImage }
 
         var outputImage = ciImage
 
-        switch selectedFilmFilter {
+        switch activeFilter {
         case .none:
             break
 
@@ -1333,7 +1429,8 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
 
         // Handle live preview processing (film filter and/or lens FX, not during long exposure)
-        let wantsLiveProcessing = selectedFilmFilter != .none || selectedLensFX != .none
+        let (filmFilter, lensFX) = currentPipelineSelection()
+        let wantsLiveProcessing = filmFilter != .none || lensFX != .none
         if wantsLiveProcessing && !isLongExposureCapturing {
             let currentTime = CFAbsoluteTimeGetCurrent()
             if currentTime - lastPreviewFrameTime >= previewFrameInterval {
@@ -1342,9 +1439,9 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 // Downscale first: full-res sensor frames are far too heavy
                 // to run distortion filters on at preview frame rates
                 var processed = downscaledForPreview(ciImage)
-                processed = applyFilmFilter(to: processed)
-                if selectedLensFX != .none {
-                    processed = LensFXEngine.shared.apply(selectedLensFX, to: processed, time: currentTime)
+                processed = applyFilmFilter(to: processed, filter: filmFilter)
+                if lensFX != .none {
+                    processed = LensFXEngine.shared.apply(lensFX, to: processed, time: currentTime)
                 }
 
                 DispatchQueue.main.async {

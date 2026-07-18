@@ -717,18 +717,20 @@ struct LensFXPicker: View {
     }
 }
 
-// MARK: - Scanline Shader Overlay (VHS mode)
-// Metal shader draws alpha-varying black lines over the camera feed
+// MARK: - Scanline Overlay (VHS mode)
+// Drawn in SwiftUI rather than ShaderLibrary — avoids a hard crash on devices
+// where the Metal stitchable library fails to resolve at first FX toggle.
 struct ScanlineShaderOverlay: View {
     var body: some View {
-        Rectangle()
-            .fill(Color.white)
-            .colorEffect(
-                ShaderLibrary.scanlineOverlay(
-                    .float(1.6),   // line frequency
-                    .float(0.3)    // intensity
-                )
-            )
-            .allowsHitTesting(false)
+        Canvas { context, size in
+            let spacing: CGFloat = 3
+            var y: CGFloat = 0
+            while y < size.height {
+                let rect = CGRect(x: 0, y: y, width: size.width, height: 1)
+                context.fill(Path(rect), with: .color(.black.opacity(0.28)))
+                y += spacing
+            }
+        }
+        .allowsHitTesting(false)
     }
 }
