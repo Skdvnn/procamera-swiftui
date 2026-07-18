@@ -18,6 +18,7 @@
 		A1000014AAAAAAAA00000014 /* Shaders.metal in Sources */ = {isa = PBXBuildFile; fileRef = A1000015AAAAAAAA00000015 /* Shaders.metal */; };
 		A1000016BBBBBBBB00000016 /* FilteredCameraPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000017BBBBBBBB00000017 /* FilteredCameraPreview.swift */; };
 		A100001ABBBBBBBB0000001A /* LensFXEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001BBBBBBBBB0000001B /* LensFXEngine.swift */; };
+		A100001CBBBBBBBB0000001C /* PhotoBook.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100001DBBBBBBBB0000001D /* PhotoBook.swift */; };
 		A1000018CCCCCCCC00000018 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A1000019CCCCCCCC00000019 /* Assets.xcassets */; };
 		A1000020DDDDDDDD00000001 /* Fingertips in Frameworks */ = {isa = PBXBuildFile; productRef = A1000020DDDDDDDD00000002 /* Fingertips */; };
 /* End PBXBuildFile section */
@@ -36,6 +37,7 @@
 		A1000015AAAAAAAA00000015 /* Shaders.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Shaders.metal; sourceTree = "<group>"; };
 		A1000017BBBBBBBB00000017 /* FilteredCameraPreview.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilteredCameraPreview.swift; sourceTree = "<group>"; };
 		A100001BBBBBBBBB0000001B /* LensFXEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LensFXEngine.swift; sourceTree = "<group>"; };
+		A100001DBBBBBBBB0000001D /* PhotoBook.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhotoBook.swift; sourceTree = "<group>"; };
 		A1000019CCCCCCCC00000019 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -68,6 +70,7 @@
 				A1000008AAAAAAAA00000008 /* CameraPreviewView.swift */,
 				A1000017BBBBBBBB00000017 /* FilteredCameraPreview.swift */,
 				A100001BBBBBBBBB0000001B /* LensFXEngine.swift */,
+				A100001DBBBBBBBB0000001D /* PhotoBook.swift */,
 				A100000CAAAAAAAA0000000C /* AnalogGaugeView.swift */,
 				A100000EAAAAAAAA0000000E /* ViewfinderOverlay.swift */,
 				A1000011AAAAAAAA00000011 /* ControlComponents.swift */,
@@ -168,6 +171,7 @@
 				A1000007AAAAAAAA00000007 /* CameraPreviewView.swift in Sources */,
 				A1000016BBBBBBBB00000016 /* FilteredCameraPreview.swift in Sources */,
 				A100001ABBBBBBBB0000001A /* LensFXEngine.swift in Sources */,
+				A100001CBBBBBBBB0000001C /* PhotoBook.swift in Sources */,
 				A100000BAAAAAAAA0000000B /* AnalogGaugeView.swift in Sources */,
 				A100000DAAAAAAAA0000000D /* ViewfinderOverlay.swift in Sources */,
 				A100000FAAAAAAAA0000000F /* ControlComponents.swift in Sources */,

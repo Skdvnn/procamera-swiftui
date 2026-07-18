@@ -202,6 +202,8 @@ struct ContentView: View {
     @State private var captureFormat: CaptureFormat = .heic
     @State private var topCollapsed = false
     @State private var bottomCollapsed = false
+    @StateObject private var gallery = GalleryStore()
+    @State private var showPhotoBook = false
 
     private let modes = ["P", "A", "T"]
     private let shutterSpeeds = ["4\"", "2\"", "1\"", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60", "1/125", "1/250", "1/500", "1/1000", "1/2000", "1/4000"]
@@ -365,9 +367,7 @@ struct ContentView: View {
                         HStack(alignment: .center, spacing: 0) {
                             ThumbnailPill(image: lastCapturedImage) {
                                 Haptics.click()
-                                if let url = URL(string: "photos-redirect://") {
-                                    UIApplication.shared.open(url)
-                                }
+                                showPhotoBook = true
                             }
 
                             Spacer()
@@ -490,9 +490,7 @@ struct ContentView: View {
                             HStack(alignment: .center, spacing: 0) {
                                 ThumbnailPill(image: lastCapturedImage) {
                                     Haptics.click()
-                                    if let url = URL(string: "photos-redirect://") {
-                                        UIApplication.shared.open(url)
-                                    }
+                                    showPhotoBook = true
                                 }
 
                                 Spacer()
@@ -549,6 +547,25 @@ struct ContentView: View {
         .onChange(of: lensFX) { _, newFX in
             camera.selectedLensFX = newFX
         }
+        .fullScreenCover(isPresented: $showPhotoBook) {
+            PhotoBookView(store: gallery)
+        }
+    }
+
+    // Bind a captured frame into the Field Book with the live shot settings
+    private func recordShot(_ img: UIImage) {
+        let metadata = ShotMetadata(
+            id: UUID(),
+            date: Date(),
+            iso: isoValue,
+            shutter: shutterSpeeds[shutterSpeedIndex],
+            aperture: apertureValue,
+            ev: exposureValue,
+            filmFilter: filmFilter.name,
+            lensFX: lensFX.name,
+            focalLength: focalLength
+        )
+        gallery.add(image: img, metadata: metadata)
     }
 
     private func syncFilmFilter(_ filter: FilmFilterMode) {
@@ -627,6 +644,7 @@ struct ContentView: View {
                 if let img = img {
                     lastCapturedImage = img
                     photoCount += 1
+                    recordShot(img)
                     camera.saveToPhotoLibrary(img) { _ in }
                 }
             }
@@ -639,6 +657,7 @@ struct ContentView: View {
                 if let img = img {
                     lastCapturedImage = img
                     photoCount += 1
+                    recordShot(img)
                     camera.saveToPhotoLibrary(img) { _ in }
                 }
             }
