@@ -1,0 +1,64 @@
+name: Build IPA
+
+on:
+  push:
+    branches:
+      - master
+      - "claude/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build unsigned IPA
+    runs-on: macos-15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Archive (unsigned)
+        run: |
+          xcodebuild archive \
+            -project ProCamera.xcodeproj \
+            -scheme ProCamera \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/ProCamera.xcarchive \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY= \
+            DEVELOPMENT_TEAM=
+
+      - name: Package IPA
+        run: |
+          mkdir -p build/Payload
+          cp -R "build/ProCamera.xcarchive/Products/Applications/ProCamera.app" build/Payload/
+          cd build
+          zip -qry ProCamera-unsigned.ipa Payload
+          ls -lh ProCamera-unsigned.ipa
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ProCamera-unsigned-ipa
+          path: build/ProCamera-unsigned.ipa
+          if-no-files-found: error
+
+      - name: Publish rolling release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-build
+          name: Latest build
+          prerelease: true
+          make_latest: false
+          body: |
+            Automated unsigned build of ProCamera ("Shutter cam") from commit ${{ github.sha }}.
+
+            Download `ProCamera-unsigned.ipa` below and install it by sideloading —
+            see INSTALL.md in the repo for step-by-step instructions.
+          files: build/ProCamera-unsigned.ipa
