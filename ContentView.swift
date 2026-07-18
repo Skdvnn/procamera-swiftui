@@ -1580,7 +1580,7 @@ struct Triangle: Shape {
     }
 }
 
-// MARK: - Shutter Button (Figma style: large dark circle with subtle gradient)
+// MARK: - Shutter Button (classic brushed metal — restored from the early look)
 struct ShutterButton: View {
     let isCapturing: Bool
     let action: () -> Void
@@ -1590,52 +1590,121 @@ struct ShutterButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Collar - knurled chrome ring (stays fixed)
+                // Outer bezel — brushed metal collar
                 Circle()
                     .fill(
-                        AngularGradient(
+                        LinearGradient(
                             colors: [
-                                Color(hex: "333333"),
-                                Color(hex: "4a4a4a"),
-                                Color(hex: "2a2a2a"),
-                                Color(hex: "404040"),
-                                Color(hex: "303030"),
-                                Color(hex: "333333")
+                                Color(white: 0.28),
+                                Color(white: 0.14),
+                                Color(white: 0.09),
+                                Color(white: 0.18)
                             ],
-                            center: .center
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
                         )
                     )
-                    .frame(width: 74, height: 74)
+                    .frame(width: 76, height: 76)
+                    .overlay {
+                        // Fine brush grain on the collar
+                        Circle()
+                            .fill(Color(white: 0.22))
+                            .colorEffect(
+                                ShaderLibrary.metallicSurface(
+                                    .float2(76, 76),
+                                    .float(isPressed ? 0.35 : 0.55),
+                                    .float2(0.28, 0.22)
+                                )
+                            )
+                            .clipShape(Circle())
+                            .opacity(0.55)
+                            .allowsHitTesting(false)
+                    }
 
-                // Collar outer edge
-                Circle()
-                    .stroke(Color(hex: "151515"), lineWidth: 1)
-                    .frame(width: 74, height: 74)
-
-                // Collar inner shadow - darkens when button sinks in
+                // Outer ring highlight
                 Circle()
                     .stroke(
-                        Color.black.opacity(isPressed ? 0.6 : 0.15),
-                        lineWidth: isPressed ? 2 : 0.5
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(isPressed ? 0.18 : 0.32),
+                                Color.white.opacity(0.05)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 1.5
                     )
-                    .frame(width: 65, height: 65)
+                    .frame(width: 76, height: 76)
 
-                // Button face - this is what moves when pressed
+                // Inner face — this sinks on press
                 ZStack {
-                    MetalShutterSurface(size: 64, isPressed: isPressed)
-                        .clipShape(Circle())
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    Color(white: isPressed ? 0.14 : 0.20),
+                                    Color(white: isPressed ? 0.07 : 0.11),
+                                    Color(white: isPressed ? 0.04 : 0.07)
+                                ],
+                                center: UnitPoint(x: 0.35, y: 0.35),
+                                startRadius: 0,
+                                endRadius: 35
+                            )
+                        )
+                        .frame(width: 62, height: 62)
+                        .overlay {
+                            Circle()
+                                .fill(Color(white: 0.16))
+                                .colorEffect(
+                                    ShaderLibrary.metallicSurface(
+                                        .float2(62, 62),
+                                        .float(isPressed ? 0.25 : 0.45),
+                                        .float2(0.32, 0.28)
+                                    )
+                                )
+                                .clipShape(Circle())
+                                .opacity(0.4)
+                                .allowsHitTesting(false)
+                        }
+
+                    // Inner highlight ring
+                    Circle()
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(isPressed ? 0.05 : 0.16),
+                                    Color.clear,
+                                    Color.black.opacity(0.25)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1
+                        )
+                        .frame(width: 58, height: 58)
+
+                    // Soft lathe rings — mechanical, not mirror chrome
+                    ForEach(0..<3, id: \.self) { i in
+                        Circle()
+                            .stroke(Color.white.opacity(0.05), lineWidth: 0.5)
+                            .frame(width: CGFloat(48 - i * 10), height: CGFloat(48 - i * 10))
+                    }
 
                     // Capturing flash
                     if isCapturing {
                         Circle()
-                            .fill(Color.white.opacity(0.12))
-                            .frame(width: 64, height: 64)
+                            .fill(Color.white.opacity(0.18))
+                            .frame(width: 62, height: 62)
                     }
                 }
                 .scaleEffect(isPressed ? 0.96 : 1.0)
-                .shadow(color: Color.black.opacity(isPressed ? 0.1 : 0.5), radius: isPressed ? 0.5 : 3, y: isPressed ? 0 : 2)
+                .shadow(
+                    color: Color.black.opacity(isPressed ? 0.15 : 0.45),
+                    radius: isPressed ? 0.5 : 3,
+                    y: isPressed ? 0 : 2
+                )
             }
-            .shadow(color: Color.black.opacity(0.5), radius: 5, y: 3)
+            .shadow(color: Color.black.opacity(0.5), radius: isPressed ? 3 : 7, y: isPressed ? 1 : 4)
             .animation(.spring(response: 0.12, dampingFraction: 0.65), value: isPressed)
         }
         .buttonStyle(PlainButtonStyle())
