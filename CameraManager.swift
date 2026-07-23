@@ -1485,25 +1485,12 @@ class CameraManager: NSObject, ObservableObject {
         // TODO: Implement video recording
     }
 
-    func saveToPhotoLibrary(_ image: UIImage, completion: @escaping (Bool) -> Void) {
-        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
-            guard status == .authorized else {
-                DispatchQueue.main.async { completion(false) }
-                return
-            }
-
-            PHPhotoLibrary.shared().performChanges {
-                PHAssetCreationRequest.creationRequestForAsset(from: image)
-            } completionHandler: { success, error in
-                DispatchQueue.main.async {
-                    completion(success)
-                }
-            }
-        }
+    func saveToPhotoLibrary(_ image: UIImage, completion: @escaping (String?) -> Void) {
+        PhotosLibraryService.saveImage(image, completion: completion)
     }
 
     private func saveRawDataToPhotoLibrary(_ data: Data) {
-        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+        PhotosLibraryService.requestReadWrite { status in
             guard status == .authorized || status == .limited else { return }
 
             PHPhotoLibrary.shared().performChanges {
