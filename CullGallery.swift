@@ -419,11 +419,20 @@ struct CullLibraryView: View {
     @State private var route: CullRoute?
     @State private var showFieldBooks = false
     @State private var appeared = false
+    @State private var sheetLoupe: UIImage?
+    @State private var comparePair: ComparePair?
 
     private struct CullRoute: Identifiable {
         let id = UUID()
         let session: ShootSession
         let startIndex: Int
+    }
+
+    private struct ComparePair: Identifiable {
+        let id = UUID()
+        let session: ShootSession
+        let left: ShotMetadata
+        let right: ShotMetadata
     }
 
     var body: some View {
@@ -444,7 +453,13 @@ struct CullLibraryView: View {
                                     session: session,
                                     marks: marks,
                                     onCull: { open(session, at: firstUnmarkedIndex(in: session)) },
-                                    onOpenFrame: { open(session, at: $0) }
+                                    onOpenFrame: { open(session, at: $0) },
+                                    onLoupe: { shot in
+                                        sheetLoupe = store.image(for: shot) ?? store.thumbnail(for: shot)
+                                    },
+                                    onCompare: { a, b in
+                                        comparePair = ComparePair(session: session, left: a, right: b)
+                                    }
                                 )
                                 .opacity(appeared ? 1 : 0)
                                 .offset(y: appeared ? 0 : 18)
@@ -459,6 +474,13 @@ struct CullLibraryView: View {
                         .padding(.bottom, 48)
                     }
                 }
+            }
+
+            if let sheetLoupe {
+                SheetLoupeOverlay(image: sheetLoupe) {
+                    self.sheetLoupe = nil
+                }
+                .zIndex(40)
             }
         }
         .preferredColorScheme(.dark)
@@ -478,6 +500,22 @@ struct CullLibraryView: View {
                     route = nil
                     rebuildSessions()
                 }
+            )
+        }
+        .fullScreenCover(item: $comparePair) { pair in
+            CompareFramesView(
+                store: store,
+                left: pair.left,
+                right: pair.right,
+                onKeepLeft: {
+                    promote(pair.left, demote: pair.right, in: pair.session)
+                    comparePair = nil
+                },
+                onKeepRight: {
+                    promote(pair.right, demote: pair.left, in: pair.session)
+                    comparePair = nil
+                },
+                onDismiss: { comparePair = nil }
             )
         }
         .fullScreenCover(isPresented: $showFieldBooks) {
@@ -601,6 +639,26 @@ struct CullLibraryView: View {
     private func firstUnmarkedIndex(in session: ShootSession) -> Int {
         session.shots.firstIndex { marks.state(for: $0.id) == .unmarked } ?? 0
     }
+
+    private func promote(_ keep: ShotMetadata, demote: ShotMetadata, in session: ShootSession) {
+        marks.mark(
+            shotID: keep.id,
+            photosAssetLocalIdentifier: keep.photosAssetLocalIdentifier,
+            creationDate: keep.date,
+            state: .keep
+        )
+        marks.mark(
+            shotID: demote.id,
+            photosAssetLocalIdentifier: demote.photosAssetLocalIdentifier,
+            creationDate: demote.date,
+            state: .reject
+        )
+        PhotosLibraryService.setFavorite(assetLocalIdentifier: keep.photosAssetLocalIdentifier, favorite: true)
+        PhotosLibraryService.setFavorite(assetLocalIdentifier: demote.photosAssetLocalIdentifier, favorite: false)
+        Haptics.click()
+        // Jump into cull at the kept frame so the user can continue
+        open(session, at: session.shots.firstIndex(where: { $0.id == keep.id }) ?? 0)
+    }
 }
 
 // MARK: - Session contact sheet
@@ -611,6 +669,10 @@ struct SessionContactSheet: View {
     @ObservedObject var marks: FrameMarkStore
     let onCull: () -> Void
     let onOpenFrame: (Int) -> Void
+    var onLoupe: ((ShotMetadata) -> Void)? = nil
+    var onCompare: ((ShotMetadata, ShotMetadata) -> Void)? = nil
+
+    @State private var selectedForCompare: Set<UUID> = []
 
     private let columns = [
         GridItem(.flexible(), spacing: 0),
@@ -629,6 +691,8 @@ struct SessionContactSheet: View {
         if first.id == last.id { return df.string(from: first.date) }
         return "\(df.string(from: first.date)) – \(df.string(from: last.date))"
     }
+
+    private var compareReady: Bool { selectedForCompare.count == 2 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -649,7 +713,14 @@ struct SessionContactSheet: View {
                     .foregroundColor(.white.opacity(0.38))
                     .tracking(0.6)
 
-                    // Live cull tally
+                    CullProgressRail(
+                        kept: progress.kept,
+                        rejected: progress.rejected,
+                        unmarked: progress.unmarked
+                    )
+                    .padding(.top, 6)
+                    .padding(.trailing, 40)
+
                     HStack(spacing: 10) {
                         tally(progress.kept, "KEPT", CullPalette.amber)
                         tally(progress.rejected, "OUT", CullPalette.safelight)
@@ -660,29 +731,47 @@ struct SessionContactSheet: View {
 
                 Spacer(minLength: 8)
 
-                Button(action: onCull) {
-                    DarkroomChip(
-                        title: progress.unmarked == 0 && progress.kept + progress.rejected > 0
-                            ? "REVIEW"
-                            : "CULL",
-                        kind: .amber
-                    )
+                VStack(alignment: .trailing, spacing: 8) {
+                    Button(action: onCull) {
+                        DarkroomChip(
+                            title: progress.unmarked == 0 && progress.kept + progress.rejected > 0
+                                ? "REVIEW"
+                                : "CULL",
+                            kind: .amber
+                        )
+                    }
+                    .buttonStyle(DarkroomChipButtonStyle())
+                    .accessibilityLabel("Cull session")
+
+                    if compareReady {
+                        Button {
+                            let picks = session.shots.filter { selectedForCompare.contains($0.id) }
+                            guard picks.count == 2 else { return }
+                            onCompare?(picks[0], picks[1])
+                            selectedForCompare.removeAll()
+                        } label: {
+                            DarkroomChip(title: "COMPARE", kind: .quiet, compact: true)
+                        }
+                        .buttonStyle(DarkroomChipButtonStyle())
+                        .transition(.opacity.combined(with: .scale(scale: 0.94)))
+                    }
                 }
-                .accessibilityLabel("Cull session")
+                .animation(CullMotion.settle, value: compareReady)
             }
             .padding(.horizontal, 2)
             .padding(.bottom, 14)
 
             // Physical sheet plate
             VStack(spacing: 0) {
-                // Plate top rule with frame count stamp
                 HStack {
                     Text("PROOF")
                         .font(.system(size: 7, weight: .bold, design: .monospaced))
                         .tracking(2)
                         .foregroundColor(CullPalette.amber.opacity(0.5))
                     Spacer()
-                    Text(String(format: "Nº %03d–%03d", 1, session.shots.count))
+                    Text(selectedForCompare.isEmpty
+                          ? String(format: "Nº %03d–%03d", 1, session.shots.count)
+                          : "HOLD TO PICK  ·  \(selectedForCompare.count)/2")
                         .font(.system(size: 7, weight: .semibold, design: .monospaced))
                         .foregroundColor(.white.opacity(0.28))
                 }
@@ -727,6 +816,7 @@ struct SessionContactSheet: View {
             Text("\(n)")
                 .font(.system(size: 11, weight: .bold, design: .monospaced))
                 .foregroundColor(color)
+                .contentTransition(.numericText())
             Text(label)
                 .font(.system(size: 8, weight: .semibold, design: .monospaced))
                 .tracking(0.8)
@@ -737,6 +827,7 @@ struct SessionContactSheet: View {
     private func contactCell(shot: ShotMetadata, index: Int) -> some View {
         let state = marks.state(for: shot.id)
         let seed = strokeSeed(for: shot.id)
+        let picked = selectedForCompare.contains(shot.id)
         return Button {
             onOpenFrame(index)
         } label: {
@@ -751,7 +842,6 @@ struct SessionContactSheet: View {
                         .brightness(state == .reject ? -0.08 : 0)
                         .opacity(state == .reject ? 0.5 : 1.0)
                 } else {
-                    // Loading plate
                     Rectangle()
                         .fill(Color.white.opacity(0.03))
                         .overlay(
@@ -761,7 +851,6 @@ struct SessionContactSheet: View {
                         )
                 }
 
-                // Frame number — bottom-left, like a proof stamp
                 VStack {
                     Spacer()
                     HStack {
@@ -776,6 +865,26 @@ struct SessionContactSheet: View {
                 }
 
                 FrameMarkOverlay(state: state, seed: seed, lineWidth: 2.0, padding: 7)
+
+                if picked {
+                    Rectangle()
+                        .stroke(CullPalette.amber, lineWidth: 2)
+                        .padding(1)
+                    VStack {
+                        HStack {
+                            Spacer()
+                            Text("COMPARE")
+                                .font(.system(size: 6, weight: .bold, design: .monospaced))
+                                .tracking(0.6)
+                                .foregroundColor(.black)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 2)
+                                .background(CullPalette.amber)
+                                .padding(4)
+                        }
+                        Spacer()
+                    }
+                }
             }
             .aspectRatio(1, contentMode: .fit)
             .clipped()
@@ -787,7 +896,44 @@ struct SessionContactSheet: View {
             }
         }
         .buttonStyle(ContactPressStyle())
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.35)
+                .onEnded { _ in
+                    Haptics.medium()
+                    // First long-press starts compare pick; second completes;
+                    // if already picking, toggle membership. Triple path: if
+                    // not picking and user long-presses once with empty set,
+                    // also offer loupe via a second hold — compare takes priority.
+                    toggleCompare(shot)
+                }
+        )
         .accessibilityLabel("Frame \(index + 1), \(state.rawValue)")
+        .accessibilityHint("Long press to select for compare")
+        .contextMenu {
+            Button {
+                onLoupe?(shot)
+            } label: {
+                Label("Loupe", systemImage: "plus.magnifyingglass")
+            }
+            Button {
+                toggleCompare(shot)
+            } label: {
+                Label(picked ? "Deselect compare" : "Select for compare", systemImage: "square.split.2x1")
+            }
+        }
+    }
+
+    private func toggleCompare(_ shot: ShotMetadata) {
+        withAnimation(CullMotion.press) {
+            if selectedForCompare.contains(shot.id) {
+                selectedForCompare.remove(shot.id)
+            } else if selectedForCompare.count < 2 {
+                selectedForCompare.insert(shot.id)
+            } else {
+                // Replace oldest by clearing and starting fresh with this one
+                selectedForCompare = [shot.id]
+            }
+        }
     }
 }
 
@@ -827,6 +973,10 @@ struct CullSessionView: View {
     @State private var gateScale: CGFloat = 1
     @State private var isAdvancing = false
     @State private var markDrawKey: Int = 0
+    @State private var showCoach = false
+    @State private var crossedKeep = false
+    @State private var crossedReject = false
+    @AppStorage("darkroom.thumbCoach.seen") private var coachSeen = false
 
     private var shots: [ShotMetadata] { session.shots }
     private var current: ShotMetadata? {
@@ -867,7 +1017,10 @@ struct CullSessionView: View {
                     cullCanvas(shot: shot, size: geo.size)
                 }
 
-                // Chrome overlays
+                // First-run thumb coach
+                ThumbZoneCoach(visible: $showCoach)
+
+                // Chrome overlays — dim while loupe is up
                 VStack(spacing: 0) {
                     topBar
                         .background(
@@ -881,6 +1034,9 @@ struct CullSessionView: View {
                     Spacer()
                     bottomChrome
                 }
+                .opacity(loupeTouch == nil ? 1 : 0.15)
+                .allowsHitTesting(loupeTouch == nil)
+                .animation(CullMotion.loupeOut, value: loupeTouch != nil)
 
                 // Mark flash stamp
                 if let flashMark {
@@ -893,7 +1049,12 @@ struct CullSessionView: View {
         }
         .preferredColorScheme(.dark)
         .statusBarHidden(true)
-        .onAppear { index = startIndex }
+        .onAppear {
+            index = startIndex
+            if !coachSeen {
+                withAnimation(CullMotion.settle.delay(0.35)) { showCoach = true }
+            }
+        }
         .sheet(isPresented: $showFinish) {
             FinishSessionSheet(
                 kept: progress.kept,
@@ -943,16 +1104,28 @@ struct CullSessionView: View {
 
             Spacer()
 
-            // Mini tally
-            HStack(spacing: 8) {
-                Text("\(progress.kept)")
-                    .foregroundColor(CullPalette.amber)
-                Text("·")
-                    .foregroundColor(.white.opacity(0.25))
-                Text("\(progress.rejected)")
-                    .foregroundColor(Color(red: 0.95, green: 0.55, blue: 0.5))
+            // Mini tally + progress
+            VStack(alignment: .trailing, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text("\(progress.kept)")
+                        .foregroundColor(CullPalette.amber)
+                        .contentTransition(.numericText())
+                    Text("·")
+                        .foregroundColor(.white.opacity(0.25))
+                    Text("\(progress.rejected)")
+                        .foregroundColor(Color(red: 0.95, green: 0.55, blue: 0.5))
+                        .contentTransition(.numericText())
+                }
+                .font(.system(size: 12, weight: .bold, design: .monospaced))
+
+                CullProgressRail(
+                    kept: progress.kept,
+                    rejected: progress.rejected,
+                    unmarked: progress.unmarked,
+                    height: 2
+                )
+                .frame(width: 56)
             }
-            .font(.system(size: 12, weight: .bold, design: .monospaced))
 
             Button { performUndo() } label: {
                 DarkroomIconButton(systemName: "arrow.uturn.backward", active: undo.canUndo, accent: undo.canUndo)
@@ -986,6 +1159,9 @@ struct CullSessionView: View {
 
             if let shot = current {
                 metadataStrip(shot)
+                    .id(shot.id)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .animation(CullMotion.press, value: shot.id)
             }
 
             // Thumb-zone hint + accessible controls
@@ -1004,11 +1180,13 @@ struct CullSessionView: View {
                     Button { applyMark(.reject) } label: {
                         DarkroomChip(title: "↓  REJECT", kind: .safelight)
                     }
+                    .buttonStyle(DarkroomChipButtonStyle())
                     .accessibilityLabel("Reject frame")
 
                     Button { applyMark(.keep) } label: {
                         DarkroomChip(title: "↑  KEEP", kind: .amber)
                     }
+                    .buttonStyle(DarkroomChipButtonStyle())
                     .accessibilityLabel("Keep frame")
                 }
 
@@ -1043,51 +1221,65 @@ struct CullSessionView: View {
     }
 
     private var filmStrip: some View {
-        ScrollViewReader { proxy in
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 3) {
-                    ForEach(Array(shots.enumerated()), id: \.element.id) { i, shot in
-                        let state = marks.state(for: shot.id)
-                        Button {
-                            advance(to: i)
-                        } label: {
-                            ZStack {
-                                if let thumb = store.thumbnail(for: shot) {
-                                    Image(uiImage: thumb)
-                                        .resizable()
-                                        .aspectRatio(contentMode: .fill)
-                                        .saturation(state == .reject ? 0.2 : 1)
-                                        .opacity(state == .reject ? 0.45 : 1)
-                                } else {
-                                    Color.white.opacity(0.06)
+        HStack(spacing: 0) {
+            FilmSprocketEdge()
+            ScrollViewReader { proxy in
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 2) {
+                        ForEach(Array(shots.enumerated()), id: \.element.id) { i, shot in
+                            let state = marks.state(for: shot.id)
+                            Button {
+                                advance(to: i)
+                            } label: {
+                                ZStack {
+                                    if let thumb = store.thumbnail(for: shot) {
+                                        Image(uiImage: thumb)
+                                            .resizable()
+                                            .aspectRatio(contentMode: .fill)
+                                            .saturation(state == .reject ? 0.2 : 1)
+                                            .opacity(state == .reject ? 0.45 : 1)
+                                    } else {
+                                        Color.white.opacity(0.06)
+                                    }
+                                    FrameMarkOverlay(state: state, seed: strokeSeed(for: shot.id), lineWidth: 1.4, padding: 3)
                                 }
-                                FrameMarkOverlay(state: state, seed: strokeSeed(for: shot.id), lineWidth: 1.4, padding: 3)
+                                .frame(width: 34, height: 42)
+                                .clipped()
+                                .overlay(
+                                    Rectangle()
+                                        .stroke(
+                                            i == index ? CullPalette.amber : Color.white.opacity(0.1),
+                                            lineWidth: i == index ? 1.2 : 0.4
+                                        )
+                                )
+                                .scaleEffect(i == index ? 1.08 : 1.0)
+                                .animation(CullMotion.press, value: index)
                             }
-                            .frame(width: 36, height: 44)
-                            .clipped()
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 1)
-                                    .stroke(
-                                        i == index ? CullPalette.amber : Color.white.opacity(0.12),
-                                        lineWidth: i == index ? 1.2 : 0.5
-                                    )
-                            )
-                            .scaleEffect(i == index ? 1.06 : 1.0)
-                            .animation(CullMotion.press, value: index)
+                            .buttonStyle(.plain)
+                            .id(i)
                         }
-                        .buttonStyle(.plain)
-                        .id(i)
+                    }
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 4)
+                }
+                .background(Color(hex: "14110e"))
+                .onChange(of: index) { _, new in
+                    withAnimation(CullMotion.advanceIn) {
+                        proxy.scrollTo(new, anchor: .center)
                     }
                 }
-                .padding(.horizontal, 14)
-            }
-            .onChange(of: index) { _, new in
-                withAnimation(CullMotion.advanceIn) {
-                    proxy.scrollTo(new, anchor: .center)
+                .onAppear {
+                    proxy.scrollTo(index, anchor: .center)
                 }
             }
+            FilmSprocketEdge()
         }
-        .frame(height: 48)
+        .overlay(
+            Rectangle()
+                .stroke(CullPalette.hairline.opacity(0.35), lineWidth: 0.5)
+        )
+        .padding(.horizontal, 10)
+        .frame(height: 52)
     }
 
     private func metadataStrip(_ shot: ShotMetadata) -> some View {
@@ -1139,6 +1331,18 @@ struct CullSessionView: View {
         let image = store.image(for: shot) ?? store.thumbnail(for: shot)
 
         return ZStack {
+            // Adjacent frame peeks while scrubbing horizontally
+            EdgePeekFrames(
+                prev: index > 0
+                    ? (store.thumbnail(for: shots[index - 1]) ?? store.image(for: shots[index - 1]))
+                    : nil,
+                next: index + 1 < shots.count
+                    ? (store.thumbnail(for: shots[index + 1]) ?? store.image(for: shots[index + 1]))
+                    : nil,
+                dragX: dragOffset.width,
+                size: size
+            )
+
             if let image {
                 Image(uiImage: image)
                     .resizable()
@@ -1184,8 +1388,23 @@ struct CullSessionView: View {
                 let inThumbZone = startY > size.height * 0.52
                 if inThumbZone || abs(value.translation.height) > abs(value.translation.width) * 1.1 {
                     dragOffset = CGSize(width: 0, height: value.translation.height * 0.85)
+                    // Threshold haptics — click once when crossing commit line
+                    if value.translation.height < -48, !crossedKeep {
+                        crossedKeep = true
+                        crossedReject = false
+                        UISelectionFeedbackGenerator().selectionChanged()
+                    } else if value.translation.height > 48, !crossedReject {
+                        crossedReject = true
+                        crossedKeep = false
+                        UISelectionFeedbackGenerator().selectionChanged()
+                    } else if abs(value.translation.height) < 40 {
+                        crossedKeep = false
+                        crossedReject = false
+                    }
                 } else {
                     dragOffset = CGSize(width: value.translation.width, height: 0)
+                    crossedKeep = false
+                    crossedReject = false
                 }
             }
             .onEnded { value in
@@ -1276,6 +1495,12 @@ struct CullSessionView: View {
             favorite: state == .keep
         )
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+
+        // Dismiss coach after first real mark
+        if showCoach || !coachSeen {
+            coachSeen = true
+            withAnimation(CullMotion.settle) { showCoach = false }
+        }
 
         markDrawKey &+= 1
         withAnimation(CullMotion.stamp) { flashMark = state }
