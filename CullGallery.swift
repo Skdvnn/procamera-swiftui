@@ -2,14 +2,29 @@ import SwiftUI
 import Photos
 import AVFoundation
 
-// MARK: - Motion (mechanical — no springs)
+// MARK: - Motion (mechanical film-lever — no springs, no bounce)
 
 enum CullMotion {
-    static let flick = Animation.easeOut(duration: 0.14)
-    static let lever = Animation.easeOut(duration: 0.18)
-    static let settle = Animation.easeOut(duration: 0.22)
-    static let mark = Animation.easeOut(duration: 0.12)
-    static let loupe = Animation.easeOut(duration: 0.1)
+    /// Snap-back after a drag miss
+    static let flick = Animation.timingCurve(0.2, 0.8, 0.2, 1.0, duration: 0.16)
+    /// Frame leaving the gate
+    static let advanceOut = Animation.timingCurve(0.4, 0.0, 0.7, 0.3, duration: 0.13)
+    /// Next frame seating into the gate
+    static let advanceIn = Animation.timingCurve(0.15, 0.7, 0.2, 1.0, duration: 0.2)
+    /// Grease-pencil draw-on
+    static let draw = Animation.timingCurve(0.25, 0.1, 0.25, 1.0, duration: 0.28)
+    /// KEEP / OUT stamp punch
+    static let stamp = Animation.timingCurve(0.1, 0.8, 0.2, 1.0, duration: 0.14)
+    static let stampFade = Animation.easeOut(duration: 0.18)
+    /// Loupe raise / drop
+    static let loupeIn = Animation.timingCurve(0.2, 0.75, 0.2, 1.0, duration: 0.16)
+    static let loupeOut = Animation.easeOut(duration: 0.12)
+    /// Sheet / chrome settle
+    static let settle = Animation.timingCurve(0.22, 0.7, 0.2, 1.0, duration: 0.32)
+    /// Chip / press micro
+    static let press = Animation.easeOut(duration: 0.1)
+    /// Drag wash tracking (near-instant)
+    static let wash = Animation.easeOut(duration: 0.08)
 }
 
 // MARK: - Darkroom ground
@@ -120,6 +135,15 @@ struct DarkroomChip: View {
     }
 }
 
+private struct DarkroomChipButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
+            .opacity(configuration.isPressed ? 0.88 : 1.0)
+            .animation(CullMotion.press, value: configuration.isPressed)
+    }
+}
+
 struct DarkroomIconButton: View {
     let systemName: String
     var active: Bool = true
@@ -221,26 +245,33 @@ struct FrameMarkOverlay: View {
     let seed: Int
     var lineWidth: CGFloat = 2.4
     var padding: CGFloat = 8
+    /// When true, strokes draw on (cull canvas). Contact sheet uses false.
+    var animated: Bool = false
+
+    @State private var drawProgress: CGFloat = 1
 
     var body: some View {
         Group {
             switch state {
             case .keep:
                 GreasePencilCircle(seed: seed)
+                    .trim(from: 0, to: drawProgress)
                     .stroke(
                         CullPalette.amber,
                         style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round)
                     )
-                    .shadow(color: CullPalette.amber.opacity(0.35), radius: 2)
+                    .shadow(color: CullPalette.amber.opacity(0.35 * drawProgress), radius: 2)
                     .padding(padding)
             case .reject:
                 ZStack {
                     GreasePencilX(seed: seed)
+                        .trim(from: 0, to: drawProgress)
                         .stroke(
                             CullPalette.safelight.opacity(0.35),
                             style: StrokeStyle(lineWidth: lineWidth + 1.5, lineCap: .round)
                         )
                     GreasePencilX(seed: seed &+ 3)
+                        .trim(from: 0, to: max(0, drawProgress - 0.08))
                         .stroke(
                             CullPalette.safelight,
                             style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
@@ -251,7 +282,46 @@ struct FrameMarkOverlay: View {
                 EmptyView()
             }
         }
+        .opacity(state == .unmarked ? 0 : 1)
         .allowsHitTesting(false)
+        .onAppear { bootstrapDraw() }
+        .onChange(of: state) { _, new in
+            guard animated, new != .unmarked else {
+                drawProgress = new == .unmarked ? 0 : 1
+                return
+            }
+            drawProgress = 0
+            withAnimation(CullMotion.draw) { drawProgress = 1 }
+        }
+    }
+
+    private func bootstrapDraw() {
+        guard animated, state != .unmarked else {
+            drawProgress = state == .unmarked ? 0 : 1
+            return
+        }
+        drawProgress = 0
+        withAnimation(CullMotion.draw) { drawProgress = 1 }
+    }
+}
+
+/// KEEP / OUT punch stamp
+struct MarkStampFlash: View {
+    let state: FrameMarkState
+    @State private var punched = false
+
+    var body: some View {
+        Text(state == .keep ? "KEEP" : "OUT")
+            .font(.system(size: 44, weight: .bold, design: .monospaced))
+            .tracking(10)
+            .foregroundColor(state == .keep ? CullPalette.amber : CullPalette.safelight)
+            .shadow(color: .black.opacity(0.65), radius: 10, y: 4)
+            .scaleEffect(punched ? 1.0 : 1.18)
+            .opacity(punched ? 1.0 : 0.0)
+            .rotationEffect(.degrees(state == .keep ? -2 : 2))
+            .onAppear {
+                withAnimation(CullMotion.stamp) { punched = true }
+            }
     }
 }
 
@@ -266,6 +336,7 @@ struct LoupeView: View {
     let touch: CGPoint
     let container: CGSize
     var diameter: CGFloat = 148
+    @State private var raised = false
 
     var body: some View {
         let imgSize = image.size
@@ -328,7 +399,12 @@ struct LoupeView: View {
                 .fill(CullPalette.amber.opacity(0.45))
                 .frame(width: 0.6, height: 10)
         }
+        .scaleEffect(raised ? 1.0 : 0.72, anchor: .bottom)
+        .opacity(raised ? 1 : 0)
         .position(pos)
+        .onAppear {
+            withAnimation(CullMotion.loupeIn) { raised = true }
+        }
     }
 }
 
@@ -719,7 +795,8 @@ private struct ContactPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .brightness(configuration.isPressed ? -0.08 : 0)
-            .animation(CullMotion.mark, value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed ? 0.985 : 1.0)
+            .animation(CullMotion.press, value: configuration.isPressed)
     }
 }
 
@@ -744,6 +821,12 @@ struct CullSessionView: View {
     @State private var loupeImage: UIImage?
     @State private var loupeLoading = false
     @State private var advanceDir: Int = 0
+    /// Film-gate slide (points). Negative = advancing forward.
+    @State private var gateOffset: CGFloat = 0
+    @State private var gateOpacity: Double = 1
+    @State private var gateScale: CGFloat = 1
+    @State private var isAdvancing = false
+    @State private var markDrawKey: Int = 0
 
     private var shots: [ShotMetadata] { session.shots }
     private var current: ShotMetadata? {
@@ -765,17 +848,20 @@ struct CullSessionView: View {
                 Color.black.ignoresSafeArea()
 
                 // Safelight / amber wash while dragging
-                if dragOffset.height < -20 {
-                    CullPalette.amber
-                        .opacity(0.06 * Double(dragProgress))
-                        .ignoresSafeArea()
-                        .allowsHitTesting(false)
-                } else if dragOffset.height > 20 {
-                    CullPalette.safelight
-                        .opacity(0.1 * Double(dragProgress))
-                        .ignoresSafeArea()
-                        .allowsHitTesting(false)
+                Group {
+                    if dragOffset.height < -20 {
+                        CullPalette.amber
+                            .opacity(0.07 * Double(dragProgress))
+                    } else if dragOffset.height > 20 {
+                        CullPalette.safelight
+                            .opacity(0.12 * Double(dragProgress))
+                    } else {
+                        Color.clear
+                    }
                 }
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+                .animation(CullMotion.wash, value: dragOffset.height)
 
                 if let shot = current {
                     cullCanvas(shot: shot, size: geo.size)
@@ -798,12 +884,10 @@ struct CullSessionView: View {
 
                 // Mark flash stamp
                 if let flashMark {
-                    Text(flashMark == .keep ? "KEEP" : "OUT")
-                        .font(.system(size: 42, weight: .bold, design: .monospaced))
-                        .tracking(8)
-                        .foregroundColor(flashMark == .keep ? CullPalette.amber : CullPalette.safelight)
-                        .shadow(color: .black.opacity(0.6), radius: 8)
-                        .transition(.opacity.combined(with: .scale(scale: 0.92)))
+                    MarkStampFlash(state: flashMark)
+                        .id(markDrawKey)
+                        .transition(.opacity)
+                        .zIndex(30)
                 }
             }
         }
@@ -880,13 +964,18 @@ struct CullSessionView: View {
                 Button { showFinish = true } label: {
                     DarkroomChip(title: "FINISH", kind: .amber, compact: true)
                 }
-                .transition(.opacity)
+                .transition(.asymmetric(
+                    insertion: .opacity.combined(with: .scale(scale: 0.92)),
+                    removal: .opacity
+                ))
             }
         }
         .padding(.horizontal, 14)
         .padding(.top, 10)
         .padding(.bottom, 14)
-        .animation(CullMotion.lever, value: progress.unmarked)
+        .animation(CullMotion.settle, value: progress.unmarked)
+        .animation(CullMotion.press, value: progress.kept)
+        .animation(CullMotion.press, value: progress.rejected)
     }
 
     private var bottomChrome: some View {
@@ -908,6 +997,8 @@ struct CullSessionView: View {
                     .foregroundColor(dragLabelColor)
                     .frame(height: 16)
                     .opacity(dragProgress > 0.15 ? 1 : 0.35)
+                    .scaleEffect(dragProgress > 0.15 ? 1.0 + dragProgress * 0.06 : 1.0)
+                    .animation(CullMotion.wash, value: dragProgress)
 
                 HStack(spacing: 14) {
                     Button { applyMark(.reject) } label: {
@@ -958,8 +1049,7 @@ struct CullSessionView: View {
                     ForEach(Array(shots.enumerated()), id: \.element.id) { i, shot in
                         let state = marks.state(for: shot.id)
                         Button {
-                            withAnimation(CullMotion.flick) { index = i }
-                            UISelectionFeedbackGenerator().selectionChanged()
+                            advance(to: i)
                         } label: {
                             ZStack {
                                 if let thumb = store.thumbnail(for: shot) {
@@ -982,6 +1072,8 @@ struct CullSessionView: View {
                                         lineWidth: i == index ? 1.2 : 0.5
                                     )
                             )
+                            .scaleEffect(i == index ? 1.06 : 1.0)
+                            .animation(CullMotion.press, value: index)
                         }
                         .buttonStyle(.plain)
                         .id(i)
@@ -990,7 +1082,7 @@ struct CullSessionView: View {
                 .padding(.horizontal, 14)
             }
             .onChange(of: index) { _, new in
-                withAnimation(CullMotion.flick) {
+                withAnimation(CullMotion.advanceIn) {
                     proxy.scrollTo(new, anchor: .center)
                 }
             }
@@ -1059,11 +1151,15 @@ struct CullSessionView: View {
                             state: state,
                             seed: seed,
                             lineWidth: 4.5,
-                            padding: size.width * 0.14
+                            padding: size.width * 0.14,
+                            animated: true
                         )
+                        .id("\(shot.id)-\(state.rawValue)-\(markDrawKey)")
                     }
-                    .offset(dragOffset)
-                    .opacity(1.0 - Double(min(0.25, abs(dragOffset.width) / 500)))
+                    .scaleEffect(gateScale)
+                    .offset(x: gateOffset + dragOffset.width, y: dragOffset.height)
+                    .opacity(gateOpacity * (1.0 - Double(min(0.28, abs(dragOffset.width) / 420))))
+                    .rotationEffect(.degrees(Double(dragOffset.width) / 80 + Double(gateOffset) / 140))
                     .gesture(cullDrag(in: size))
                     .simultaneousGesture(loupeGesture(in: size, fallback: image))
                     .onTapGesture(count: 2) { performUndo() }
@@ -1071,7 +1167,6 @@ struct CullSessionView: View {
 
             if let loupeTouch, let loupeImage {
                 LoupeView(image: loupeImage, touch: loupeTouch, container: size)
-                    .transition(.opacity)
                     .zIndex(20)
             } else if loupeLoading, let loupeTouch {
                 ProgressView()
@@ -1079,17 +1174,12 @@ struct CullSessionView: View {
                     .position(x: loupeTouch.x, y: max(60, loupeTouch.y - 90))
             }
         }
-        .id(shot.id)
-        .transition(advanceDir >= 0
-            ? .asymmetric(insertion: .move(edge: .trailing), removal: .move(edge: .leading))
-            : .asymmetric(insertion: .move(edge: .leading), removal: .move(edge: .trailing))
-        )
     }
 
     private func cullDrag(in size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 16, coordinateSpace: .local)
             .onChanged { value in
-                guard loupeTouch == nil else { return }
+                guard loupeTouch == nil, !isAdvancing else { return }
                 let startY = value.startLocation.y
                 let inThumbZone = startY > size.height * 0.52
                 if inThumbZone || abs(value.translation.height) > abs(value.translation.width) * 1.1 {
@@ -1099,7 +1189,7 @@ struct CullSessionView: View {
                 }
             }
             .onEnded { value in
-                guard loupeTouch == nil else {
+                guard loupeTouch == nil, !isAdvancing else {
                     withAnimation(CullMotion.flick) { dragOffset = .zero }
                     return
                 }
@@ -1107,15 +1197,34 @@ struct CullSessionView: View {
                 let dy = value.translation.height
                 let inThumbZone = value.startLocation.y > size.height * 0.52
 
-                withAnimation(CullMotion.flick) { dragOffset = .zero }
-
                 if abs(dy) > abs(dx) && (inThumbZone || abs(dy) > 48) {
-                    if dy < -48 { applyMark(.keep) }
-                    else if dy > 48 { applyMark(.reject) }
+                    if dy < -48 {
+                        // Commit keep — lift out the top of the gate
+                        commitDragMark(.keep, lift: CGSize(width: 0, height: -size.height * 0.12))
+                    } else if dy > 48 {
+                        commitDragMark(.reject, lift: CGSize(width: 0, height: size.height * 0.12))
+                    } else {
+                        withAnimation(CullMotion.flick) { dragOffset = .zero }
+                    }
                 } else if abs(dx) > 56 {
-                    if dx < 0 { advance(1) } else { advance(-1) }
+                    let dir = dx < 0 ? 1 : -1
+                    // Carry residual horizontal into the advance
+                    let carry = dx
+                    dragOffset = .zero
+                    advance(dir, carryX: carry)
+                } else {
+                    withAnimation(CullMotion.flick) { dragOffset = .zero }
                 }
             }
+    }
+
+    private func commitDragMark(_ state: FrameMarkState, lift: CGSize) {
+        withAnimation(CullMotion.advanceOut) {
+            dragOffset = lift
+            gateOpacity = 0.55
+            gateScale = 0.97
+        }
+        applyMark(state, alreadyLifted: true)
     }
 
     private func loupeGesture(in size: CGSize, fallback: UIImage) -> some Gesture {
@@ -1129,21 +1238,21 @@ struct CullSessionView: View {
                         Haptics.light()
                         loupeLoading = true
                         loupeImage = fallback
-                        // Upgrade to full-res asynchronously if we have a better file
                         if let shot = current, let full = store.image(for: shot) {
                             loupeImage = full
-                            loupeLoading = false
-                        } else {
-                            loupeLoading = false
                         }
+                        loupeLoading = false
                     }
-                    loupeTouch = point
+                    // Track without animating every point (keeps loupe tight to thumb)
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) { loupeTouch = point }
                 default:
                     break
                 }
             }
             .onEnded { _ in
-                withAnimation(CullMotion.loupe) {
+                withAnimation(CullMotion.loupeOut) {
                     loupeTouch = nil
                     loupeImage = nil
                     loupeLoading = false
@@ -1151,8 +1260,8 @@ struct CullSessionView: View {
             }
     }
 
-    private func applyMark(_ state: FrameMarkState) {
-        guard let shot = current else { return }
+    private func applyMark(_ state: FrameMarkState, alreadyLifted: Bool = false) {
+        guard let shot = current, !isAdvancing else { return }
         let previous = marks.state(for: shot.id)
         marks.mark(
             shotID: shot.id,
@@ -1168,20 +1277,28 @@ struct CullSessionView: View {
         )
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
 
-        withAnimation(CullMotion.mark) { flashMark = state }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-            withAnimation(CullMotion.mark) { flashMark = nil }
+        markDrawKey &+= 1
+        withAnimation(CullMotion.stamp) { flashMark = state }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) {
+            withAnimation(CullMotion.stampFade) { flashMark = nil }
         }
 
-        // Small delay so the stamp reads, then advance like a film lever
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.16) {
+        // Seat the mark, then film-advance
+        let delay: TimeInterval = alreadyLifted ? 0.18 : 0.3
+        if !alreadyLifted {
+            withAnimation(CullMotion.draw) {
+                // brief hold so the grease pencil reads
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             advance(1)
         }
     }
 
     private func performUndo() {
         guard let action = undo.pop(),
-              let shot = shots.first(where: { $0.id == action.shotID }) else { return }
+              let shot = shots.first(where: { $0.id == action.shotID }),
+              !isAdvancing else { return }
         marks.mark(
             shotID: shot.id,
             photosAssetLocalIdentifier: shot.photosAssetLocalIdentifier,
@@ -1193,22 +1310,69 @@ struct CullSessionView: View {
             favorite: action.previous == .keep
         )
         if let i = shots.firstIndex(where: { $0.id == action.shotID }) {
-            advanceDir = i < index ? -1 : 1
-            withAnimation(CullMotion.lever) { index = i }
+            advance(to: i)
         }
         UIImpactFeedbackGenerator(style: .soft).impactOccurred()
     }
 
-    private func advance(_ delta: Int) {
+    private func advance(_ delta: Int, carryX: CGFloat = 0) {
         let next = index + delta
         guard next >= 0, next < shots.count else {
-            // End of roll — if fully marked, offer finish
+            withAnimation(CullMotion.flick) {
+                dragOffset = .zero
+                gateOffset = 0
+                gateOpacity = 1
+                gateScale = 1
+            }
             if progress.unmarked == 0 { showFinish = true }
             return
         }
-        advanceDir = delta
-        withAnimation(CullMotion.lever) { index = next }
-        UISelectionFeedbackGenerator().selectionChanged()
+        advance(to: next, dir: delta, carryX: carryX)
+    }
+
+    private func advance(to next: Int, dir: Int? = nil, carryX: CGFloat = 0) {
+        guard next != index, !isAdvancing else {
+            if next == index {
+                withAnimation(CullMotion.flick) { dragOffset = .zero }
+            }
+            return
+        }
+        let width = UIScreen.main.bounds.width
+        let direction = dir ?? (next > index ? 1 : -1)
+        advanceDir = direction
+        isAdvancing = true
+
+        // 1) Current frame exits the gate (film lever out)
+        withAnimation(CullMotion.advanceOut) {
+            gateOffset = carryX + CGFloat(-direction) * width * 0.42
+            gateOpacity = 0
+            gateScale = 0.96
+            dragOffset = .zero
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.13) {
+            // 2) Swap frame while off-gate, stage incoming from the opposite side
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                index = next
+                gateOffset = CGFloat(direction) * width * 0.28
+                gateOpacity = 0.35
+                gateScale = 1.02
+            }
+
+            // 3) Seat into the gate
+            withAnimation(CullMotion.advanceIn) {
+                gateOffset = 0
+                gateOpacity = 1
+                gateScale = 1
+            }
+
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                isAdvancing = false
+            }
+            UISelectionFeedbackGenerator().selectionChanged()
+        }
     }
 
     private func finish(deleteRejects: Bool) {
