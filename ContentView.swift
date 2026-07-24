@@ -182,6 +182,11 @@ struct ContentView: View {
     @State private var showFlash = false
     @State private var showFocusPoint = false
     @State private var focusPoint: CGPoint = .zero
+    /// EV captured when the focus reticle appeared — vertical drag offsets from this.
+    @State private var focusStartEV: Float = 0
+    @State private var isDraggingExposure = false
+    @State private var focusHideWorkItem: DispatchWorkItem?
+    @State private var lastExposureHapticStep: Int = 0
     @State private var macroEnabled = false
     @State private var isCapturing = false
     @State private var isRecording = false
@@ -285,29 +290,38 @@ struct ContentView: View {
 
                         // Camera preview content (uses filtered preview when filter selected)
                         ZStack {
-                            FilteredCameraPreview(
-                                session: camera.session,
-                                filteredImage: camera.filteredPreviewImage,
-                                onTap: handleFocusTap,
-                                onPinch: { scale in
-                                    guard !isLocked else { return }
-                                    Haptics.light()
-                                    let newZoom = zoomValue * scale
-                                    zoomValue = min(max(newZoom, 0.5), 10.0)
-                                    camera.setZoom(zoomValue)
-                                    if !isManualFocusEnabled {
-                                        focusPosition = Float(zoomValue - 1) / 4.0
-                                    }
-                                },
-                                onMorphTouch: handleMorphTouch
-                            )
+                            GeometryReader { vfGeo in
+                                FilteredCameraPreview(
+                                    session: camera.session,
+                                    filteredImage: camera.filteredPreviewImage,
+                                    onTap: { point in
+                                        handleFocusTap(point, in: vfGeo.size)
+                                    },
+                                    onPinch: { scale in
+                                        guard !isLocked else { return }
+                                        Haptics.light()
+                                        let newZoom = zoomValue * scale
+                                        zoomValue = min(max(newZoom, 0.5), 10.0)
+                                        camera.setZoom(zoomValue)
+                                        if !isManualFocusEnabled {
+                                            focusPosition = Float(zoomValue - 1) / 4.0
+                                        }
+                                    },
+                                    onMorphTouch: handleMorphTouch,
+                                    exposureDragEnabled: showFocusPoint || isDraggingExposure,
+                                    onExposureDrag: handleExposureDrag
+                                )
+                                .frame(width: vfGeo.size.width, height: vfGeo.size.height)
+
+                                if showFocusPoint || isDraggingExposure {
+                                    FocusExposureReticle(exposureBias: exposureValue)
+                                        .position(focusPoint)
+                                        .allowsHitTesting(false)
+                                }
+                            }
 
                             ViewfinderOverlay(showGrid: showGrid, aspectRatio: $aspectRatio, filmFilter: $filmFilter, lensFX: $lensFX)
                             ViewfinderVignette()
-
-                            if showFocusPoint {
-                                FocusIndicator().position(focusPoint)
-                            }
 
                             if timerCountdown > 0 {
                                 Text("\(timerCountdown)")
@@ -506,16 +520,17 @@ struct ContentView: View {
         camera.selectedLensFX = lensFX
     }
 
-    private func handleFocusTap(_ point: CGPoint) {
+    private func handleFocusTap(_ point: CGPoint, in size: CGSize) {
         guard !isLocked else { return }
         Haptics.light()
         camera.setFocus(at: point)
         isManualFocusEnabled = false
-        focusPoint = CGPoint(x: point.x * UIScreen.main.bounds.width, y: point.y * 380 + 160)
+        focusPoint = CGPoint(x: point.x * size.width, y: point.y * size.height)
+        focusStartEV = exposureValue
+        lastExposureHapticStep = Int((exposureValue * 10).rounded())
+        isDraggingExposure = false
         withAnimation(.easeOut(duration: 0.15)) { showFocusPoint = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            withAnimation { showFocusPoint = false }
-        }
+        scheduleFocusHide(after: 2.8)
         // Tap also drops a decaying ripple when a morphic FX is active
         if lensFX.isTouchReactive {
             LensFXEngine.shared.setTouch(
@@ -526,9 +541,48 @@ struct ContentView: View {
         }
     }
 
+    /// iOS Camera-style sun drag: finger up brightens, down darkens.
+    private func handleExposureDrag(_ translationY: CGFloat, ended: Bool) {
+        guard !isLocked else { return }
+        if !ended {
+            isDraggingExposure = true
+            showFocusPoint = true
+            // ~140pt per EV stop; clamp to device bias range
+            let delta = -Float(translationY) / 140.0
+            let newEV = max(camera.minExposure, min(camera.maxExposure, focusStartEV + delta))
+            let step = Int((newEV * 10).rounded())
+            if step != lastExposureHapticStep {
+                lastExposureHapticStep = step
+                UISelectionFeedbackGenerator().selectionChanged()
+            }
+            exposureValue = newEV
+            camera.setExposure(newEV)
+            scheduleFocusHide(after: 2.8)
+        } else {
+            focusStartEV = exposureValue
+            isDraggingExposure = false
+            scheduleFocusHide(after: 2.2)
+        }
+    }
+
+    private func scheduleFocusHide(after delay: TimeInterval) {
+        focusHideWorkItem?.cancel()
+        let work = DispatchWorkItem {
+            withAnimation(.easeOut(duration: 0.25)) {
+                if !isDraggingExposure {
+                    showFocusPoint = false
+                }
+            }
+        }
+        focusHideWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
     /// Viewfinder drag → morph uniforms (Liquid / Chrome / Fisheye / Kaleido).
     private func handleMorphTouch(_ point: CGPoint, velocity: CGPoint, active: Bool) {
         guard !isLocked, lensFX.isTouchReactive else { return }
+        // Focus/EV scrub owns the gesture while the reticle is up
+        guard !showFocusPoint, !isDraggingExposure else { return }
         let force: CGFloat = active ? 1.0 : max(0.35, min(1.0, hypot(velocity.x, velocity.y) * 0.12))
         LensFXEngine.shared.setTouch(
             x: point.x,
@@ -1606,7 +1660,7 @@ struct Triangle: Shape {
     }
 }
 
-// MARK: - Shutter Button (brushed steel — matte metal, not chrome)
+// MARK: - Shutter Button (machined brushed steel)
 struct ShutterButton: View {
     let isCapturing: Bool
     let action: () -> Void
@@ -1616,17 +1670,18 @@ struct ShutterButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Knurled steel collar — muted, low-contrast lathe bands
+                // Knurled collar — cool steel lathe bands
                 Circle()
                     .fill(
                         AngularGradient(
                             colors: [
-                                Color(red: 0.34, green: 0.35, blue: 0.37),
-                                Color(red: 0.20, green: 0.21, blue: 0.23),
-                                Color(red: 0.30, green: 0.31, blue: 0.33),
-                                Color(red: 0.17, green: 0.18, blue: 0.19),
-                                Color(red: 0.32, green: 0.33, blue: 0.35),
-                                Color(red: 0.34, green: 0.35, blue: 0.37)
+                                Color(red: 0.48, green: 0.50, blue: 0.54),
+                                Color(red: 0.22, green: 0.23, blue: 0.26),
+                                Color(red: 0.42, green: 0.44, blue: 0.48),
+                                Color(red: 0.18, green: 0.19, blue: 0.22),
+                                Color(red: 0.46, green: 0.48, blue: 0.52),
+                                Color(red: 0.24, green: 0.25, blue: 0.28),
+                                Color(red: 0.48, green: 0.50, blue: 0.54)
                             ],
                             center: .center
                         )
@@ -1634,102 +1689,105 @@ struct ShutterButton: View {
                     .frame(width: 76, height: 76)
                     .overlay {
                         Circle()
-                            .fill(Color(red: 0.26, green: 0.27, blue: 0.29))
+                            .fill(Color(red: 0.34, green: 0.36, blue: 0.40))
                             .colorEffect(
                                 ShaderLibrary.metallicSurface(
                                     .float2(76, 76),
-                                    .float(isPressed ? 0.70 : 1.05),
-                                    .float2(0.28, 0.22)
+                                    .float(isPressed ? 0.65 : 1.0),
+                                    .float2(0.28, 0.16)
                                 )
                             )
                             .clipShape(Circle())
                             .allowsHitTesting(false)
                     }
 
+                // Bevel rim
                 Circle()
                     .stroke(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(isPressed ? 0.14 : 0.22),
-                                Color.white.opacity(0.04),
+                                Color.white.opacity(isPressed ? 0.28 : 0.42),
+                                Color(red: 0.55, green: 0.58, blue: 0.62).opacity(0.25),
                                 Color.black.opacity(0.65)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         ),
-                        lineWidth: 1.1
+                        lineWidth: 1.2
                     )
                     .frame(width: 76, height: 76)
 
-                // Recess between collar and face
+                // Recess ring
                 Circle()
-                    .stroke(Color.black.opacity(isPressed ? 0.8 : 0.55), lineWidth: isPressed ? 2.5 : 1.75)
+                    .stroke(Color.black.opacity(isPressed ? 0.8 : 0.5), lineWidth: isPressed ? 2.5 : 1.6)
                     .frame(width: 66, height: 66)
 
-                // Raised brushed-steel face
+                // Raised face — brush grain + cool metal sheen
                 ZStack {
                     Circle()
-                        .fill(Color(red: 0.24, green: 0.25, blue: 0.27))
+                        .fill(Color(red: 0.32, green: 0.34, blue: 0.38))
                         .frame(width: 60, height: 60)
                         .colorEffect(
                             ShaderLibrary.metallicSurface(
                                 .float2(60, 60),
-                                .float(isPressed ? 0.55 : 0.95),
-                                .float2(0.32, 0.28)
+                                .float(isPressed ? 0.5 : 0.9),
+                                .float2(0.30, 0.22)
                             )
                         )
                         .clipShape(Circle())
 
-                    // Soft sheen only — no screen-blend chrome hotspot
+                    // Soft metallic catch (multiply-safe, not screen chrome)
                     Circle()
                         .fill(
-                            RadialGradient(
+                            LinearGradient(
                                 colors: [
-                                    Color.white.opacity(isPressed ? 0.03 : 0.08),
-                                    Color.clear
+                                    Color.white.opacity(isPressed ? 0.10 : 0.20),
+                                    Color.clear,
+                                    Color.black.opacity(0.18)
                                 ],
-                                center: UnitPoint(x: 0.34, y: 0.30),
-                                startRadius: 0,
-                                endRadius: 30
+                                startPoint: UnitPoint(x: 0.25, y: 0.15),
+                                endPoint: UnitPoint(x: 0.8, y: 0.9)
                             )
                         )
                         .frame(width: 60, height: 60)
+                        .blendMode(.softLight)
+
+                    // Inner lathe rings
+                    ForEach(0..<5, id: \.self) { i in
+                        Circle()
+                            .stroke(Color.white.opacity(0.045), lineWidth: 0.55)
+                            .frame(width: CGFloat(52 - i * 8), height: CGFloat(52 - i * 8))
+                    }
 
                     Circle()
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(isPressed ? 0.06 : 0.16),
+                                    Color.white.opacity(isPressed ? 0.14 : 0.28),
                                     Color.clear,
-                                    Color.black.opacity(0.45)
+                                    Color.black.opacity(0.4)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
-                            lineWidth: 0.9
+                            lineWidth: 1
                         )
                         .frame(width: 58, height: 58)
 
-                    ForEach(0..<4, id: \.self) { i in
-                        Circle()
-                            .stroke(Color.white.opacity(0.035), lineWidth: 0.55)
-                            .frame(width: CGFloat(50 - i * 9), height: CGFloat(50 - i * 9))
-                    }
-
                     if isCapturing {
                         Circle()
-                            .fill(Color.white.opacity(0.10))
+                            .fill(Color.white.opacity(0.12))
                             .frame(width: 60, height: 60)
                     }
                 }
                 .scaleEffect(isPressed ? 0.95 : 1.0)
                 .shadow(
-                    color: Color.black.opacity(isPressed ? 0.25 : 0.5),
-                    radius: isPressed ? 0.5 : 3,
-                    y: isPressed ? 0 : 1.5
+                    color: Color.black.opacity(isPressed ? 0.25 : 0.55),
+                    radius: isPressed ? 0.5 : 3.5,
+                    y: isPressed ? 0 : 2
                 )
             }
-            .shadow(color: Color.black.opacity(0.5), radius: isPressed ? 2 : 6, y: isPressed ? 1 : 3)
+            .shadow(color: Color.black.opacity(0.5), radius: isPressed ? 2 : 7, y: isPressed ? 1 : 3)
             .animation(.spring(response: 0.12, dampingFraction: 0.65), value: isPressed)
         }
         .buttonStyle(PlainButtonStyle())
@@ -3257,24 +3315,53 @@ struct FilmStripThumbnail: View {
     }
 }
 
-// MARK: - Focus Indicator
-struct FocusIndicator: View {
-    @State private var scale: CGFloat = 1.3
-    @State private var opacity: Double = 1
+// MARK: - Focus + exposure reticle (iOS Camera–style)
+struct FocusExposureReticle: View {
+    let exposureBias: Float
+
+    @State private var scale: CGFloat = 1.25
+
+    /// Sun rides a short vertical track beside the box (up = brighter).
+    private var sunOffsetY: CGFloat {
+        // Map -2…+2 → +22…-22 (negative Y is up)
+        CGFloat(-exposureBias / 2.0) * 22
+    }
 
     var body: some View {
         ZStack {
-            // Brackets
             FocusBrackets()
-                .stroke(Color.white, lineWidth: 1.5)
-                .frame(width: 70, height: 70)
+                .stroke(Color(red: 1.0, green: 0.84, blue: 0.2), lineWidth: 1.6)
+                .frame(width: 72, height: 72)
+
+            // Brightness scrubber — sun + tick rail (drag anywhere on frame to drive EV)
+            HStack(spacing: 6) {
+                Spacer().frame(width: 72)
+                ZStack {
+                    Capsule()
+                        .fill(Color.white.opacity(0.22))
+                        .frame(width: 1.5, height: 44)
+
+                    Image(systemName: "sun.max.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Color(red: 1.0, green: 0.84, blue: 0.2))
+                        .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
+                        .offset(y: sunOffsetY)
+                        .animation(.interactiveSpring(response: 0.2, dampingFraction: 0.85), value: exposureBias)
+                }
+                .frame(width: 18, height: 52)
+            }
         }
         .scaleEffect(scale)
-        .opacity(opacity)
         .onAppear {
-            withAnimation(.easeOut(duration: 0.2)) { scale = 1 }
-            withAnimation(.easeIn(duration: 1).delay(0.5)) { opacity = 0 }
+            withAnimation(.easeOut(duration: 0.18)) { scale = 1 }
         }
+    }
+}
+
+/// Legacy name kept for any call sites / previews.
+struct FocusIndicator: View {
+    var body: some View {
+        FocusExposureReticle(exposureBias: 0)
     }
 }
 
