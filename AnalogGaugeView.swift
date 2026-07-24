@@ -560,25 +560,23 @@ struct AnalogDisplayPanel: View {
                 .padding(2)
 
             if compact {
-                // Minimized: focus + EV meters full width.
-                // ISO/shutter already live in the viewfinder histogram bar.
-                HStack(alignment: .center, spacing: 14) {
-                    CompactMeter(
-                        label: "FOCUS",
-                        value: CGFloat(focusPosition),
-                        display: isAutoFocus ? "AF" : String(format: "%.2f", focusPosition)
+                // Minimized: interactive FOCUS + EV scrubbers (same chrome as bottom deck)
+                HStack(alignment: .center, spacing: 4) {
+                    CompactFocusScrubber(
+                        focusPosition: $focusPosition,
+                        isAutoFocus: isAutoFocus,
+                        onChanged: onFocusChanged
                     )
                     .frame(maxWidth: .infinity)
 
-                    CompactMeter(
-                        label: "EV",
-                        value: CGFloat((exposureValue + 2) / 4),
-                        display: String(format: "%+.1f", exposureValue)
+                    CompactEVScrubber(
+                        exposureValue: $exposureValue,
+                        onChanged: onExposureChanged
                     )
                     .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
             } else {
                 // Content - centered vertically
                 HStack(spacing: 0) {
@@ -618,7 +616,99 @@ struct AnalogDisplayPanel: View {
     ]
 }
 
-// MARK: - Compact Meter (needle on a ticked track)
+// MARK: - Compact FOCUS scrubber (NativeSnapScrubber chrome)
+struct CompactFocusScrubber: View {
+    @Binding var focusPosition: Float
+    let isAutoFocus: Bool
+    let onChanged: (Float) -> Void
+
+    /// Discrete focus stops matching the FocusDial major marks (+ near / far).
+    private let stops: [Int] = Array(0...6)
+    private let stopValues: [Float] = [0.0, 0.17, 0.33, 0.5, 0.67, 0.83, 1.0]
+    private let stopLabels = [".4m", ".7m", "1m", "3m", "5m", "10m", "∞"]
+
+    private var selection: Binding<Int> {
+        Binding(
+            get: {
+                let idx = stopValues.enumerated().min(by: {
+                    abs($0.element - focusPosition) < abs($1.element - focusPosition)
+                })?.offset ?? 3
+                return idx
+            },
+            set: { newIdx in
+                let clamped = min(max(newIdx, 0), stopValues.count - 1)
+                focusPosition = stopValues[clamped]
+            }
+        )
+    }
+
+    var body: some View {
+        NativeSnapScrubber(
+            label: "FOCUS",
+            values: stops,
+            selection: selection,
+            sideLabelWidth: 28,
+            tickCount: 14,
+            title: { idx in
+                let safe = min(max(idx, 0), stopLabels.count - 1)
+                if isAutoFocus {
+                    let current = stopValues.enumerated().min(by: {
+                        abs($0.element - focusPosition) < abs($1.element - focusPosition)
+                    })?.offset ?? 3
+                    if safe == current { return "AF" }
+                }
+                return stopLabels[safe]
+            },
+            onChanged: { idx in
+                let value = stopValues[min(max(idx, 0), stopValues.count - 1)]
+                onChanged(value)
+            }
+        )
+    }
+}
+
+// MARK: - Compact EV scrubber (NativeSnapScrubber chrome)
+struct CompactEVScrubber: View {
+    @Binding var exposureValue: Float
+    let onChanged: (Float) -> Void
+
+    private let stops: [Int] = Array(0...8)
+    private let stopValues: [Float] = [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]
+
+    private var selection: Binding<Int> {
+        Binding(
+            get: {
+                stopValues.enumerated().min(by: {
+                    abs($0.element - exposureValue) < abs($1.element - exposureValue)
+                })?.offset ?? 4
+            },
+            set: { newIdx in
+                let clamped = min(max(newIdx, 0), stopValues.count - 1)
+                exposureValue = stopValues[clamped]
+            }
+        )
+    }
+
+    var body: some View {
+        NativeSnapScrubber(
+            label: "EV",
+            values: stops,
+            selection: selection,
+            sideLabelWidth: 28,
+            tickCount: 14,
+            title: { idx in
+                let v = stopValues[min(max(idx, 0), stopValues.count - 1)]
+                return String(format: "%+.1f", v)
+            },
+            onChanged: { idx in
+                let value = stopValues[min(max(idx, 0), stopValues.count - 1)]
+                onChanged(value)
+            }
+        )
+    }
+}
+
+// MARK: - Compact Meter (needle on a ticked track) — kept for other readouts
 struct CompactMeter: View {
     let label: String
     let value: CGFloat  // 0...1 needle position
@@ -643,7 +733,6 @@ struct CompactMeter: View {
                 let clamped = min(max(value, 0), 1)
 
                 ZStack(alignment: .leading) {
-                    // Tick marks — yellow majors / softer minors + end caps
                     Canvas { ctx, size in
                         let tickCount = max(11, Int(size.width / 12))
                         for i in 0..<tickCount {
@@ -663,7 +752,6 @@ struct CompactMeter: View {
                         }
                     }
 
-                    // Track line with subtle yellow wash
                     Rectangle()
                         .fill(
                             LinearGradient(
@@ -677,9 +765,7 @@ struct CompactMeter: View {
                             )
                         )
                         .frame(height: 1)
-                        .offset(y: 0)
 
-                    // Needle
                     Capsule()
                         .fill(Color(red: 1.0, green: 0.62, blue: 0.3))
                         .frame(width: 2, height: 12)

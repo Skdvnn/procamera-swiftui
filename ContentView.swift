@@ -218,12 +218,12 @@ struct ContentView: View {
     private let isoValues = [100, 200, 400, 800, 1600, 3200]
     private let focalLengths = [13, 24, 48, 120]
 
-    /// Shared collapsed chrome metrics — keep histogram above the fade.
+    /// Shared collapsed chrome metrics — histogram floats above fade/deck.
     private enum CollapsedChrome {
         static let deckHeight: CGFloat = 88
         static let fadeHeight: CGFloat = 48
-        /// Pad so the glass info bar sits in the clear zone above the fade.
-        static var histogramBottomPad: CGFloat { deckHeight + 10 }
+        /// Bottom pad for the glass bar when drawn *on top of* the fade (above deck).
+        static var histogramBottomPad: CGFloat { deckHeight + 6 }
     }
 
     private var shutterStyle: ShutterButtonStyle {
@@ -292,15 +292,15 @@ struct ContentView: View {
                     )
                     .frame(height: topPanelHeight)
                     .padding(.horizontal, DS.pageMargin)
-                    // Swipe up to minimize the dial deck, down to restore.
-                    .gesture(deckSwipe(collapseOnSwipeUp: true) { topCollapsed = $0 })
+                    // Swipe up to minimize — simultaneous so compact scrubbers stay interactive
+                    .simultaneousGesture(deckSwipe(collapseOnSwipeUp: true) { topCollapsed = $0 })
 
                     Spacer().frame(height: gaugeToViewfinderSpacing)
 
                     // VIEWFINDER — when bottom is collapsed, feed runs under the shutter
                     // with a bottom gradient + compact controls overlaid.
                     ZStack(alignment: .bottom) {
-                        viewfinderFrame()
+                        viewfinderFrame(showHistogram: !bottomCollapsed)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .layoutPriority(1)
                             .padding(.horizontal, bottomCollapsed ? 6 : DS.pageMargin)
@@ -313,6 +313,32 @@ struct ContentView: View {
                                         removal: .opacity.combined(with: .offset(y: 16))
                                     )
                                 )
+                                .zIndex(1)
+
+                            // Glass histogram sits ON TOP of the fade (above shutter deck)
+                            VStack {
+                                Spacer().allowsHitTesting(false)
+                                RefractiveGlassInfoBar(
+                                    iso: isoValue,
+                                    shutterSpeed: shutterSpeeds[shutterSpeedIndex],
+                                    histogram: camera.histogramBins,
+                                    aperture: apertureValue,
+                                    photoCount: photoCount,
+                                    exposureValue: exposureValue,
+                                    captureFormat: captureFormat
+                                )
+                                .padding(.horizontal, 14)
+                                .padding(.bottom, CollapsedChrome.histogramBottomPad)
+                                .contentShape(Rectangle())
+                                .simultaneousGesture(bottomDeckSwipe)
+                            }
+                            .transition(
+                                .asymmetric(
+                                    insertion: .opacity.combined(with: .offset(y: 10)),
+                                    removal: .opacity
+                                )
+                            )
+                            .zIndex(2)
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -516,7 +542,7 @@ struct ContentView: View {
     // MARK: - Viewfinder chrome
 
     @ViewBuilder
-    private func viewfinderFrame() -> some View {
+    private func viewfinderFrame(showHistogram: Bool = true) -> some View {
         ZStack {
             RoundedRectangle(cornerRadius: bottomCollapsed ? 10 : 8)
                 .fill(Color.black)
@@ -565,24 +591,25 @@ struct ContentView: View {
                     LongExposureProgressOverlay(progress: camera.longExposureProgress)
                 }
 
-                // Histogram bar — gesture only on the bar (not a full-frame hit sink)
-                VStack {
-                    Spacer().allowsHitTesting(false)
-                    RefractiveGlassInfoBar(
-                        iso: isoValue,
-                        shutterSpeed: shutterSpeeds[shutterSpeedIndex],
-                        histogram: camera.histogramBins,
-                        aperture: apertureValue,
-                        photoCount: photoCount,
-                        exposureValue: exposureValue,
-                        captureFormat: captureFormat
-                    )
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, bottomCollapsed ? CollapsedChrome.histogramBottomPad : 8)
-                    .contentShape(Rectangle())
-                    .simultaneousGesture(bottomDeckSwipe)
+                // Histogram inside frame only when expanded; collapsed draws it above the fade
+                if showHistogram {
+                    VStack {
+                        Spacer().allowsHitTesting(false)
+                        RefractiveGlassInfoBar(
+                            iso: isoValue,
+                            shutterSpeed: shutterSpeeds[shutterSpeedIndex],
+                            histogram: camera.histogramBins,
+                            aperture: apertureValue,
+                            photoCount: photoCount,
+                            exposureValue: exposureValue,
+                            captureFormat: captureFormat
+                        )
+                        .padding(.horizontal, 8)
+                        .padding(.bottom, 8)
+                        .contentShape(Rectangle())
+                        .simultaneousGesture(bottomDeckSwipe)
+                    }
                 }
-                .allowsHitTesting(true)
 
                 if !bottomCollapsed {
                     VStack {
@@ -1226,6 +1253,8 @@ struct NativeSnapScrubber<Value: Hashable>: View {
 
     @State private var scrollID: Value?
     @State private var isScrolling = false
+    /// Blocks scrollID↔selection sync until ScrollView finishes first layout (avoids launch animator stack overflow).
+    @State private var scrubberReady = false
 
     private var currentIndex: Int {
         values.firstIndex(of: selection) ?? 0
@@ -1255,38 +1284,38 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                     .stroke(Color(hex: "444444"), lineWidth: 0.5)
                     .padding(2)
 
-                // Liquid-glass active pill (iOS tab / hamburger language)
-                if isScrolling {
-                    Capsule()
-                        .fill(.ultraThinMaterial)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 6)
-                        .overlay {
-                            Capsule()
-                                .stroke(
-                                    LinearGradient(
-                                        colors: [
-                                            DS.accent.opacity(0.55),
-                                            Color.white.opacity(0.2),
-                                            DS.accent.opacity(0.25)
-                                        ],
-                                        startPoint: .topLeading,
-                                        endPoint: .bottomTrailing
-                                    ),
-                                    lineWidth: 0.8
-                                )
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                        }
-                        .shadow(color: DS.accent.opacity(0.18), radius: 6, y: 0)
-                        .transition(.opacity.combined(with: .scale(scale: 0.96)))
-                }
+                // Liquid-glass active pill — opacity only (no transition/scale animator stack)
+                Capsule()
+                    .fill(.ultraThinMaterial)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .overlay {
+                        Capsule()
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        DS.accent.opacity(0.55),
+                                        Color.white.opacity(0.2),
+                                        DS.accent.opacity(0.25)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 0.8
+                            )
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                    }
+                    .shadow(color: DS.accent.opacity(isScrolling ? 0.18 : 0), radius: 6, y: 0)
+                    .opacity(isScrolling ? 1 : 0)
+                    .allowsHitTesting(false)
 
-                // Tick marks + center indicator (original aesthetic)
+                // Tick marks — yellow majors (match top meters)
                 Canvas { ctx, size in
                     let usableWidth = size.width - 24
                     let spacing = usableWidth / CGFloat(max(tickCount - 1, 1))
                     let centerX = size.width / 2
+                    let yellow = Color(red: 1.0, green: 0.85, blue: 0.35)
 
                     for i in 0..<tickCount {
                         let x = 12 + CGFloat(i) * spacing
@@ -1294,7 +1323,10 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                         let isMajor = i % 4 == 0
                         let h: CGFloat = isMajor ? 5 : 3
                         let rect = CGRect(x: x - 0.5, y: size.height - h - 4, width: 1, height: h)
-                        ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.25 : 0.1)))
+                        ctx.fill(
+                            Path(rect),
+                            with: .color(yellow.opacity(isMajor ? (isScrolling ? 0.7 : 0.4) : 0.18))
+                        )
                     }
 
                     let indicatorHeight: CGFloat = isScrolling ? 14 : 10
@@ -1305,10 +1337,10 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                         width: indicatorWidth,
                         height: indicatorHeight
                     )
-                    let indicatorColor = isScrolling
-                        ? Color(red: 1.0, green: 0.85, blue: 0.35)
-                        : Color.white.opacity(0.7)
-                    ctx.fill(Path(indicatorRect), with: .color(indicatorColor))
+                    ctx.fill(
+                        Path(indicatorRect),
+                        with: .color(isScrolling ? yellow : yellow.opacity(0.75))
+                    )
                 }
                 .allowsHitTesting(false)
 
@@ -1334,10 +1366,8 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                         Text(title(selection))
                             .font(.system(size: 12, weight: .bold, design: .monospaced))
                             .foregroundColor(isScrolling ? DS.accent : .white)
-                            .scaleEffect(isScrolling ? 1.12 : 1.0)
+                            .scaleEffect(isScrolling ? 1.08 : 1.0)
                             .contentTransition(.numericText())
-                            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: selection)
-                            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isScrolling)
 
                         if let suffix {
                             Text(suffix)
@@ -1378,24 +1408,25 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                 .contentShape(Rectangle())
             }
         }
-        .onAppear { scrollID = selection }
+        .onAppear {
+            scrollID = selection
+            // Ignore scrollPosition settle noise before first layout finishes
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                scrubberReady = true
+            }
+        }
         .onChange(of: selection) { _, newValue in
             if scrollID != newValue { scrollID = newValue }
         }
         .onChange(of: scrollID) { _, newValue in
-            guard let newValue, newValue != selection else { return }
-            withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
-                isScrolling = true
-            }
+            guard scrubberReady, let newValue, newValue != selection else { return }
+            isScrolling = true
             selection = newValue
             onChanged(newValue)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) {
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.86)) {
-                    isScrolling = false
-                }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                isScrolling = false
             }
         }
-        .animation(.spring(response: 0.28, dampingFraction: 0.86), value: isScrolling)
         .sensoryFeedback(.selection, trigger: selection)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
@@ -1787,13 +1818,13 @@ struct ShutterButton: View {
                     metalShutter
                 }
             }
-            .animation(.spring(response: 0.22, dampingFraction: 0.86), value: isPressed)
         }
         .buttonStyle(PlainButtonStyle())
         .simultaneousGesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in
                     if !isPressed {
+                        // No withAnimation around shader trees — avoids MetadataCache stack overflow
                         isPressed = true
                         let impact = UIImpactFeedbackGenerator(style: .heavy)
                         impact.impactOccurred(intensity: 0.8)
@@ -1808,10 +1839,11 @@ struct ShutterButton: View {
         .disabled(isCapturing)
     }
 
-    /// Black Nikon / vulcanite + liquid glass — press deepens material, no thin-out scale.
+    /// Black Nikon / vulcanite + liquid glass — press deepens glass, no thin-out scale.
+    /// Shader args stay constant (never animated) to avoid stitchable animator crashes.
     private var classicShutter: some View {
         ZStack {
-            // Knurled black collar
+            // Knurled black collar + static vulcanite grain
             Circle()
                 .fill(
                     AngularGradient(
@@ -1834,7 +1866,7 @@ struct ShutterButton: View {
                         .colorEffect(
                             ShaderLibrary.vulcaniteTexture(
                                 .float(28),
-                                .float(isPressed ? 1.15 : 0.95)
+                                .float(1.0)
                             )
                         )
                         .clipShape(Circle())
@@ -1845,7 +1877,7 @@ struct ShutterButton: View {
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(isPressed ? 0.28 : 0.42),
+                                    Color.white.opacity(0.38),
                                     Color.white.opacity(0.06),
                                     Color.black.opacity(0.85)
                                 ],
@@ -1856,104 +1888,103 @@ struct ShutterButton: View {
                         )
                 }
 
-            // Liquid glass rim (iOS tab-bar language)
+            // Liquid glass bezel — thick material ring that reads on black
             Circle()
-                .fill(.ultraThinMaterial)
-                .frame(width: 68, height: 68)
-                .opacity(isPressed ? 0.55 : 0.72)
+                .stroke(.ultraThinMaterial, lineWidth: 7)
+                .frame(width: 69, height: 69)
                 .overlay {
                     Circle()
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(isPressed ? 0.55 : 0.38),
-                                    Color.white.opacity(0.08),
-                                    Color.white.opacity(0.18)
+                                    Color.white.opacity(isPressed ? 0.65 : 0.45),
+                                    Color.white.opacity(0.12),
+                                    Color.white.opacity(isPressed ? 0.35 : 0.2)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
-                            lineWidth: isPressed ? 1.35 : 1.0
+                            lineWidth: 1.4
                         )
+                        .frame(width: 76, height: 76)
                 }
-                .shadow(color: Color.white.opacity(isPressed ? 0.12 : 0.06), radius: isPressed ? 6 : 3)
+                .shadow(color: Color.white.opacity(isPressed ? 0.22 : 0.1), radius: isPressed ? 8 : 4)
 
-            // Recess ring
+            // Recess
             Circle()
-                .stroke(Color.black.opacity(isPressed ? 0.9 : 0.65), lineWidth: isPressed ? 2.4 : 1.6)
-                .frame(width: 64, height: 64)
+                .stroke(Color.black.opacity(isPressed ? 0.92 : 0.7), lineWidth: isPressed ? 2.2 : 1.5)
+                .frame(width: 62, height: 62)
 
-            // Vulcanite face — no scale thin-out on press
+            // Face: vulcanite + glass sheet on top
             ZStack {
                 Circle()
                     .fill(Color(white: 0.07))
-                    .frame(width: 58, height: 58)
+                    .frame(width: 56, height: 56)
                     .colorEffect(
                         ShaderLibrary.vulcaniteTexture(
                             .float(36),
-                            .float(isPressed ? 1.25 : 1.0)
+                            .float(1.05)
                         )
                     )
                     .clipShape(Circle())
-                    .brightness(isPressed ? -0.04 : 0)
+                    .brightness(isPressed ? -0.05 : 0)
 
+                // Liquid glass face plate
                 Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(isPressed ? 0.18 : 0.10),
-                                Color.clear,
-                                Color.black.opacity(isPressed ? 0.45 : 0.28)
-                            ],
-                            startPoint: UnitPoint(x: 0.25, y: 0.12),
-                            endPoint: UnitPoint(x: 0.85, y: 0.9)
-                        )
-                    )
-                    .frame(width: 58, height: 58)
-                    .blendMode(.softLight)
-
-                // Glass specular crest (brightens on press like liquid glass)
-                Ellipse()
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                Color.white.opacity(isPressed ? 0.28 : 0.14),
-                                Color.clear
-                            ],
-                            center: UnitPoint(x: 0.35, y: 0.28),
-                            startRadius: 0,
-                            endRadius: 16
-                        )
-                    )
-                    .frame(width: 34, height: 20)
-                    .offset(x: -3, y: -7)
-                    .blendMode(.plusLighter)
-
-                ForEach(0..<3, id: \.self) { i in
-                    Circle()
-                        .stroke(Color.white.opacity(0.04), lineWidth: 0.5)
-                        .frame(width: CGFloat(48 - i * 10), height: CGFloat(48 - i * 10))
-                }
-
-                Circle()
-                    .stroke(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(isPressed ? 0.35 : 0.22),
-                                Color.clear,
-                                Color.black.opacity(0.55)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
+                    .fill(.ultraThinMaterial)
                     .frame(width: 56, height: 56)
+                    .opacity(isPressed ? 0.42 : 0.28)
+                    .overlay {
+                        Circle()
+                            .fill(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(isPressed ? 0.32 : 0.18),
+                                        Color.clear,
+                                        Color.black.opacity(isPressed ? 0.35 : 0.2)
+                                    ],
+                                    startPoint: UnitPoint(x: 0.25, y: 0.1),
+                                    endPoint: UnitPoint(x: 0.85, y: 0.9)
+                                )
+                            )
+                    }
+                    .overlay {
+                        Ellipse()
+                            .fill(
+                                RadialGradient(
+                                    colors: [
+                                        Color.white.opacity(isPressed ? 0.4 : 0.22),
+                                        Color.clear
+                                    ],
+                                    center: UnitPoint(x: 0.35, y: 0.28),
+                                    startRadius: 0,
+                                    endRadius: 16
+                                )
+                            )
+                            .frame(width: 32, height: 18)
+                            .offset(x: -3, y: -6)
+                            .blendMode(.plusLighter)
+                    }
+                    .overlay {
+                        Circle()
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(isPressed ? 0.5 : 0.3),
+                                        Color.clear,
+                                        Color.black.opacity(0.45)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1
+                            )
+                    }
 
                 if isCapturing {
                     Circle()
                         .fill(Color.white.opacity(0.1))
-                        .frame(width: 58, height: 58)
+                        .frame(width: 56, height: 56)
                 }
             }
             .shadow(color: Color.black.opacity(isPressed ? 0.55 : 0.4), radius: isPressed ? 1 : 3, y: isPressed ? 0.5 : 1.5)
@@ -1986,12 +2017,13 @@ struct ShutterButton: View {
                         .colorEffect(
                             ShaderLibrary.metallicSurface(
                                 .float2(76, 76),
-                                .float(isPressed ? 0.7 : 1.05),
+                                .float(1.0),
                                 .float2(0.26, 0.14)
                             )
                         )
                         .clipShape(Circle())
                         .allowsHitTesting(false)
+                        .brightness(isPressed ? -0.04 : 0)
                 }
                 .overlay {
                     Circle()
@@ -2037,11 +2069,12 @@ struct ShutterButton: View {
                     .colorEffect(
                         ShaderLibrary.metallicSurface(
                             .float2(60, 60),
-                            .float(isPressed ? 0.55 : 0.95),
+                            .float(0.95),
                             .float2(0.28, 0.20)
                         )
                     )
                     .clipShape(Circle())
+                    .brightness(isPressed ? -0.05 : 0)
 
                 Circle()
                     .fill(
@@ -2102,8 +2135,6 @@ struct ShutterButton: View {
                         .frame(width: 60, height: 60)
                 }
             }
-            // Metal keeps a slight press settle without the old thin 0.95 shrink
-            .brightness(isPressed ? -0.03 : 0)
             .shadow(color: Color.black.opacity(isPressed ? 0.3 : 0.5), radius: isPressed ? 0.5 : 2.5, y: isPressed ? 0 : 1.5)
         }
         .shadow(color: Color.black.opacity(isPressed ? 0.35 : 0.55), radius: isPressed ? 2 : 5, y: isPressed ? 1 : 2.5)
