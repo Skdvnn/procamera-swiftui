@@ -221,8 +221,23 @@ struct ContentView: View {
     private enum CollapsedChrome {
         static let deckHeight: CGFloat = 88
         static let fadeHeight: CGFloat = 48
-        /// Bottom pad for the glass bar when drawn *on top of* the fade (above deck).
-        static var histogramBottomPad: CGFloat { deckHeight + 6 }
+        /// Approximate RefractiveGlassInfoBar height (pad + hist + readouts).
+        static let infoBarHeight: CGFloat = 56
+        /// Gap between histogram bottom and shutter deck top when collapsed.
+        static let histDeckGap: CGFloat = 8
+        /// Expanded: keep histogram inside the viewfinder, clear of the deck below.
+        static let expandedHistogramBottomPad: CGFloat = 14
+        /// Gap between viewfinder bottom and expanded shutter deck.
+        static let viewfinderToDeckGap: CGFloat = 5
+
+        static func bottomPad(safeBottom: CGFloat) -> CGFloat {
+            max(safeBottom * 0.55, 8)
+        }
+
+        /// Lift the glass bar above the safe-area strip + shutter deck.
+        static func histogramBottomPad(safeBottom: CGFloat) -> CGFloat {
+            deckHeight + bottomPad(safeBottom: safeBottom) + histDeckGap
+        }
     }
 
     private var deckCollapseSpring: Animation {
@@ -237,7 +252,7 @@ struct ContentView: View {
             // Layout measurements — top collapse keeps FOCUS/EV strip as the hero
             let topPanelHeight: CGFloat = topCollapsed ? 52 : 110
             let gaugeToViewfinderSpacing: CGFloat = topCollapsed ? 4 : 5
-            let viewfinderToControlsSpacing: CGFloat = 5
+            let viewfinderToControlsSpacing: CGFloat = CollapsedChrome.viewfinderToDeckGap
 
             ZStack(alignment: .top) {
                 // Diamond/crosshatch texture background like Leica camera grip
@@ -310,23 +325,21 @@ struct ContentView: View {
                                 )
                                 .zIndex(1)
 
-                            // Glass histogram sits ON TOP of the fade (above shutter deck)
-                            VStack {
-                                Spacer().allowsHitTesting(false)
-                                RefractiveGlassInfoBar(
-                                    iso: isoValue,
-                                    shutterSpeed: shutterSpeeds[shutterSpeedIndex],
-                                    histogram: camera.histogramBins,
-                                    aperture: apertureValue,
-                                    photoCount: photoCount,
-                                    exposureValue: exposureValue,
-                                    captureFormat: captureFormat
-                                )
-                                .padding(.horizontal, 14)
-                                .padding(.bottom, CollapsedChrome.histogramBottomPad)
-                                .contentShape(Rectangle())
-                                .simultaneousGesture(bottomDeckSwipe)
-                            }
+                            // Glass histogram ON TOP of the fade, ABOVE the shutter deck —
+                            // bottom-aligned overlay only (not a full-frame VStack hit sink).
+                            RefractiveGlassInfoBar(
+                                iso: isoValue,
+                                shutterSpeed: shutterSpeeds[shutterSpeedIndex],
+                                histogram: camera.histogramBins,
+                                aperture: apertureValue,
+                                photoCount: photoCount,
+                                exposureValue: exposureValue,
+                                captureFormat: captureFormat
+                            )
+                            .padding(.horizontal, 14)
+                            .padding(.bottom, CollapsedChrome.histogramBottomPad(safeBottom: safeBottom))
+                            .contentShape(Rectangle())
+                            .simultaneousGesture(bottomDeckSwipe)
                             .transition(
                                 .asymmetric(
                                     insertion: .opacity.combined(with: .offset(y: 10)),
@@ -335,6 +348,16 @@ struct ContentView: View {
                             )
                             .zIndex(2)
                         }
+
+                        // Film / Lens FX / aspect ALWAYS above fade + histogram so they stay tappable
+                        ViewfinderOverlay(
+                            showGrid: showGrid,
+                            aspectRatio: $aspectRatio,
+                            filmFilter: $filmFilter,
+                            lensFX: $lensFX
+                        )
+                        .padding(.horizontal, bottomCollapsed ? 6 : DS.pageMargin)
+                        .zIndex(40)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .layoutPriority(1)
@@ -586,7 +609,8 @@ struct ContentView: View {
                     LongExposureProgressOverlay(progress: camera.longExposureProgress)
                 }
 
-                // Histogram inside frame only when expanded; collapsed draws it above the fade
+                // Histogram inside frame only when expanded — sits above the deck
+                // (deck is a separate VStack sibling below the viewfinder, not overlaid).
                 if showHistogram {
                     VStack {
                         Spacer().allowsHitTesting(false)
@@ -600,10 +624,13 @@ struct ContentView: View {
                             captureFormat: captureFormat
                         )
                         .padding(.horizontal, 8)
-                        .padding(.bottom, 8)
+                        // Keep clear of the viewfinder bottom edge / swipe strip so it
+                        // never reads as overlapping the expanded shutter row below.
+                        .padding(.bottom, CollapsedChrome.expandedHistogramBottomPad)
                         .contentShape(Rectangle())
                         .simultaneousGesture(bottomDeckSwipe)
                     }
+                    .zIndex(5)
                 }
 
                 if !bottomCollapsed {
@@ -615,11 +642,10 @@ struct ContentView: View {
                             .contentShape(Rectangle())
                             .simultaneousGesture(bottomDeckSwipe)
                     }
+                    .zIndex(4)
                 }
 
-                // Chrome (film / FX / gear) above swipe layers so icons stay tappable
-                ViewfinderOverlay(showGrid: showGrid, aspectRatio: $aspectRatio, filmFilter: $filmFilter, lensFX: $lensFX)
-                    .zIndex(20)
+                // Chrome moved to parent ZStack (above collapsed fade) so FX stays tappable.
 
                 // Inner inset shadows — never steal focus / film / FX hits
                 VStack(spacing: 0) {
@@ -656,37 +682,48 @@ struct ContentView: View {
         }
     }
 
-    /// Compact shutter row floating on a bottom gradient — feed shows through underneath.
+    /// Compact shutter row — gradient runs UNDER the controls (not only above them).
     private func collapsedBottomOverlay(safeBottom: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 0)
-                .allowsHitTesting(false)
+        let bottomPad = CollapsedChrome.bottomPad(safeBottom: safeBottom)
+        let underlayHeight = CollapsedChrome.fadeHeight + CollapsedChrome.deckHeight + bottomPad
 
-            // Single soft fade below the histogram — no double black stack
+        return ZStack(alignment: .bottom) {
+            // Soft fade under the whole bottom chrome band (fade + deck + home indicator)
             LinearGradient(
                 colors: [
                     Color.clear,
-                    Color.black.opacity(0.45),
-                    Color.black.opacity(0.82)
+                    Color.black.opacity(0.35),
+                    Color.black.opacity(0.75),
+                    Color.black.opacity(0.92)
                 ],
                 startPoint: .top,
                 endPoint: .bottom
             )
-            .frame(height: CollapsedChrome.fadeHeight)
+            .frame(height: underlayHeight)
             .allowsHitTesting(false)
 
-            bottomCompactDeck
-                .offset(y: bottomDeckDrag * 0.12)
-                .opacity(1.0 - min(abs(bottomDeckDrag) / 90.0, 0.45))
-                .contentShape(Rectangle())
-                .gesture(bottomDeckSwipe)
-                .background(Color.black.opacity(0.88))
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                    .allowsHitTesting(false)
 
-            Color.clear
-                .frame(height: max(safeBottom * 0.55, 8))
-                .frame(maxWidth: .infinity)
-                .contentShape(Rectangle())
-                .gesture(bottomDeckSwipe)
+                // Reserve the fade band so the deck sits below it; gradient paints underneath
+                Color.clear
+                    .frame(height: CollapsedChrome.fadeHeight)
+                    .allowsHitTesting(false)
+
+                bottomCompactDeck
+                    .frame(minHeight: CollapsedChrome.deckHeight)
+                    .offset(y: bottomDeckDrag * 0.12)
+                    .opacity(1.0 - min(abs(bottomDeckDrag) / 90.0, 0.45))
+                    .contentShape(Rectangle())
+                    .gesture(bottomDeckSwipe)
+
+                Color.clear
+                    .frame(height: bottomPad)
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                    .gesture(bottomDeckSwipe)
+            }
         }
         .frame(maxWidth: .infinity)
     }
@@ -756,7 +793,6 @@ struct ContentView: View {
         }
         .padding(.horizontal, DS.pageMargin)
         .padding(.vertical, 6)
-        .frame(minHeight: CollapsedChrome.deckHeight - CollapsedChrome.fadeHeight + 28)
         .contentShape(Rectangle())
     }
 
