@@ -13,6 +13,10 @@ struct FilteredCameraPreview: UIViewRepresentable {
     /// Drag / press on the viewfinder for morphic Lens FX.
     /// point: normalized UIKit (0…1), velocity: normalized deltas, active: finger down.
     var onMorphTouch: ((CGPoint, CGPoint, Bool) -> Void)?
+    /// When true, vertical pans scrub exposure (iOS Camera sun-drag) instead of morph.
+    var exposureDragEnabled: Bool = false
+    /// translation.height in points (finger down = positive), ended flag.
+    var onExposureDrag: ((CGFloat, Bool) -> Void)?
 
     func makeUIView(context: Context) -> FilteredPreviewView {
         let view = FilteredPreviewView()
@@ -25,8 +29,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
         let pinchGesture = UIPinchGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePinch(_:)))
         view.addGestureRecognizer(pinchGesture)
 
-        // Pan drives morph FX; allow simultaneous recognition with tap/pinch
-        // so a short tap still focuses and a drag warps the shader.
+        // Pan drives exposure scrub (after focus) or morph FX.
         let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
         panGesture.maximumNumberOfTouches = 2
         panGesture.delegate = context.coordinator
@@ -44,30 +47,52 @@ struct FilteredCameraPreview: UIViewRepresentable {
         context.coordinator.onTap = onTap
         context.coordinator.onPinch = onPinch
         context.coordinator.onMorphTouch = onMorphTouch
+        context.coordinator.exposureDragEnabled = exposureDragEnabled
+        context.coordinator.onExposureDrag = onExposureDrag
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(onTap: onTap, onPinch: onPinch, onMorphTouch: onMorphTouch)
+        Coordinator(
+            onTap: onTap,
+            onPinch: onPinch,
+            onMorphTouch: onMorphTouch,
+            exposureDragEnabled: exposureDragEnabled,
+            onExposureDrag: onExposureDrag
+        )
     }
 
     class Coordinator: NSObject, UIGestureRecognizerDelegate {
         var onTap: ((CGPoint) -> Void)?
         var onPinch: ((CGFloat) -> Void)?
         var onMorphTouch: ((CGPoint, CGPoint, Bool) -> Void)?
+        var exposureDragEnabled: Bool
+        var onExposureDrag: ((CGFloat, Bool) -> Void)?
         var lastScale: CGFloat = 1.0
         weak var tapGesture: UITapGestureRecognizer?
         weak var panGesture: UIPanGestureRecognizer?
         private var lastPanTime: CFAbsoluteTime = 0
         private var lastPanPoint: CGPoint = .zero
+        /// Once a pan chooses exposure vs morph, stick with it until lift.
+        private var panMode: PanMode = .undecided
+
+        private enum PanMode {
+            case undecided
+            case exposure
+            case morph
+        }
 
         init(
             onTap: ((CGPoint) -> Void)?,
             onPinch: ((CGFloat) -> Void)?,
-            onMorphTouch: ((CGPoint, CGPoint, Bool) -> Void)?
+            onMorphTouch: ((CGPoint, CGPoint, Bool) -> Void)?,
+            exposureDragEnabled: Bool,
+            onExposureDrag: ((CGFloat, Bool) -> Void)?
         ) {
             self.onTap = onTap
             self.onPinch = onPinch
             self.onMorphTouch = onMorphTouch
+            self.exposureDragEnabled = exposureDragEnabled
+            self.onExposureDrag = onExposureDrag
         }
 
         func gestureRecognizer(
@@ -108,6 +133,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
                 x: min(1, max(0, location.x / view.bounds.width)),
                 y: min(1, max(0, location.y / view.bounds.height))
             )
+            let translation = gesture.translation(in: view) // CGPoint (x/y), not CGSize
 
             let now = CFAbsoluteTimeGetCurrent()
             var velocity = CGPoint.zero
@@ -116,28 +142,53 @@ struct FilteredCameraPreview: UIViewRepresentable {
             case .began:
                 lastPanTime = now
                 lastPanPoint = point
-                onMorphTouch?(point, .zero, true)
+                panMode = .undecided
+                if exposureDragEnabled {
+                    panMode = .exposure
+                    onExposureDrag?(translation.y, false)
+                } else {
+                    panMode = .morph
+                    onMorphTouch?(point, .zero, true)
+                }
 
             case .changed:
-                let dt = max(1.0 / 120.0, now - lastPanTime)
-                velocity = CGPoint(
-                    x: (point.x - lastPanPoint.x) / CGFloat(dt),
-                    y: (point.y - lastPanPoint.y) / CGFloat(dt)
-                )
-                // Clamp runaway values from tiny dt spikes
-                velocity.x = min(8, max(-8, velocity.x))
-                velocity.y = min(8, max(-8, velocity.y))
-                lastPanTime = now
-                lastPanPoint = point
-                onMorphTouch?(point, velocity, true)
+                if panMode == .undecided {
+                    // Prefer exposure when focus reticle is up; otherwise morph after a hint of movement
+                    if exposureDragEnabled && abs(translation.y) >= abs(translation.x) {
+                        panMode = .exposure
+                    } else {
+                        panMode = .morph
+                        onMorphTouch?(point, .zero, true)
+                    }
+                }
+
+                if panMode == .exposure {
+                    onExposureDrag?(translation.y, false)
+                } else {
+                    let dt = max(1.0 / 120.0, now - lastPanTime)
+                    velocity = CGPoint(
+                        x: (point.x - lastPanPoint.x) / CGFloat(dt),
+                        y: (point.y - lastPanPoint.y) / CGFloat(dt)
+                    )
+                    velocity.x = min(8, max(-8, velocity.x))
+                    velocity.y = min(8, max(-8, velocity.y))
+                    lastPanTime = now
+                    lastPanPoint = point
+                    onMorphTouch?(point, velocity, true)
+                }
 
             case .ended, .cancelled, .failed:
-                let uiVel = gesture.velocity(in: view)
-                velocity = CGPoint(
-                    x: min(8, max(-8, uiVel.x / view.bounds.width)),
-                    y: min(8, max(-8, uiVel.y / view.bounds.height))
-                )
-                onMorphTouch?(point, velocity, false)
+                if panMode == .exposure {
+                    onExposureDrag?(translation.y, true)
+                } else {
+                    let uiVel = gesture.velocity(in: view)
+                    velocity = CGPoint(
+                        x: min(8, max(-8, uiVel.x / view.bounds.width)),
+                        y: min(8, max(-8, uiVel.y / view.bounds.height))
+                    )
+                    onMorphTouch?(point, velocity, false)
+                }
+                panMode = .undecided
 
             default:
                 break
@@ -222,22 +273,38 @@ class FilteredPreviewView: UIView {
         currentCIImage = image
 
         if image != nil {
-            // Show Metal view, hide preview layer
             let wasHidden = metalView?.isHidden ?? true
             metalView?.isHidden = false
             previewLayer?.isHidden = true
-            // Defer the first draw until after layout so drawableSize is non-zero
+            // First enable after FX/film toggle: wait for a real drawable.
             if wasHidden {
-                DispatchQueue.main.async { [weak self] in
-                    self?.metalView?.setNeedsDisplay()
-                }
+                setNeedsLayout()
+                layoutIfNeeded()
+                metalView?.setNeedsLayout()
+                metalView?.layoutIfNeeded()
+                scheduleMetalDraw(attemptsLeft: 8)
             } else {
                 metalView?.setNeedsDisplay()
             }
         } else {
-            // Show preview layer, hide Metal view
             metalView?.isHidden = true
             previewLayer?.isHidden = false
+        }
+    }
+
+    /// Retries until MTKView has a non-zero drawable (avoids Metal crash on FX enable).
+    private func scheduleMetalDraw(attemptsLeft: Int) {
+        guard attemptsLeft > 0 else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let metalView = self.metalView, !metalView.isHidden else { return }
+            self.layoutIfNeeded()
+            metalView.layoutIfNeeded()
+            if metalView.drawableSize.width > 1, metalView.drawableSize.height > 1,
+               metalView.bounds.width > 1, metalView.bounds.height > 1 {
+                metalView.setNeedsDisplay()
+            } else {
+                self.scheduleMetalDraw(attemptsLeft: attemptsLeft - 1)
+            }
         }
     }
 }
@@ -258,7 +325,13 @@ extension FilteredPreviewView: MTKViewDelegate {
         // First frame after un-hiding the MTKView often has a 0×0 drawable —
         // rendering into that crashes Metal when Lens FX/film filters turn on.
         let drawableSize = view.drawableSize
-        guard drawableSize.width > 1, drawableSize.height > 1 else { return }
+        guard drawableSize.width > 1, drawableSize.height > 1,
+              view.bounds.width > 1, view.bounds.height > 1 else {
+            return
+        }
+
+        // Texture must match drawable size
+        guard drawable.texture.width > 1, drawable.texture.height > 1 else { return }
 
         // Apply orientation correction for portrait mode
         // Video frames come in landscape orientation, rotate for portrait display

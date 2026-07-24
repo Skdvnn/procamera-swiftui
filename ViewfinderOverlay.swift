@@ -10,25 +10,34 @@ private struct VFHaptics {
 
 // MARK: - Film Grain Overlay
 struct FilmGrainOverlay: View {
-    @State private var noiseOffset: CGFloat = 0
-
     var body: some View {
-        GeometryReader { geo in
-            Canvas { context, size in
-                // Create noise pattern
-                for _ in 0..<Int(size.width * size.height * 0.01) {
-                    let x = CGFloat.random(in: 0...size.width)
-                    let y = CGFloat.random(in: 0...size.height)
-                    let opacity = CGFloat.random(in: 0.02...0.08)
-
-                    context.fill(
-                        Path(ellipseIn: CGRect(x: x, y: y, width: 1.5, height: 1.5)),
-                        with: .color(.white.opacity(opacity))
-                    )
-                }
+        // Seeded static grain — random() every redraw was thrashing the view tree
+        Canvas { context, size in
+            var rng = SeededGenerator(seed: 0xC0FFEE)
+            let count = Int(size.width * size.height * 0.006)
+            for _ in 0..<count {
+                let x = CGFloat.random(in: 0...size.width, using: &rng)
+                let y = CGFloat.random(in: 0...size.height, using: &rng)
+                let opacity = CGFloat.random(in: 0.02...0.07, using: &rng)
+                context.fill(
+                    Path(ellipseIn: CGRect(x: x, y: y, width: 1.5, height: 1.5)),
+                    with: .color(.white.opacity(opacity))
+                )
             }
         }
         .allowsHitTesting(false)
+    }
+}
+
+private struct SeededGenerator: RandomNumberGenerator {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed == 0 ? 0xdeadbeef : seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9e3779b97f4a7c15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xbf58476d1ce4e5b9
+        z = (z ^ (z >> 27)) &* 0x94d049bb133111eb
+        return z ^ (z >> 31)
     }
 }
 
@@ -42,13 +51,9 @@ struct ViewfinderOverlay: View {
     @State private var showFXMenu = false
 
     var body: some View {
-        GeometryReader { geo in
-            let width = geo.size.width
-            let height = geo.size.height
-            let inset: CGFloat = 16
-
-            ZStack {
-                // Decorative layer — never steal focus/morph gestures
+        // Decorative layer never steals focus/EV; chrome is corner overlays only.
+        ZStack {
+            GeometryReader { geo in
                 ZStack {
                     FilmGrainOverlay()
                         .opacity(0.3)
@@ -58,7 +63,7 @@ struct ViewfinderOverlay: View {
                     }
 
                     CenterFocusBrackets()
-                        .position(x: width/2, y: height/2)
+                        .position(x: geo.size.width / 2, y: geo.size.height / 2)
 
                     if showGrid {
                         GridLines()
@@ -68,87 +73,108 @@ struct ViewfinderOverlay: View {
                         AspectRatioMask(mode: aspectRatio, size: geo.size)
                     }
                 }
-                .allowsHitTesting(false)
-
-                // Top left - Aspect ratio button (DSLR-style)
-                Button(action: {
-                    VFHaptics.click()
-                    aspectRatio = aspectRatio.next
-                }) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.black.opacity(0.4))
-                            .frame(width: 32, height: 32)
-                        Text(aspectRatio.label)
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.9))
+            }
+            .allowsHitTesting(false)
+        }
+        .overlay(alignment: .topLeading) {
+            chromeButton {
+                showFilmMenu = false
+                showFXMenu = false
+                aspectRatio = aspectRatio.next
+            } label: {
+                Text(aspectRatio.label)
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.9))
+            }
+            .padding(16)
+        }
+        .overlay(alignment: .topTrailing) {
+            VStack(spacing: 8) {
+                chromeButton {
+                    // Instant toggle — never animate over Metal camera chrome.
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) {
+                        showFXMenu = false
+                        showFilmMenu.toggle()
                     }
+                } label: {
+                    Image(systemName: "film")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(showFilmMenu || filmFilter != .none
+                                         ? Color(red: 1.0, green: 0.85, blue: 0.35)
+                                         : .white.opacity(0.8))
                 }
-                .position(x: inset + 20, y: inset + 20)
 
-                // Top right - Film stocks (color grades)
-                Button(action: {
-                    VFHaptics.click()
-                    showFXMenu = false
-                    showFilmMenu.toggle()
-                }) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.black.opacity(0.4))
-                            .frame(width: 32, height: 32)
-                        Image(systemName: "film")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(filmFilter == .none ? .white.opacity(0.8) : Color(red: 1.0, green: 0.85, blue: 0.35))
+                chromeButton {
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) {
+                        showFilmMenu = false
+                        showFXMenu.toggle()
                     }
-                }
-                .position(x: width - inset - 20, y: inset + 20)
-
-                // Below film — morphic / shader Lens FX
-                Button(action: {
-                    VFHaptics.click()
-                    showFilmMenu = false
-                    showFXMenu.toggle()
-                }) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.black.opacity(0.4))
-                            .frame(width: 32, height: 32)
-                        Image(systemName: "water.waves")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(lensFX == .none ? .white.opacity(0.8) : Color(red: 0.55, green: 0.88, blue: 0.95))
-                    }
-                }
-                .position(x: width - inset - 20, y: inset + 60)
-
-                if showFilmMenu {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            showFilmMenu = false
-                        }
-
-                    LeicaFilmPicker(
-                        selectedFilter: $filmFilter,
-                        isPresented: $showFilmMenu
-                    )
-                    .position(x: width - 110, y: inset + 140)
-                }
-
-                if showFXMenu {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            showFXMenu = false
-                        }
-
-                    LensFXPicker(
-                        selectedFX: $lensFX,
-                        isPresented: $showFXMenu
-                    )
-                    .position(x: width - 110, y: inset + 190)
+                } label: {
+                    Image(systemName: "water.waves")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(showFXMenu || lensFX != .none
+                                         ? Color(red: 0.55, green: 0.88, blue: 0.95)
+                                         : .white.opacity(0.8))
                 }
             }
+            .padding(16)
         }
+        .overlay {
+            if showFilmMenu || showFXMenu {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        var t = Transaction()
+                        t.disablesAnimations = true
+                        withTransaction(t) {
+                            showFilmMenu = false
+                            showFXMenu = false
+                        }
+                    }
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if showFilmMenu {
+                LeicaFilmPicker(
+                    selectedFilter: $filmFilter,
+                    isPresented: $showFilmMenu
+                )
+                .padding(.trailing, 16)
+                .padding(.top, 100)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if showFXMenu {
+                LensFXPicker(
+                    selectedFX: $lensFX,
+                    isPresented: $showFXMenu
+                )
+                .padding(.trailing, 16)
+                .padding(.top, 140)
+            }
+        }
+    }
+
+    private func chromeButton<Label: View>(
+        action: @escaping () -> Void,
+        @ViewBuilder label: () -> Label
+    ) -> some View {
+        Button(action: {
+            VFHaptics.click()
+            action()
+        }) {
+            ZStack {
+                Circle()
+                    .fill(Color.black.opacity(0.4))
+                    .frame(width: 32, height: 32)
+                label()
+            }
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -482,12 +508,11 @@ struct LeicaFilmPicker: View {
     @Binding var isPresented: Bool
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
-    @State private var animateIn = false
 
     var body: some View {
-        // DSLR-style inset panel with context menu animation
+        // No withAnimation / scaleEffect — those transactions walk the camera
+        // tree (Metal shutter shaders) and can MetadataCache-crash on device.
         VStack(spacing: 0) {
-            // Header with inset style
             HStack {
                 Text("FILM")
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
@@ -511,8 +536,17 @@ struct LeicaFilmPicker: View {
                     ForEach(FilmFilterMode.allCases, id: \.self) { filter in
                         Button(action: {
                             VFHaptics.click()
-                            selectedFilter = filter
-                            dismissWithAnimation()
+                            // Same as Lens FX: dismiss first, apply on next turn so
+                            // the live Metal/CI preview doesn't enable mid-teardown.
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) {
+                                isPresented = false
+                            }
+                            let chosen = filter
+                            DispatchQueue.main.async {
+                                selectedFilter = chosen
+                            }
                         }) {
                             HStack(spacing: 8) {
                                 Text(selectedFilter == filter ? ">" : " ")
@@ -546,23 +580,6 @@ struct LeicaFilmPicker: View {
         }
         .background(dsPickerChrome())
         .frame(width: 180)
-        .scaleEffect(animateIn ? 1.0 : 0.8)
-        .opacity(animateIn ? 1.0 : 0)
-        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: animateIn)
-        .onAppear {
-            withAnimation {
-                animateIn = true
-            }
-        }
-    }
-
-    private func dismissWithAnimation() {
-        withAnimation(.easeOut(duration: 0.15)) {
-            animateIn = false
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            isPresented = false
-        }
     }
 
     private func isoLabel(for filter: FilmFilterMode) -> String {
@@ -620,17 +637,17 @@ struct LensFXPicker: View {
     @Binding var isPresented: Bool
 
     private let accent = Color(red: 0.55, green: 0.88, blue: 0.95)
-    @State private var animateIn = false
 
-    private var warpCases: [LensFXMode] {
-        LensFXMode.pickerCases.filter { $0 == .none || $0.pickerSection == .warp }
+    /// Stable lists — avoid rebuilding ForEach identity every body pass.
+    private static let warpCases: [LensFXMode] = LensFXMode.pickerCases.filter {
+        $0 == .none || $0.pickerSection == .warp
     }
-
-    private var lookCases: [LensFXMode] {
-        LensFXMode.pickerCases.filter { $0 != .none && $0.pickerSection == .look }
+    private static let lookCases: [LensFXMode] = LensFXMode.pickerCases.filter {
+        $0 != .none && $0.pickerSection == .look
     }
 
     var body: some View {
+        // Instant present — no spring/withAnimation (crashes over Metal camera chrome).
         VStack(spacing: 0) {
             HStack {
                 Text("LENS FX")
@@ -653,12 +670,12 @@ struct LensFXPicker: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
                     sectionHeader("WARP")
-                    ForEach(warpCases, id: \.self) { fx in
+                    ForEach(Self.warpCases, id: \.self) { fx in
                         fxRow(fx)
                     }
 
                     sectionHeader("LOOK")
-                    ForEach(lookCases, id: \.self) { fx in
+                    ForEach(Self.lookCases, id: \.self) { fx in
                         fxRow(fx)
                     }
                 }
@@ -669,14 +686,6 @@ struct LensFXPicker: View {
         }
         .background(dsPickerChrome())
         .frame(width: 180)
-        .scaleEffect(animateIn ? 1.0 : 0.8)
-        .opacity(animateIn ? 1.0 : 0)
-        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: animateIn)
-        .onAppear {
-            withAnimation {
-                animateIn = true
-            }
-        }
     }
 
     private func sectionHeader(_ title: String) -> some View {
@@ -684,7 +693,6 @@ struct LensFXPicker: View {
             Text(title)
                 .font(.system(size: 8, weight: .semibold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.32))
-                .tracking(0.8)
             Spacer()
         }
         .padding(.horizontal, 14)
@@ -695,8 +703,17 @@ struct LensFXPicker: View {
     private func fxRow(_ fx: LensFXMode) -> some View {
         Button(action: {
             VFHaptics.click()
-            selectedFX = fx
-            dismissWithAnimation()
+            // Dismiss first, then apply FX on the next turn so the Metal
+            // preview pipeline doesn't enable mid-teardown.
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                isPresented = false
+            }
+            let chosen = fx
+            DispatchQueue.main.async {
+                selectedFX = chosen
+            }
         }) {
             HStack(spacing: 8) {
                 Text(selectedFX == fx ? ">" : " ")
@@ -721,15 +738,6 @@ struct LensFXPicker: View {
             .background(selectedFX == fx ? Color.white.opacity(0.05) : Color.clear)
         }
         .buttonStyle(.plain)
-    }
-
-    private func dismissWithAnimation() {
-        withAnimation(.easeOut(duration: 0.15)) {
-            animateIn = false
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            isPresented = false
-        }
     }
 }
 

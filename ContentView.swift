@@ -182,6 +182,11 @@ struct ContentView: View {
     @State private var showFlash = false
     @State private var showFocusPoint = false
     @State private var focusPoint: CGPoint = .zero
+    /// EV captured when the focus reticle appeared — vertical drag offsets from this.
+    @State private var focusStartEV: Float = 0
+    @State private var isDraggingExposure = false
+    @State private var focusHideWorkItem: DispatchWorkItem?
+    @State private var lastExposureHapticStep: Int = 0
     @State private var macroEnabled = false
     @State private var isCapturing = false
     @State private var isRecording = false
@@ -212,22 +217,49 @@ struct ContentView: View {
     private let isoValues = [100, 200, 400, 800, 1600, 3200]
     private let focalLengths = [13, 24, 48, 120]
 
+    /// Shared collapsed chrome metrics — histogram floats above fade/deck.
+    private enum CollapsedChrome {
+        static let deckHeight: CGFloat = 88
+        static let fadeHeight: CGFloat = 48
+        /// Approximate RefractiveGlassInfoBar height (pad + hist + readouts).
+        static let infoBarHeight: CGFloat = 56
+        /// Gap between histogram bottom and shutter deck top when collapsed.
+        static let histDeckGap: CGFloat = 8
+        /// Expanded: keep histogram inside the viewfinder, clear of the deck below.
+        static let expandedHistogramBottomPad: CGFloat = 14
+        /// Gap between viewfinder bottom and expanded shutter deck.
+        static let viewfinderToDeckGap: CGFloat = 5
+
+        static func bottomPad(safeBottom: CGFloat) -> CGFloat {
+            max(safeBottom * 0.55, 8)
+        }
+
+        /// Lift the glass bar above the safe-area strip + shutter deck.
+        static func histogramBottomPad(safeBottom: CGFloat) -> CGFloat {
+            deckHeight + bottomPad(safeBottom: safeBottom) + histDeckGap
+        }
+    }
+
+    private var deckCollapseSpring: Animation {
+        .spring(response: 0.52, dampingFraction: 0.92)
+    }
+
     var body: some View {
         GeometryReader { geo in
             let safeTop = geo.safeAreaInsets.top
             let safeBottom = geo.safeAreaInsets.bottom
 
-            // Layout measurements
-            let topPanelHeight: CGFloat = topCollapsed ? 64 : 110
-            let gaugeToViewfinderSpacing: CGFloat = 5
-            let viewfinderToControlsSpacing: CGFloat = 5
+            // Layout measurements — top collapse keeps FOCUS/EV strip as the hero
+            let topPanelHeight: CGFloat = topCollapsed ? 52 : 110
+            let gaugeToViewfinderSpacing: CGFloat = topCollapsed ? 4 : 5
+            let viewfinderToControlsSpacing: CGFloat = CollapsedChrome.viewfinderToDeckGap
 
             ZStack(alignment: .top) {
                 // Diamond/crosshatch texture background like Leica camera grip
                 LeicaVulcaniteTexture(scale: 20, intensity: 0.8).ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    // TOP: Analog Display Panel (with shutter speed connected)
+                    // TOP: Analog Display Panel — FOCUS/EV when compact
                     AnalogDisplayPanel(
                         focusPosition: $focusPosition,
                         exposureValue: $exposureValue,
@@ -270,166 +302,94 @@ struct ContentView: View {
                     )
                     .frame(height: topPanelHeight)
                     .padding(.horizontal, DS.pageMargin)
-                    // Swipe up to minimize the dial deck, down to restore.
-                    // Dials claim drags starting on them, so this only catches
-                    // swipes that begin in the gaps or center display.
-                    .gesture(deckSwipe(collapseOnSwipeUp: true) { topCollapsed = $0 })
+                    // Swipe up to minimize — simultaneous so compact scrubbers stay interactive
+                    .simultaneousGesture(deckSwipe(collapseOnSwipeUp: true) { topCollapsed = $0 })
 
                     Spacer().frame(height: gaugeToViewfinderSpacing)
 
-                    // VIEWFINDER - DSLR-style inset look with black outer frame
-                    ZStack {
-                        // Outer black frame (matches other controls)
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.black)
+                    // VIEWFINDER — when bottom is collapsed, feed runs under the shutter
+                    // with a bottom gradient + compact controls overlaid.
+                    ZStack(alignment: .bottom) {
+                        viewfinderFrame(showHistogram: !bottomCollapsed)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .layoutPriority(1)
+                            .padding(.horizontal, bottomCollapsed ? 6 : DS.pageMargin)
 
-                        // Camera preview content (uses filtered preview when filter selected)
-                        ZStack {
-                            FilteredCameraPreview(
-                                session: camera.session,
-                                filteredImage: camera.filteredPreviewImage,
-                                onTap: handleFocusTap,
-                                onPinch: { scale in
-                                    guard !isLocked else { return }
-                                    Haptics.light()
-                                    let newZoom = zoomValue * scale
-                                    zoomValue = min(max(newZoom, 0.5), 10.0)
-                                    camera.setZoom(zoomValue)
-                                    if !isManualFocusEnabled {
-                                        focusPosition = Float(zoomValue - 1) / 4.0
-                                    }
-                                },
-                                onMorphTouch: handleMorphTouch
-                            )
-
-                            ViewfinderOverlay(showGrid: showGrid, aspectRatio: $aspectRatio, filmFilter: $filmFilter, lensFX: $lensFX)
-                            ViewfinderVignette()
-
-                            if showFocusPoint {
-                                FocusIndicator().position(focusPoint)
-                            }
-
-                            if timerCountdown > 0 {
-                                Text("\(timerCountdown)")
-                                    .font(.system(size: 80, weight: .thin, design: .monospaced))
-                                    .foregroundColor(.white.opacity(0.9))
-                            }
-
-                            if camera.isLongExposureCapturing {
-                                LongExposureProgressOverlay(progress: camera.longExposureProgress)
-                            }
-
-                            VStack {
-                                Spacer()
-                                // Instagram-style bottom overlay — also a deck pull target
-                                // so swipe-up/down isn't stuck to the tiny grabber.
-                                RefractiveGlassInfoBar(
-                                    iso: isoValue,
-                                    shutterSpeed: shutterSpeeds[shutterSpeedIndex],
-                                    histogram: camera.histogramBins,
-                                    aperture: apertureValue,
-                                    photoCount: photoCount,
-                                    exposureValue: exposureValue,
-                                    captureFormat: captureFormat
+                        if bottomCollapsed {
+                            collapsedBottomOverlay(safeBottom: safeBottom)
+                                .transition(
+                                    .asymmetric(
+                                        insertion: .opacity.combined(with: .offset(y: 14)),
+                                        removal: .opacity.combined(with: .offset(y: 16))
+                                    )
                                 )
-                                .padding(.horizontal, 8)
-                                .padding(.bottom, 8)
-                                .contentShape(Rectangle())
-                                .simultaneousGesture(bottomDeckSwipe)
-                            }
-                            // Invisible pull band over the glass bar (no visible handle)
-                            .overlay(alignment: .bottom) {
-                                Color.clear
-                                    .frame(height: 56)
-                                    .frame(maxWidth: .infinity)
-                                    .contentShape(Rectangle())
-                                    .simultaneousGesture(bottomDeckSwipe)
-                            }
+                                .zIndex(1)
 
-                            // Inner shadow overlay (deeper inset effect like DSLR viewfinder)
-                            VStack(spacing: 0) {
-                                LinearGradient(colors: [Color.black.opacity(0.6), Color.clear], startPoint: .top, endPoint: .bottom)
-                                    .frame(height: 12)
-                                Spacer()
-                            }
-                            HStack(spacing: 0) {
-                                LinearGradient(colors: [Color.black.opacity(0.5), Color.clear], startPoint: .leading, endPoint: .trailing)
-                                    .frame(width: 10)
-                                Spacer()
-                            }
-                            // Bottom and right subtle highlight (light hitting from top-left)
-                            VStack(spacing: 0) {
-                                Spacer()
-                                LinearGradient(colors: [Color.clear, Color.white.opacity(0.03)], startPoint: .top, endPoint: .bottom)
-                                    .frame(height: 6)
-                            }
-                            HStack(spacing: 0) {
-                                Spacer()
-                                LinearGradient(colors: [Color.clear, Color.white.opacity(0.02)], startPoint: .leading, endPoint: .trailing)
-                                    .frame(width: 4)
-                            }
+                            // Glass histogram ON TOP of the fade, ABOVE the shutter deck —
+                            // bottom-aligned overlay only (not a full-frame VStack hit sink).
+                            RefractiveGlassInfoBar(
+                                iso: isoValue,
+                                shutterSpeed: shutterSpeeds[shutterSpeedIndex],
+                                histogram: camera.histogramBins,
+                                aperture: apertureValue,
+                                photoCount: photoCount,
+                                exposureValue: exposureValue,
+                                captureFormat: captureFormat
+                            )
+                            .padding(.horizontal, 14)
+                            .padding(.bottom, CollapsedChrome.histogramBottomPad(safeBottom: safeBottom))
+                            .contentShape(Rectangle())
+                            .simultaneousGesture(bottomDeckSwipe)
+                            .transition(
+                                .asymmetric(
+                                    insertion: .opacity.combined(with: .offset(y: 10)),
+                                    removal: .opacity
+                                )
+                            )
+                            .zIndex(2)
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .padding(2)
 
-                        // Inner stroke
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color(hex: "333333"), lineWidth: 0.5)
-                            .padding(2)
+                        // Film / Lens FX / aspect ALWAYS above fade + histogram so they stay tappable
+                        ViewfinderOverlay(
+                            showGrid: showGrid,
+                            aspectRatio: $aspectRatio,
+                            filmFilter: $filmFilter,
+                            lensFX: $lensFX
+                        )
+                        .padding(.horizontal, bottomCollapsed ? 6 : DS.pageMargin)
+                        .zIndex(40)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .layoutPriority(1)
-                    .padding(.horizontal, DS.pageMargin)
 
-                    Spacer().frame(height: viewfinderToControlsSpacing)
+                    if !bottomCollapsed {
+                        Spacer().frame(height: viewfinderToControlsSpacing)
 
-                    // BOTTOM CONTROLS — hidden pull (no grabber). Glass bar + shutter
-                    // row + home pad own vertical swipe; scrubbers own horizontal.
-                    VStack(spacing: 0) {
-                        ZStack(alignment: .bottom) {
-                            if bottomCollapsed {
-                                bottomCompactDeck
-                                    .offset(y: bottomDeckDrag * 0.15)
-                                    .opacity(1.0 - min(abs(bottomDeckDrag) / 90.0, 0.45))
-                                    .contentShape(Rectangle())
-                                    .gesture(bottomDeckSwipe)
-                                    .transition(
-                                        .asymmetric(
-                                            insertion: .move(edge: .bottom).combined(with: .opacity),
-                                            removal: .opacity.combined(with: .scale(scale: 0.96, anchor: .bottom))
-                                        )
-                                    )
-                            } else {
-                                bottomExpandedDeck
-                                    .offset(y: bottomDeckDrag * 0.55)
-                                    .opacity(1.0 - min(bottomDeckDrag / 110.0, 0.55))
-                                    .transition(
-                                        .asymmetric(
-                                            insertion: .opacity.combined(with: .offset(y: 10)),
-                                            removal: .opacity.combined(with: .offset(y: 22))
-                                        )
-                                    )
-                            }
+                        // Expanded deck — opaque grain slab (scrubbers live here)
+                        VStack(spacing: 0) {
+                            bottomExpandedDeck
+                                .offset(y: bottomDeckDrag * 0.55)
+                                .opacity(1.0 - min(bottomDeckDrag / 110.0, 0.55))
+
+                            Color.clear
+                                .frame(height: max(safeBottom * 0.55, 8))
+                                .frame(maxWidth: .infinity)
+                                .contentShape(Rectangle())
+                                .gesture(bottomDeckSwipe)
                         }
-                        .animation(
-                            .interactiveSpring(response: 0.38, dampingFraction: 0.86, blendDuration: 0.12),
-                            value: bottomCollapsed
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 4)
+                        .background { ControlsGrain() }
+                        .transition(
+                            .asymmetric(
+                                insertion: .opacity.combined(with: .offset(y: 12)),
+                                removal: .opacity.combined(with: .offset(y: 14))
+                            )
                         )
-
-                        // Home-indicator pad — invisible pull target
-                        Color.clear
-                            .frame(height: max(safeBottom * 0.55, 8))
-                            .frame(maxWidth: .infinity)
-                            .contentShape(Rectangle())
-                            .gesture(bottomDeckSwipe)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 4)
-                    .background {
-                        ControlsGrain()
                     }
                 }
                 .padding(.top, safeTop)
+                .animation(deckCollapseSpring, value: bottomCollapsed)
 
                 if showFlash {
                     Color.white.ignoresSafeArea()
@@ -449,12 +409,21 @@ struct ContentView: View {
             camera.selectedLensFX = lensFX
         }
         .onChange(of: filmFilter) { _, newFilter in
-            syncFilmFilter(newFilter)
+            // Apply without inheriting any animation transaction into camera chrome.
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                syncFilmFilter(newFilter)
+            }
         }
         .onChange(of: lensFX) { _, newFX in
-            camera.selectedLensFX = newFX
-            if !newFX.isTouchReactive {
-                LensFXEngine.shared.setTouch(x: 0.5, y: 0.5, force: 0, velX: 0, velY: 0, active: false)
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                camera.selectedLensFX = newFX
+                if !newFX.isTouchReactive {
+                    LensFXEngine.shared.setTouch(x: 0.5, y: 0.5, force: 0, velX: 0, velY: 0, active: false)
+                }
             }
         }
         .fullScreenCover(isPresented: $showPhotoBook) {
@@ -506,16 +475,17 @@ struct ContentView: View {
         camera.selectedLensFX = lensFX
     }
 
-    private func handleFocusTap(_ point: CGPoint) {
+    private func handleFocusTap(_ point: CGPoint, in size: CGSize) {
         guard !isLocked else { return }
         Haptics.light()
         camera.setFocus(at: point)
         isManualFocusEnabled = false
-        focusPoint = CGPoint(x: point.x * UIScreen.main.bounds.width, y: point.y * 380 + 160)
+        focusPoint = CGPoint(x: point.x * size.width, y: point.y * size.height)
+        focusStartEV = exposureValue
+        lastExposureHapticStep = Int((exposureValue * 10).rounded())
+        isDraggingExposure = false
         withAnimation(.easeOut(duration: 0.15)) { showFocusPoint = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            withAnimation { showFocusPoint = false }
-        }
+        scheduleFocusHide(after: 2.8)
         // Tap also drops a decaying ripple when a morphic FX is active
         if lensFX.isTouchReactive {
             LensFXEngine.shared.setTouch(
@@ -526,9 +496,48 @@ struct ContentView: View {
         }
     }
 
+    /// iOS Camera-style sun drag: finger up brightens, down darkens.
+    private func handleExposureDrag(_ translationY: CGFloat, ended: Bool) {
+        guard !isLocked else { return }
+        if !ended {
+            isDraggingExposure = true
+            showFocusPoint = true
+            // ~140pt per EV stop; clamp to device bias range
+            let delta = -Float(translationY) / 140.0
+            let newEV = max(camera.minExposure, min(camera.maxExposure, focusStartEV + delta))
+            let step = Int((newEV * 10).rounded())
+            if step != lastExposureHapticStep {
+                lastExposureHapticStep = step
+                UISelectionFeedbackGenerator().selectionChanged()
+            }
+            exposureValue = newEV
+            camera.setExposure(newEV)
+            scheduleFocusHide(after: 2.8)
+        } else {
+            focusStartEV = exposureValue
+            isDraggingExposure = false
+            scheduleFocusHide(after: 2.2)
+        }
+    }
+
+    private func scheduleFocusHide(after delay: TimeInterval) {
+        focusHideWorkItem?.cancel()
+        let work = DispatchWorkItem {
+            withAnimation(.easeOut(duration: 0.25)) {
+                if !isDraggingExposure {
+                    showFocusPoint = false
+                }
+            }
+        }
+        focusHideWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
     /// Viewfinder drag → morph uniforms (Liquid / Chrome / Fisheye / Kaleido).
     private func handleMorphTouch(_ point: CGPoint, velocity: CGPoint, active: Bool) {
         guard !isLocked, lensFX.isTouchReactive else { return }
+        // Focus/EV scrub owns the gesture while the reticle is up
+        guard !showFocusPoint, !isDraggingExposure else { return }
         let force: CGFloat = active ? 1.0 : max(0.35, min(1.0, hypot(velocity.x, velocity.y) * 0.12))
         LensFXEngine.shared.setTouch(
             x: point.x,
@@ -557,6 +566,177 @@ struct ContentView: View {
             }
     }
 
+    // MARK: - Viewfinder chrome
+
+    @ViewBuilder
+    private func viewfinderFrame(showHistogram: Bool = true) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: bottomCollapsed ? 10 : 8)
+                .fill(Color.black)
+
+            ZStack {
+                GeometryReader { vfGeo in
+                    FilteredCameraPreview(
+                        session: camera.session,
+                        filteredImage: camera.filteredPreviewImage,
+                        onTap: { point in
+                            handleFocusTap(point, in: vfGeo.size)
+                        },
+                        onPinch: { scale in
+                            guard !isLocked else { return }
+                            Haptics.light()
+                            let newZoom = zoomValue * scale
+                            zoomValue = min(max(newZoom, 0.5), 10.0)
+                            camera.setZoom(zoomValue)
+                            if !isManualFocusEnabled {
+                                focusPosition = Float(zoomValue - 1) / 4.0
+                            }
+                        },
+                        onMorphTouch: handleMorphTouch,
+                        exposureDragEnabled: showFocusPoint || isDraggingExposure,
+                        onExposureDrag: handleExposureDrag
+                    )
+                    .frame(width: vfGeo.size.width, height: vfGeo.size.height)
+
+                    if showFocusPoint || isDraggingExposure {
+                        FocusExposureReticle(exposureBias: exposureValue)
+                            .position(focusPoint)
+                            .allowsHitTesting(false)
+                    }
+                }
+
+                ViewfinderVignette()
+
+                if timerCountdown > 0 {
+                    Text("\(timerCountdown)")
+                        .font(.system(size: 80, weight: .thin, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.9))
+                        .allowsHitTesting(false)
+                }
+
+                if camera.isLongExposureCapturing {
+                    LongExposureProgressOverlay(progress: camera.longExposureProgress)
+                }
+
+                // Histogram inside frame only when expanded — sits above the deck
+                // (deck is a separate VStack sibling below the viewfinder, not overlaid).
+                if showHistogram {
+                    VStack {
+                        Spacer().allowsHitTesting(false)
+                        RefractiveGlassInfoBar(
+                            iso: isoValue,
+                            shutterSpeed: shutterSpeeds[shutterSpeedIndex],
+                            histogram: camera.histogramBins,
+                            aperture: apertureValue,
+                            photoCount: photoCount,
+                            exposureValue: exposureValue,
+                            captureFormat: captureFormat
+                        )
+                        .padding(.horizontal, 8)
+                        // Keep clear of the viewfinder bottom edge / swipe strip so it
+                        // never reads as overlapping the expanded shutter row below.
+                        .padding(.bottom, CollapsedChrome.expandedHistogramBottomPad)
+                        .contentShape(Rectangle())
+                        .simultaneousGesture(bottomDeckSwipe)
+                    }
+                    .zIndex(5)
+                }
+
+                if !bottomCollapsed {
+                    VStack {
+                        Spacer().allowsHitTesting(false)
+                        Color.clear
+                            .frame(height: 56)
+                            .frame(maxWidth: .infinity)
+                            .contentShape(Rectangle())
+                            .simultaneousGesture(bottomDeckSwipe)
+                    }
+                    .zIndex(4)
+                }
+
+                // Chrome moved to parent ZStack (above collapsed fade) so FX stays tappable.
+
+                // Inner inset shadows — never steal focus / film / FX hits
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [Color.black.opacity(0.6), Color.clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 12)
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [Color.black.opacity(0.5), Color.clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: 10)
+                    Spacer()
+                }
+                .allowsHitTesting(false)
+                VStack(spacing: 0) {
+                    Spacer()
+                    LinearGradient(colors: [Color.clear, Color.white.opacity(0.03)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 6)
+                }
+                .allowsHitTesting(false)
+                HStack(spacing: 0) {
+                    Spacer()
+                    LinearGradient(colors: [Color.clear, Color.white.opacity(0.02)], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: 4)
+                }
+                .allowsHitTesting(false)
+            }
+            .clipShape(RoundedRectangle(cornerRadius: bottomCollapsed ? 8 : 6))
+            .padding(bottomCollapsed ? 1 : 2)
+
+            RoundedRectangle(cornerRadius: bottomCollapsed ? 8 : 6)
+                .stroke(Color(hex: "333333"), lineWidth: 0.5)
+                .padding(bottomCollapsed ? 1 : 2)
+        }
+    }
+
+    /// Compact shutter row — gradient runs UNDER the controls (not only above them).
+    private func collapsedBottomOverlay(safeBottom: CGFloat) -> some View {
+        let bottomPad = CollapsedChrome.bottomPad(safeBottom: safeBottom)
+        let underlayHeight = CollapsedChrome.fadeHeight + CollapsedChrome.deckHeight + bottomPad
+
+        return ZStack(alignment: .bottom) {
+            // Soft fade under the whole bottom chrome band (fade + deck + home indicator)
+            LinearGradient(
+                colors: [
+                    Color.clear,
+                    Color.black.opacity(0.35),
+                    Color.black.opacity(0.75),
+                    Color.black.opacity(0.92)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: underlayHeight)
+            .allowsHitTesting(false)
+
+            VStack(spacing: 0) {
+                Spacer(minLength: 0)
+                    .allowsHitTesting(false)
+
+                // Reserve the fade band so the deck sits below it; gradient paints underneath
+                Color.clear
+                    .frame(height: CollapsedChrome.fadeHeight)
+                    .allowsHitTesting(false)
+
+                bottomCompactDeck
+                    .frame(minHeight: CollapsedChrome.deckHeight)
+                    .offset(y: bottomDeckDrag * 0.12)
+                    .opacity(1.0 - min(abs(bottomDeckDrag) / 90.0, 0.45))
+                    .contentShape(Rectangle())
+                    .gesture(bottomDeckSwipe)
+
+                Color.clear
+                    .frame(height: bottomPad)
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
+                    .gesture(bottomDeckSwipe)
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
     /// Bottom deck: swipe down collapses, swipe up expands.
     /// Soft thresholds — viewfinder glass bar + shutter row + grabber all pull.
     private var bottomDeckSwipe: some Gesture {
@@ -581,7 +761,7 @@ struct ContentView: View {
                 let effective = abs(predicted) > abs(dy) ? predicted : dy
 
                 let committedDrag = bottomDeckDrag
-                withAnimation(.interactiveSpring(response: 0.38, dampingFraction: 0.86, blendDuration: 0.12)) {
+                withAnimation(deckCollapseSpring) {
                     bottomDeckDrag = 0
                     // Vertical wins easily; scrubbers still own clear horizontal pans
                     guard abs(effective) > abs(dx) * 0.45 else { return }
@@ -817,7 +997,7 @@ struct ContentView: View {
         } else {
             // Normal capture with flash effect
             isCapturing = true
-            withAnimation(.easeInOut(duration: 0.1)) { showFlash = true }
+            showFlash = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { showFlash = false }
             camera.capturePhoto(
                 filmFilter: shutterFilm,
@@ -1049,33 +1229,43 @@ struct ResponsiveHistogram: View {
 // MARK: - Controls Grain (DSLR vulcanite texture - more visible)
 struct ControlsGrain: View {
     var body: some View {
-        TimelineView(.animation(minimumInterval: 0.2)) { _ in
-            Canvas { context, size in
-                // Denser grain for DSLR feel
-                for _ in 0..<Int(size.width * size.height * 0.008) {
-                    let x = CGFloat.random(in: 0...size.width)
-                    let y = CGFloat.random(in: 0...size.height)
-                    let opacity = CGFloat.random(in: 0.04...0.12)
-                    let dotSize = CGFloat.random(in: 0.8...1.5)
-                    context.fill(
-                        Path(ellipseIn: CGRect(x: x, y: y, width: dotSize, height: dotSize)),
-                        with: .color(.white.opacity(opacity))
-                    )
-                }
-                // Add some darker grain too for depth
-                for _ in 0..<Int(size.width * size.height * 0.002) {
-                    let x = CGFloat.random(in: 0...size.width)
-                    let y = CGFloat.random(in: 0...size.height)
-                    let opacity = CGFloat.random(in: 0.08...0.15)
-                    context.fill(
-                        Path(ellipseIn: CGRect(x: x, y: y, width: 1, height: 1)),
-                        with: .color(.black.opacity(opacity))
-                    )
-                }
+        // Static seeded grain — animated TimelineView redraws were freezing the UI
+        Canvas { context, size in
+            var rng = GrainRNG(seed: 0xBEEF)
+            for _ in 0..<Int(size.width * size.height * 0.008) {
+                let x = CGFloat.random(in: 0...size.width, using: &rng)
+                let y = CGFloat.random(in: 0...size.height, using: &rng)
+                let opacity = CGFloat.random(in: 0.04...0.12, using: &rng)
+                let dotSize = CGFloat.random(in: 0.8...1.5, using: &rng)
+                context.fill(
+                    Path(ellipseIn: CGRect(x: x, y: y, width: dotSize, height: dotSize)),
+                    with: .color(.white.opacity(opacity))
+                )
+            }
+            for _ in 0..<Int(size.width * size.height * 0.002) {
+                let x = CGFloat.random(in: 0...size.width, using: &rng)
+                let y = CGFloat.random(in: 0...size.height, using: &rng)
+                let opacity = CGFloat.random(in: 0.08...0.15, using: &rng)
+                context.fill(
+                    Path(ellipseIn: CGRect(x: x, y: y, width: 1, height: 1)),
+                    with: .color(.black.opacity(opacity))
+                )
             }
         }
         .allowsHitTesting(false)
         .blendMode(.overlay)
+    }
+}
+
+private struct GrainRNG: RandomNumberGenerator {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed == 0 ? 1 : seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9e3779b97f4a7c15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xbf58476d1ce4e5b9
+        z = (z ^ (z >> 27)) &* 0x94d049bb133111eb
+        return z ^ (z >> 31)
     }
 }
 
@@ -1117,6 +1307,12 @@ struct NativeSnapScrubber<Value: Hashable>: View {
 
     @State private var scrollID: Value?
     @State private var isScrolling = false
+    /// Blocks scrollID↔selection sync until ScrollView finishes first layout (avoids launch animator stack overflow).
+    @State private var scrubberReady = false
+    /// True while we push an external selection into scrollPosition (must not echo back into onChanged).
+    @State private var applyingExternal = false
+    /// Cancels stacked isScrolling=false asyncAfters during rapid snaps.
+    @State private var scrollGeneration = 0
 
     private var currentIndex: Int {
         values.firstIndex(of: selection) ?? 0
@@ -1146,11 +1342,12 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                     .stroke(Color(hex: "444444"), lineWidth: 0.5)
                     .padding(2)
 
-                // Tick marks + center indicator (original aesthetic)
+                // Tick marks — yellow majors when active
                 Canvas { ctx, size in
                     let usableWidth = size.width - 24
                     let spacing = usableWidth / CGFloat(max(tickCount - 1, 1))
                     let centerX = size.width / 2
+                    let yellow = Color(red: 1.0, green: 0.85, blue: 0.35)
 
                     for i in 0..<tickCount {
                         let x = 12 + CGFloat(i) * spacing
@@ -1158,7 +1355,10 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                         let isMajor = i % 4 == 0
                         let h: CGFloat = isMajor ? 5 : 3
                         let rect = CGRect(x: x - 0.5, y: size.height - h - 4, width: 1, height: h)
-                        ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.25 : 0.1)))
+                        let color: Color = isMajor
+                            ? yellow.opacity(isScrolling ? 0.75 : 0.4)
+                            : Color.white.opacity(0.12)
+                        ctx.fill(Path(rect), with: .color(color))
                     }
 
                     let indicatorHeight: CGFloat = isScrolling ? 14 : 10
@@ -1169,10 +1369,10 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                         width: indicatorWidth,
                         height: indicatorHeight
                     )
-                    let indicatorColor = isScrolling
-                        ? Color(red: 1.0, green: 0.85, blue: 0.35)
-                        : Color.white.opacity(0.7)
-                    ctx.fill(Path(indicatorRect), with: .color(indicatorColor))
+                    ctx.fill(
+                        Path(indicatorRect),
+                        with: .color(isScrolling ? yellow : Color.white.opacity(0.7))
+                    )
                 }
                 .allowsHitTesting(false)
 
@@ -1198,10 +1398,7 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                         Text(title(selection))
                             .font(.system(size: 12, weight: .bold, design: .monospaced))
                             .foregroundColor(isScrolling ? DS.accent : .white)
-                            .scaleEffect(isScrolling ? 1.12 : 1.0)
                             .contentTransition(.numericText())
-                            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: selection)
-                            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isScrolling)
 
                         if let suffix {
                             Text(suffix)
@@ -1242,17 +1439,35 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                 .contentShape(Rectangle())
             }
         }
-        .onAppear { scrollID = selection }
+        .onAppear {
+            applyingExternal = true
+            scrollID = selection
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                applyingExternal = false
+                scrubberReady = true
+            }
+        }
         .onChange(of: selection) { _, newValue in
-            if scrollID != newValue { scrollID = newValue }
+            // External updates only — push into scrollPosition without echoing onChanged
+            guard scrubberReady, scrollID != newValue else { return }
+            applyingExternal = true
+            scrollID = newValue
+            DispatchQueue.main.async {
+                applyingExternal = false
+            }
         }
         .onChange(of: scrollID) { _, newValue in
-            guard let newValue, newValue != selection else { return }
+            guard scrubberReady, !applyingExternal, let newValue, newValue != selection else { return }
+            // Apply without nested withAnimation (freezes / MetadataCache blowups)
+            scrollGeneration += 1
+            let gen = scrollGeneration
             isScrolling = true
             selection = newValue
             onChanged(newValue)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-                isScrolling = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                if gen == scrollGeneration {
+                    isScrolling = false
+                }
             }
         }
         .sensoryFeedback(.selection, trigger: selection)
@@ -1260,19 +1475,19 @@ struct NativeSnapScrubber<Value: Hashable>: View {
         .accessibilityLabel(label)
         .accessibilityValue(title(selection) + (suffix.map { " \($0)" } ?? ""))
         .accessibilityAdjustableAction { direction in
-            guard let idx = values.firstIndex(of: selection) else { return }
+            guard scrubberReady, let idx = values.firstIndex(of: selection) else { return }
             switch direction {
             case .increment:
                 if idx + 1 < values.count {
-                    selection = values[idx + 1]
-                    scrollID = selection
-                    onChanged(selection)
+                    let next = values[idx + 1]
+                    selection = next
+                    onChanged(next)
                 }
             case .decrement:
                 if idx > 0 {
-                    selection = values[idx - 1]
-                    scrollID = selection
-                    onChanged(selection)
+                    let prev = values[idx - 1]
+                    selection = prev
+                    onChanged(prev)
                 }
             @unknown default:
                 break
@@ -1287,23 +1502,31 @@ struct ISOScrubberHorizontal: View {
     let onChanged: (Int) -> Void
 
     private let isoValues = [100, 200, 400, 800, 1600, 3200, 6400]
+    @State private var selection: Int = 800
 
     var body: some View {
         NativeSnapScrubber(
             label: "ISO",
             values: isoValues,
-            selection: Binding(
-                get: {
-                    if isoValues.contains(iso) { return iso }
-                    return isoValues.min(by: { abs($0 - iso) < abs($1 - iso) }) ?? 800
-                },
-                set: { iso = $0 }
-            ),
+            selection: $selection,
             sideLabelWidth: 32,
             tickCount: 16,
             title: { "\($0)" },
-            onChanged: onChanged
+            onChanged: { value in
+                if iso != value { iso = value }
+                onChanged(value)
+            }
         )
+        .onAppear { selection = nearest(iso, in: isoValues) }
+        .onChange(of: iso) { _, newValue in
+            let n = nearest(newValue, in: isoValues)
+            if selection != n { selection = n }
+        }
+    }
+
+    private func nearest(_ value: Int, in values: [Int]) -> Int {
+        if values.contains(value) { return value }
+        return values.min(by: { abs($0 - value) < abs($1 - value) }) ?? value
     }
 }
 
@@ -1315,27 +1538,33 @@ struct LensRingControl: View {
     let onISOChanged: (Int) -> Void
 
     private let focalLengths = [13, 24, 48, 120]
+    @State private var selection: Int = 24
 
     var body: some View {
         NativeSnapScrubber(
             label: "LENS",
             values: focalLengths,
-            selection: Binding(
-                get: {
-                    if focalLengths.contains(focalLength) { return focalLength }
-                    return focalLengths.min(by: { abs($0 - focalLength) < abs($1 - focalLength) }) ?? 24
-                },
-                set: { focalLength = $0 }
-            ),
+            selection: $selection,
             suffix: "MM",
             sideLabelWidth: 28,
             tickCount: 20,
             title: { "\($0)" },
             onChanged: { fl in
+                if focalLength != fl { focalLength = fl }
                 onFocalLengthChanged(fl)
                 onISOChanged(isoValue)
             }
         )
+        .onAppear { selection = nearest(focalLength, in: focalLengths) }
+        .onChange(of: focalLength) { _, newValue in
+            let n = nearest(newValue, in: focalLengths)
+            if selection != n { selection = n }
+        }
+    }
+
+    private func nearest(_ value: Int, in values: [Int]) -> Int {
+        if values.contains(value) { return value }
+        return values.min(by: { abs($0 - value) < abs($1 - value) }) ?? value
     }
 }
 
@@ -1606,7 +1835,9 @@ struct Triangle: Shape {
     }
 }
 
-// MARK: - Shutter Button (brushed steel — matte metal, not chrome)
+// MARK: - Shutter Button (machined steel — bevel + brush)
+/// Shader roughness args are CONSTANT — never animate stitchable Metal params
+/// (animating them caused EXC_BAD_ACCESS / MetadataCache stack overflow on press & capture).
 struct ShutterButton: View {
     let isCapturing: Bool
     let action: () -> Void
@@ -1616,17 +1847,18 @@ struct ShutterButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Knurled steel collar — muted, low-contrast lathe bands
+                // Knurled collar
                 Circle()
                     .fill(
                         AngularGradient(
                             colors: [
-                                Color(red: 0.34, green: 0.35, blue: 0.37),
-                                Color(red: 0.20, green: 0.21, blue: 0.23),
-                                Color(red: 0.30, green: 0.31, blue: 0.33),
-                                Color(red: 0.17, green: 0.18, blue: 0.19),
-                                Color(red: 0.32, green: 0.33, blue: 0.35),
-                                Color(red: 0.34, green: 0.35, blue: 0.37)
+                                Color(red: 0.50, green: 0.52, blue: 0.56),
+                                Color(red: 0.20, green: 0.21, blue: 0.24),
+                                Color(red: 0.44, green: 0.46, blue: 0.50),
+                                Color(red: 0.16, green: 0.17, blue: 0.20),
+                                Color(red: 0.48, green: 0.50, blue: 0.54),
+                                Color(red: 0.22, green: 0.23, blue: 0.26),
+                                Color(red: 0.50, green: 0.52, blue: 0.56)
                             ],
                             center: .center
                         )
@@ -1634,103 +1866,133 @@ struct ShutterButton: View {
                     .frame(width: 76, height: 76)
                     .overlay {
                         Circle()
-                            .fill(Color(red: 0.26, green: 0.27, blue: 0.29))
+                            .fill(Color(red: 0.33, green: 0.35, blue: 0.39))
                             .colorEffect(
                                 ShaderLibrary.metallicSurface(
                                     .float2(76, 76),
-                                    .float(isPressed ? 0.70 : 1.05),
-                                    .float2(0.28, 0.22)
+                                    .float(1.0),
+                                    .float2(0.26, 0.14)
                                 )
                             )
                             .clipShape(Circle())
                             .allowsHitTesting(false)
+                            .brightness(isPressed ? -0.06 : 0)
+                    }
+                    .overlay {
+                        Circle()
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(isPressed ? 0.35 : 0.55),
+                                        Color.white.opacity(0.08),
+                                        Color.black.opacity(0.7)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1.35
+                            )
+                    }
+                    .overlay {
+                        Circle()
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        Color.black.opacity(0.45),
+                                        Color.clear,
+                                        Color.white.opacity(0.12)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1.0
+                            )
+                            .padding(2.5)
                     }
 
                 Circle()
-                    .stroke(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(isPressed ? 0.14 : 0.22),
-                                Color.white.opacity(0.04),
-                                Color.black.opacity(0.65)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1.1
-                    )
-                    .frame(width: 76, height: 76)
-
-                // Recess between collar and face
-                Circle()
-                    .stroke(Color.black.opacity(isPressed ? 0.8 : 0.55), lineWidth: isPressed ? 2.5 : 1.75)
+                    .stroke(Color.black.opacity(isPressed ? 0.85 : 0.55), lineWidth: isPressed ? 2.6 : 1.75)
                     .frame(width: 66, height: 66)
+                    .shadow(color: Color.black.opacity(0.35), radius: 1, y: 0.5)
 
-                // Raised brushed-steel face
                 ZStack {
                     Circle()
-                        .fill(Color(red: 0.24, green: 0.25, blue: 0.27))
+                        .fill(Color(red: 0.30, green: 0.32, blue: 0.36))
                         .frame(width: 60, height: 60)
                         .colorEffect(
                             ShaderLibrary.metallicSurface(
                                 .float2(60, 60),
-                                .float(isPressed ? 0.55 : 0.95),
-                                .float2(0.32, 0.28)
+                                .float(0.95),
+                                .float2(0.28, 0.20)
                             )
                         )
                         .clipShape(Circle())
+                        .brightness(isPressed ? -0.05 : 0)
 
-                    // Soft sheen only — no screen-blend chrome hotspot
                     Circle()
                         .fill(
-                            RadialGradient(
+                            LinearGradient(
                                 colors: [
-                                    Color.white.opacity(isPressed ? 0.03 : 0.08),
-                                    Color.clear
+                                    Color.white.opacity(isPressed ? 0.14 : 0.26),
+                                    Color.clear,
+                                    Color.black.opacity(0.22)
                                 ],
-                                center: UnitPoint(x: 0.34, y: 0.30),
-                                startRadius: 0,
-                                endRadius: 30
+                                startPoint: UnitPoint(x: 0.22, y: 0.12),
+                                endPoint: UnitPoint(x: 0.85, y: 0.92)
                             )
                         )
                         .frame(width: 60, height: 60)
+                        .blendMode(.softLight)
+
+                    Ellipse()
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    Color.white.opacity(isPressed ? 0.08 : 0.16),
+                                    Color.clear
+                                ],
+                                center: UnitPoint(x: 0.35, y: 0.28),
+                                startRadius: 0,
+                                endRadius: 18
+                            )
+                        )
+                        .frame(width: 36, height: 22)
+                        .offset(x: -4, y: -8)
+                        .blendMode(.plusLighter)
+                        .opacity(0.55)
+
+                    ForEach(0..<4, id: \.self) { i in
+                        Circle()
+                            .stroke(Color.white.opacity(0.05), lineWidth: 0.55)
+                            .frame(width: CGFloat(50 - i * 9), height: CGFloat(50 - i * 9))
+                    }
 
                     Circle()
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(isPressed ? 0.06 : 0.16),
+                                    Color.white.opacity(isPressed ? 0.16 : 0.32),
                                     Color.clear,
                                     Color.black.opacity(0.45)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
-                            lineWidth: 0.9
+                            lineWidth: 1
                         )
                         .frame(width: 58, height: 58)
 
-                    ForEach(0..<4, id: \.self) { i in
-                        Circle()
-                            .stroke(Color.white.opacity(0.035), lineWidth: 0.55)
-                            .frame(width: CGFloat(50 - i * 9), height: CGFloat(50 - i * 9))
-                    }
-
                     if isCapturing {
                         Circle()
-                            .fill(Color.white.opacity(0.10))
+                            .fill(Color.white.opacity(0.12))
                             .frame(width: 60, height: 60)
                     }
                 }
-                .scaleEffect(isPressed ? 0.95 : 1.0)
-                .shadow(
-                    color: Color.black.opacity(isPressed ? 0.25 : 0.5),
-                    radius: isPressed ? 0.5 : 3,
-                    y: isPressed ? 0 : 1.5
-                )
+                // Press settle without scaling the Metal shader layer
+                .opacity(isPressed ? 0.92 : 1.0)
+                .shadow(color: Color.black.opacity(isPressed ? 0.3 : 0.5), radius: isPressed ? 0.5 : 2.5, y: isPressed ? 0 : 1.5)
             }
-            .shadow(color: Color.black.opacity(0.5), radius: isPressed ? 2 : 6, y: isPressed ? 1 : 3)
-            .animation(.spring(response: 0.12, dampingFraction: 0.65), value: isPressed)
+            .shadow(color: Color.black.opacity(isPressed ? 0.35 : 0.55), radius: isPressed ? 2 : 5, y: isPressed ? 1 : 2.5)
         }
         .buttonStyle(PlainButtonStyle())
         .simultaneousGesture(
@@ -1738,14 +2000,12 @@ struct ShutterButton: View {
                 .onChanged { _ in
                     if !isPressed {
                         isPressed = true
-                        let impact = UIImpactFeedbackGenerator(style: .heavy)
-                        impact.impactOccurred(intensity: 0.8)
+                        UIImpactFeedbackGenerator(style: .heavy).impactOccurred(intensity: 0.8)
                     }
                 }
                 .onEnded { _ in
                     isPressed = false
-                    let impact = UIImpactFeedbackGenerator(style: .rigid)
-                    impact.impactOccurred(intensity: 0.6)
+                    UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.6)
                 }
         )
         .disabled(isCapturing)
@@ -3097,20 +3357,26 @@ struct ShutterScrubber: View {
 
     private let speeds = ["4\"", "2\"", "1\"", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60", "1/125", "1/250", "1/500", "1/1000", "1/2000", "1/4000"]
     private var indices: [Int] { Array(speeds.indices) }
+    @State private var selection: Int = 9
 
     var body: some View {
         NativeSnapScrubber(
             label: "S",
             values: indices,
-            selection: Binding(
-                get: { min(max(shutterSpeed, 0), speeds.count - 1) },
-                set: { shutterSpeed = $0 }
-            ),
+            selection: $selection,
             sideLabelWidth: 36,
             tickCount: 16,
             title: { speeds[$0] },
-            onChanged: onChanged
+            onChanged: { idx in
+                if shutterSpeed != idx { shutterSpeed = idx }
+                onChanged(idx)
+            }
         )
+        .onAppear { selection = min(max(shutterSpeed, 0), speeds.count - 1) }
+        .onChange(of: shutterSpeed) { _, newValue in
+            let clamped = min(max(newValue, 0), speeds.count - 1)
+            if selection != clamped { selection = clamped }
+        }
     }
 }
 
@@ -3257,24 +3523,53 @@ struct FilmStripThumbnail: View {
     }
 }
 
-// MARK: - Focus Indicator
-struct FocusIndicator: View {
-    @State private var scale: CGFloat = 1.3
-    @State private var opacity: Double = 1
+// MARK: - Focus + exposure reticle (iOS Camera–style)
+struct FocusExposureReticle: View {
+    let exposureBias: Float
+
+    @State private var scale: CGFloat = 1.25
+
+    /// Sun rides a short vertical track beside the box (up = brighter).
+    private var sunOffsetY: CGFloat {
+        // Map -2…+2 → +22…-22 (negative Y is up)
+        CGFloat(-exposureBias / 2.0) * 22
+    }
 
     var body: some View {
         ZStack {
-            // Brackets
             FocusBrackets()
-                .stroke(Color.white, lineWidth: 1.5)
-                .frame(width: 70, height: 70)
+                .stroke(Color(red: 1.0, green: 0.84, blue: 0.2), lineWidth: 1.6)
+                .frame(width: 72, height: 72)
+
+            // Brightness scrubber — sun + tick rail (drag anywhere on frame to drive EV)
+            HStack(spacing: 6) {
+                Spacer().frame(width: 72)
+                ZStack {
+                    Capsule()
+                        .fill(Color.white.opacity(0.22))
+                        .frame(width: 1.5, height: 44)
+
+                    Image(systemName: "sun.max.fill")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(Color(red: 1.0, green: 0.84, blue: 0.2))
+                        .shadow(color: .black.opacity(0.45), radius: 2, y: 1)
+                        .offset(y: sunOffsetY)
+                        .animation(.interactiveSpring(response: 0.2, dampingFraction: 0.85), value: exposureBias)
+                }
+                .frame(width: 18, height: 52)
+            }
         }
         .scaleEffect(scale)
-        .opacity(opacity)
         .onAppear {
-            withAnimation(.easeOut(duration: 0.2)) { scale = 1 }
-            withAnimation(.easeIn(duration: 1).delay(0.5)) { opacity = 0 }
+            withAnimation(.easeOut(duration: 0.18)) { scale = 1 }
         }
+    }
+}
+
+/// Legacy name kept for any call sites / previews.
+struct FocusIndicator: View {
+    var body: some View {
+        FocusExposureReticle(exposureBias: 0)
     }
 }
 

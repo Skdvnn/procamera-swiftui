@@ -560,25 +560,23 @@ struct AnalogDisplayPanel: View {
                 .padding(2)
 
             if compact {
-                // Minimized: focus + EV meters full width.
-                // ISO/shutter already live in the viewfinder histogram bar.
-                HStack(alignment: .center, spacing: 14) {
-                    CompactMeter(
-                        label: "FOCUS",
-                        value: CGFloat(focusPosition),
-                        display: isAutoFocus ? "AF" : String(format: "%.2f", focusPosition)
+                // Minimized: interactive FOCUS + EV scrubbers (same chrome as bottom deck)
+                HStack(alignment: .center, spacing: 4) {
+                    CompactFocusScrubber(
+                        focusPosition: $focusPosition,
+                        isAutoFocus: isAutoFocus,
+                        onChanged: onFocusChanged
                     )
                     .frame(maxWidth: .infinity)
 
-                    CompactMeter(
-                        label: "EV",
-                        value: CGFloat((exposureValue + 2) / 4),
-                        display: String(format: "%+.1f", exposureValue)
+                    CompactEVScrubber(
+                        exposureValue: $exposureValue,
+                        onChanged: onExposureChanged
                     )
                     .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
             } else {
                 // Content - centered vertically
                 HStack(spacing: 0) {
@@ -618,11 +616,127 @@ struct AnalogDisplayPanel: View {
     ]
 }
 
-// MARK: - Compact Meter (needle on a ticked track)
+// MARK: - Compact FOCUS scrubber (NativeSnapScrubber chrome)
+struct CompactFocusScrubber: View {
+    @Binding var focusPosition: Float
+    let isAutoFocus: Bool
+    let onChanged: (Float) -> Void
+
+    /// Discrete focus stops matching the FocusDial major marks.
+    private let stops: [Int] = Array(0...6)
+    private let stopValues: [Float] = [0.0, 0.17, 0.33, 0.5, 0.67, 0.83, 1.0]
+    private let stopLabels = [".4m", ".7m", "1m", "3m", "5m", "10m", "∞"]
+
+    /// Stable index — avoids Binding get/set snap ping-pong with ScrollView.
+    @State private var index: Int = 3
+    /// Ignore pinch/AF streaming updates briefly after a local scrub (prevents scroll thrash).
+    @State private var suppressExternalUntil: TimeInterval = 0
+    @State private var pendingExternal: DispatchWorkItem?
+
+    private func nearestIndex(to value: Float) -> Int {
+        stopValues.enumerated().min(by: {
+            abs($0.element - value) < abs($1.element - value)
+        })?.offset ?? 3
+    }
+
+    var body: some View {
+        NativeSnapScrubber(
+            label: "FOCUS",
+            values: stops,
+            selection: $index,
+            sideLabelWidth: 28,
+            tickCount: 14,
+            title: { idx in
+                let safe = min(max(idx, 0), stopLabels.count - 1)
+                if isAutoFocus && safe == index { return "AF" }
+                return stopLabels[safe]
+            },
+            onChanged: { idx in
+                suppressExternalUntil = Date().timeIntervalSince1970 + 0.35
+                let safe = min(max(idx, 0), stopValues.count - 1)
+                let value = stopValues[safe]
+                if focusPosition != value {
+                    focusPosition = value
+                }
+                onChanged(value)
+            }
+        )
+        .onAppear { index = nearestIndex(to: focusPosition) }
+        .onChange(of: focusPosition) { _, newValue in
+            // Debounce continuous AF/pinch updates so scrollPosition isn't spammed
+            pendingExternal?.cancel()
+            let work = DispatchWorkItem {
+                guard Date().timeIntervalSince1970 >= suppressExternalUntil else { return }
+                let nearest = nearestIndex(to: newValue)
+                if nearest != index { index = nearest }
+            }
+            pendingExternal = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+        }
+    }
+}
+
+// MARK: - Compact EV scrubber (NativeSnapScrubber chrome)
+struct CompactEVScrubber: View {
+    @Binding var exposureValue: Float
+    let onChanged: (Float) -> Void
+
+    private let stops: [Int] = Array(0...8)
+    private let stopValues: [Float] = [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]
+
+    @State private var index: Int = 4
+    @State private var suppressExternalUntil: TimeInterval = 0
+    @State private var pendingExternal: DispatchWorkItem?
+
+    private func nearestIndex(to value: Float) -> Int {
+        stopValues.enumerated().min(by: {
+            abs($0.element - value) < abs($1.element - value)
+        })?.offset ?? 4
+    }
+
+    var body: some View {
+        NativeSnapScrubber(
+            label: "EV",
+            values: stops,
+            selection: $index,
+            sideLabelWidth: 28,
+            tickCount: 14,
+            title: { idx in
+                let v = stopValues[min(max(idx, 0), stopValues.count - 1)]
+                return String(format: "%+.1f", v)
+            },
+            onChanged: { idx in
+                suppressExternalUntil = Date().timeIntervalSince1970 + 0.35
+                let safe = min(max(idx, 0), stopValues.count - 1)
+                let value = stopValues[safe]
+                if exposureValue != value {
+                    exposureValue = value
+                }
+                onChanged(value)
+            }
+        )
+        .onAppear { index = nearestIndex(to: exposureValue) }
+        .onChange(of: exposureValue) { _, newValue in
+            // Debounce viewfinder EV-drag streaming into scrollPosition
+            pendingExternal?.cancel()
+            let work = DispatchWorkItem {
+                guard Date().timeIntervalSince1970 >= suppressExternalUntil else { return }
+                let nearest = nearestIndex(to: newValue)
+                if nearest != index { index = nearest }
+            }
+            pendingExternal = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+        }
+    }
+}
+
+// MARK: - Compact Meter (needle on a ticked track) — kept for other readouts
 struct CompactMeter: View {
     let label: String
     let value: CGFloat  // 0...1 needle position
     let display: String
+
+    private let accentYellow = Color(red: 1.0, green: 0.85, blue: 0.35)
 
     var body: some View {
         VStack(spacing: 5) {
@@ -641,28 +755,43 @@ struct CompactMeter: View {
                 let clamped = min(max(value, 0), 1)
 
                 ZStack(alignment: .leading) {
-                    // Tick marks — denser when the meter stretches full width
                     Canvas { ctx, size in
-                        let tickCount = max(9, Int(size.width / 14))
+                        let tickCount = max(11, Int(size.width / 12))
                         for i in 0..<tickCount {
                             let x = CGFloat(i) / CGFloat(tickCount - 1) * (size.width - 1)
+                            let isEnd = i == 0 || i == tickCount - 1
                             let isMajor = i % 2 == 0
-                            let rect = CGRect(x: x, y: isMajor ? 2 : 4,
-                                              width: 1, height: isMajor ? 8 : 4)
-                            ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.3 : 0.15)))
+                            let h: CGFloat = isEnd ? 10 : (isMajor ? 8 : 4)
+                            let y: CGFloat = isEnd ? 1 : (isMajor ? 2 : 4)
+                            let w: CGFloat = isEnd ? 1.5 : 1
+                            let rect = CGRect(x: x - (w - 1) / 2, y: y, width: w, height: h)
+                            let color: Color = {
+                                if isEnd { return accentYellow.opacity(0.85) }
+                                if isMajor { return accentYellow.opacity(0.55) }
+                                return accentYellow.opacity(0.22)
+                            }()
+                            ctx.fill(Path(rect), with: .color(color))
                         }
                     }
 
-                    // Track line
                     Rectangle()
-                        .fill(Color.white.opacity(0.12))
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    accentYellow.opacity(0.18),
+                                    Color.white.opacity(0.1),
+                                    accentYellow.opacity(0.18)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
                         .frame(height: 1)
-                        .offset(y: 0)
 
-                    // Needle
                     Capsule()
                         .fill(Color(red: 1.0, green: 0.62, blue: 0.3))
                         .frame(width: 2, height: 12)
+                        .shadow(color: Color(red: 1.0, green: 0.62, blue: 0.3).opacity(0.35), radius: 1.5, y: 0)
                         .offset(x: clamped * (width - 2))
                         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: clamped)
                 }
