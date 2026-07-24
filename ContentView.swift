@@ -321,6 +321,8 @@ struct ContentView: View {
 
                             VStack {
                                 Spacer()
+                                // Instagram-style bottom overlay — also a deck pull target
+                                // so swipe-up/down isn't stuck to the tiny grabber.
                                 RefractiveGlassInfoBar(
                                     iso: isoValue,
                                     shutterSpeed: shutterSpeeds[shutterSpeedIndex],
@@ -332,6 +334,17 @@ struct ContentView: View {
                                 )
                                 .padding(.horizontal, 8)
                                 .padding(.bottom, 8)
+                                .contentShape(Rectangle())
+                                .simultaneousGesture(bottomDeckSwipe)
+                            }
+                            // Tall invisible band above the glass bar for easier vertical pull
+                            .overlay(alignment: .bottom) {
+                                Color.clear
+                                    .frame(height: 72)
+                                    .frame(maxWidth: .infinity)
+                                    .contentShape(Rectangle())
+                                    .simultaneousGesture(bottomDeckSwipe)
+                                    .padding(.bottom, 4)
                             }
 
                             // Inner shadow overlay (deeper inset effect like DSLR viewfinder)
@@ -556,20 +569,20 @@ struct ContentView: View {
     }
 
     /// Bottom deck: swipe down collapses, swipe up expands.
-    /// Soft thresholds + live drag so the whole strip (not a tiny slot) feels pullable.
+    /// Soft thresholds — viewfinder glass bar + shutter row + grabber all pull.
     private var bottomDeckSwipe: some Gesture {
-        DragGesture(minimumDistance: 8, coordinateSpace: .local)
+        DragGesture(minimumDistance: 6, coordinateSpace: .local)
             .onChanged { value in
                 let dy = value.translation.height
                 let dx = value.translation.width
                 // Ignore mostly-horizontal scrubber drags
-                guard abs(dy) > abs(dx) * 0.65 else { return }
+                guard abs(dy) > abs(dx) * 0.55 else { return }
                 if bottomCollapsed {
                     // Pull up (negative) to peek expand
-                    bottomDeckDrag = min(0, max(dy, -140))
+                    bottomDeckDrag = min(0, max(dy, -160))
                 } else {
                     // Pull down (positive) to peek collapse
-                    bottomDeckDrag = max(0, min(dy, 140))
+                    bottomDeckDrag = max(0, min(dy, 160))
                 }
             }
             .onEnded { value in
@@ -581,14 +594,13 @@ struct ContentView: View {
                 let committedDrag = bottomDeckDrag
                 withAnimation(.interactiveSpring(response: 0.38, dampingFraction: 0.86, blendDuration: 0.12)) {
                     bottomDeckDrag = 0
-                    // Still require a clear vertical intent so ISO/shutter scrubbers win
-                    guard abs(effective) > abs(dx) * 0.55 else { return }
+                    // Vertical wins easily; scrubbers still own clear horizontal pans
+                    guard abs(effective) > abs(dx) * 0.45 else { return }
                     if bottomCollapsed {
-                        // Easy expand: short swipe up or committed drag
-                        if effective < -18 || committedDrag < -28 {
+                        if effective < -12 || committedDrag < -18 {
                             bottomCollapsed = false
                         }
-                    } else if effective > 18 || committedDrag > 28 {
+                    } else if effective > 12 || committedDrag > 18 {
                         bottomCollapsed = true
                     }
                 }
@@ -729,8 +741,10 @@ struct ContentView: View {
                 .frame(width: 88, height: 48)
             }
             .padding(.horizontal, DS.pageMargin)
+            .contentShape(Rectangle())
+            .simultaneousGesture(bottomDeckSwipe)
 
-            // ROW 4: Thumbnail | Shutter | WB
+            // ROW 4: Thumbnail | Shutter | WB — big pull zone around shutter
             HStack(alignment: .center, spacing: 0) {
                 ThumbnailPill(image: lastCapturedImage) {
                     Haptics.click()
@@ -754,8 +768,10 @@ struct ContentView: View {
                 )
             }
             .padding(.horizontal, DS.pageMargin)
+            .padding(.vertical, 6)
+            .contentShape(Rectangle())
+            .simultaneousGesture(bottomDeckSwipe)
         }
-        .contentShape(Rectangle())
     }
 
     private func handleCapture() {
@@ -1548,7 +1564,7 @@ struct Triangle: Shape {
     }
 }
 
-// MARK: - Shutter Button (brushed steel — matte metal, not chrome)
+// MARK: - Shutter Button (matte machined steel — grain, not plastic gloss)
 struct ShutterButton: View {
     let isCapturing: Bool
     let action: () -> Void
@@ -1558,17 +1574,17 @@ struct ShutterButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Knurled steel collar — muted, low-contrast lathe bands
+                // Collar — low-contrast lathe, almost flat gunmetal
                 Circle()
                     .fill(
                         AngularGradient(
                             colors: [
-                                Color(red: 0.34, green: 0.35, blue: 0.37),
-                                Color(red: 0.20, green: 0.21, blue: 0.23),
-                                Color(red: 0.30, green: 0.31, blue: 0.33),
-                                Color(red: 0.17, green: 0.18, blue: 0.19),
-                                Color(red: 0.32, green: 0.33, blue: 0.35),
-                                Color(red: 0.34, green: 0.35, blue: 0.37)
+                                Color(red: 0.28, green: 0.29, blue: 0.30),
+                                Color(red: 0.16, green: 0.17, blue: 0.18),
+                                Color(red: 0.25, green: 0.26, blue: 0.27),
+                                Color(red: 0.14, green: 0.15, blue: 0.16),
+                                Color(red: 0.27, green: 0.28, blue: 0.29),
+                                Color(red: 0.28, green: 0.29, blue: 0.30)
                             ],
                             center: .center
                         )
@@ -1576,12 +1592,12 @@ struct ShutterButton: View {
                     .frame(width: 76, height: 76)
                     .overlay {
                         Circle()
-                            .fill(Color(red: 0.26, green: 0.27, blue: 0.29))
+                            .fill(Color(red: 0.20, green: 0.21, blue: 0.22))
                             .colorEffect(
                                 ShaderLibrary.metallicSurface(
                                     .float2(76, 76),
-                                    .float(isPressed ? 0.70 : 1.05),
-                                    .float2(0.28, 0.22)
+                                    .float(isPressed ? 0.9 : 1.25),
+                                    .float2(0.40, 0.35)
                                 )
                             )
                             .clipShape(Circle())
@@ -1592,86 +1608,71 @@ struct ShutterButton: View {
                     .stroke(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(isPressed ? 0.14 : 0.22),
-                                Color.white.opacity(0.04),
-                                Color.black.opacity(0.65)
+                                Color.white.opacity(isPressed ? 0.06 : 0.10),
+                                Color.black.opacity(0.15),
+                                Color.black.opacity(0.7)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         ),
-                        lineWidth: 1.1
+                        lineWidth: 1
                     )
                     .frame(width: 76, height: 76)
 
                 // Recess between collar and face
                 Circle()
-                    .stroke(Color.black.opacity(isPressed ? 0.8 : 0.55), lineWidth: isPressed ? 2.5 : 1.75)
+                    .stroke(Color.black.opacity(isPressed ? 0.85 : 0.65), lineWidth: isPressed ? 2.5 : 2)
                     .frame(width: 66, height: 66)
 
-                // Raised brushed-steel face
+                // Face — heavy brush, almost no specular
                 ZStack {
                     Circle()
-                        .fill(Color(red: 0.24, green: 0.25, blue: 0.27))
+                        .fill(Color(red: 0.18, green: 0.19, blue: 0.20))
                         .frame(width: 60, height: 60)
                         .colorEffect(
                             ShaderLibrary.metallicSurface(
                                 .float2(60, 60),
-                                .float(isPressed ? 0.55 : 0.95),
-                                .float2(0.32, 0.28)
+                                .float(isPressed ? 0.75 : 1.2),
+                                .float2(0.45, 0.40)
                             )
                         )
                         .clipShape(Circle())
-
-                    // Soft sheen only — no screen-blend chrome hotspot
-                    Circle()
-                        .fill(
-                            RadialGradient(
-                                colors: [
-                                    Color.white.opacity(isPressed ? 0.03 : 0.08),
-                                    Color.clear
-                                ],
-                                center: UnitPoint(x: 0.34, y: 0.30),
-                                startRadius: 0,
-                                endRadius: 30
-                            )
-                        )
-                        .frame(width: 60, height: 60)
 
                     Circle()
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(isPressed ? 0.06 : 0.16),
+                                    Color.white.opacity(isPressed ? 0.03 : 0.07),
                                     Color.clear,
-                                    Color.black.opacity(0.45)
+                                    Color.black.opacity(0.5)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
-                            lineWidth: 0.9
+                            lineWidth: 0.8
                         )
                         .frame(width: 58, height: 58)
 
-                    ForEach(0..<4, id: \.self) { i in
+                    ForEach(0..<3, id: \.self) { i in
                         Circle()
-                            .stroke(Color.white.opacity(0.035), lineWidth: 0.55)
-                            .frame(width: CGFloat(50 - i * 9), height: CGFloat(50 - i * 9))
+                            .stroke(Color.white.opacity(0.02), lineWidth: 0.5)
+                            .frame(width: CGFloat(48 - i * 10), height: CGFloat(48 - i * 10))
                     }
 
                     if isCapturing {
                         Circle()
-                            .fill(Color.white.opacity(0.10))
+                            .fill(Color.white.opacity(0.06))
                             .frame(width: 60, height: 60)
                     }
                 }
                 .scaleEffect(isPressed ? 0.95 : 1.0)
                 .shadow(
-                    color: Color.black.opacity(isPressed ? 0.25 : 0.5),
-                    radius: isPressed ? 0.5 : 3,
-                    y: isPressed ? 0 : 1.5
+                    color: Color.black.opacity(isPressed ? 0.3 : 0.45),
+                    radius: isPressed ? 0.5 : 2,
+                    y: isPressed ? 0 : 1
                 )
             }
-            .shadow(color: Color.black.opacity(0.5), radius: isPressed ? 2 : 6, y: isPressed ? 1 : 3)
+            .shadow(color: Color.black.opacity(0.4), radius: isPressed ? 1 : 3, y: isPressed ? 1 : 2)
             .animation(.spring(response: 0.12, dampingFraction: 0.65), value: isPressed)
         }
         .buttonStyle(PlainButtonStyle())

@@ -641,9 +641,9 @@ struct CompactMeter: View {
                 let clamped = min(max(value, 0), 1)
 
                 ZStack(alignment: .leading) {
-                    // Tick marks
+                    // Tick marks — denser when the meter stretches full width
                     Canvas { ctx, size in
-                        let tickCount = 9
+                        let tickCount = max(9, Int(size.width / 14))
                         for i in 0..<tickCount {
                             let x = CGFloat(i) / CGFloat(tickCount - 1) * (size.width - 1)
                             let isMajor = i % 2 == 0
