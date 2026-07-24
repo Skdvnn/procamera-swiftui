@@ -202,6 +202,8 @@ struct ContentView: View {
     @State private var captureFormat: CaptureFormat = .heic
     @State private var topCollapsed = false
     @State private var bottomCollapsed = false
+    /// Live vertical drag on the bottom deck (positive = pulling down / collapsing).
+    @State private var bottomDeckDrag: CGFloat = 0
     @StateObject private var gallery = GalleryStore()
     @State private var showPhotoBook = false
 
@@ -319,6 +321,8 @@ struct ContentView: View {
 
                             VStack {
                                 Spacer()
+                                // Instagram-style bottom overlay — also a deck pull target
+                                // so swipe-up/down isn't stuck to the tiny grabber.
                                 RefractiveGlassInfoBar(
                                     iso: isoValue,
                                     shutterSpeed: shutterSpeeds[shutterSpeedIndex],
@@ -330,6 +334,16 @@ struct ContentView: View {
                                 )
                                 .padding(.horizontal, 8)
                                 .padding(.bottom, 8)
+                                .contentShape(Rectangle())
+                                .simultaneousGesture(bottomDeckSwipe)
+                            }
+                            // Invisible pull band over the glass bar (no visible handle)
+                            .overlay(alignment: .bottom) {
+                                Color.clear
+                                    .frame(height: 56)
+                                    .frame(maxWidth: .infinity)
+                                    .contentShape(Rectangle())
+                                    .simultaneousGesture(bottomDeckSwipe)
                             }
 
                             // Inner shadow overlay (deeper inset effect like DSLR viewfinder)
@@ -369,183 +383,53 @@ struct ContentView: View {
 
                     Spacer().frame(height: viewfinderToControlsSpacing)
 
-                    // BOTTOM CONTROLS - grid-like DSLR layout with equidistant spacing
+                    // BOTTOM CONTROLS — hidden pull (no grabber). Glass bar + shutter
+                    // row + home pad own vertical swipe; scrubbers own horizontal.
                     VStack(spacing: 0) {
-                        if bottomCollapsed {
-                        // COMPACT: single row - thumbnail | shutter | readout
-                        HStack(alignment: .center, spacing: 0) {
-                            ThumbnailPill(image: lastCapturedImage) {
-                                Haptics.click()
-                                showPhotoBook = true
+                        ZStack(alignment: .bottom) {
+                            if bottomCollapsed {
+                                bottomCompactDeck
+                                    .offset(y: bottomDeckDrag * 0.15)
+                                    .opacity(1.0 - min(abs(bottomDeckDrag) / 90.0, 0.45))
+                                    .contentShape(Rectangle())
+                                    .gesture(bottomDeckSwipe)
+                                    .transition(
+                                        .asymmetric(
+                                            insertion: .move(edge: .bottom).combined(with: .opacity),
+                                            removal: .opacity.combined(with: .scale(scale: 0.96, anchor: .bottom))
+                                        )
+                                    )
+                            } else {
+                                bottomExpandedDeck
+                                    .offset(y: bottomDeckDrag * 0.55)
+                                    .opacity(1.0 - min(bottomDeckDrag / 110.0, 0.55))
+                                    .transition(
+                                        .asymmetric(
+                                            insertion: .opacity.combined(with: .offset(y: 10)),
+                                            removal: .opacity.combined(with: .offset(y: 22))
+                                        )
+                                    )
                             }
-
-                            Spacer()
-
-                            ShutterButton(isCapturing: isCapturing) {
-                                Haptics.heavy()
-                                handleCapture()
-                            }
-
-                            Spacer()
-
-                            // Compact deck: WB where ISO/shutter readout used to sit
-                            // (ISO/shutter stay available in the expanded deck / top gauges)
-                            WBPill(
-                                whiteBalanceIndex: $whiteBalanceIndex,
-                                onChanged: { mode in
-                                    camera.setWhiteBalance(mode: mode)
-                                }
-                            )
                         }
-                        .padding(.horizontal, DS.pageMargin)
-                        .padding(.vertical, 6)
-                        } else {
-                        // ROW 1: Zoom control (full width) - no top padding
-                        LensRingControl(
-                                focalLength: $focalLength,
-                                isoValue: $isoValue,
-                                onFocalLengthChanged: { fl in
-                                    // Switch to the actual physical camera lens
-                                    camera.switchToLens(focalLength: fl)
-                                    let zoomMap: [Int: CGFloat] = [13: 0.5, 24: 1.0, 48: 2.0, 120: 5.0]
-                                    zoomValue = zoomMap[fl] ?? CGFloat(fl) / 24.0
-                                    // After the lens/format swap settles, push the scrubber
-                                    // values again so shutter/ISO don't drift to auto/defaults
-                                    let iso = isoValue
-                                    let shutter = shutterSpeedIndex
-                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                                        if camera.isManualExposure {
-                                            camera.setISO(Float(iso))
-                                            camera.setShutterSpeed(index: shutter)
-                                        }
-                                    }
-                                },
-                                onISOChanged: { iso in
-                                    camera.setISO(Float(iso))
-                                }
-                            )
-                            .frame(height: 44)
-                            .padding(.horizontal, DS.pageMargin)
+                        .animation(
+                            .interactiveSpring(response: 0.38, dampingFraction: 0.86, blendDuration: 0.12),
+                            value: bottomCollapsed
+                        )
 
-                            Spacer().frame(height: 2)
-
-                            // ROW 2: ISO & Shutter side by side
-                            HStack(spacing: 4) {
-                                ISOScrubberHorizontal(
-                                    iso: $isoValue,
-                                    onChanged: { iso in
-                                        camera.setISO(Float(iso))
-                                    }
-                                )
-
-                                ShutterScrubber(
-                                    shutterSpeed: $shutterSpeedIndex,
-                                    onChanged: { idx in
-                                        camera.setShutterSpeed(index: idx)
-                                        // Also update exposure meter to reflect the change
-                                        let evShift = Float(idx - 9) * 0.5
-                                        exposureValue = max(-2, min(2, evShift))
-                                    }
-                                )
-                            }
-                            .frame(height: 44)
-                            .padding(.horizontal, DS.pageMargin)
-
-                            Spacer().frame(height: 6)
-
-                            // ROW 3: Flash | Format | Mode icons+buttons
-                            HStack(alignment: .center, spacing: 0) {
-                                // Left: Flash button (88px wide)
-                                FlashButtonPill(flashMode: camera.flashMode) {
-                                    Haptics.click()
-                                    camera.cycleFlash()
-                                }
-                                .frame(width: 88)
-
-                                Spacer()
-
-                                // Center: Format toggle (centered between flash and mode buttons)
-                                FormatTogglePill(format: $captureFormat) { newFormat in
-                                    switch newFormat {
-                                    case .heic: camera.captureFormat = .heic
-                                    case .jpeg: camera.captureFormat = .jpeg
-                                    case .raw: camera.captureFormat = .raw
-                                    }
-                                }
-
-                                Spacer()
-
-                                // Right: Mode icons + buttons (same width as flash for centering)
-                                HStack(spacing: 12) {
-                                    VStack(spacing: 8) {
-                                        ModeIcon(icon: "camera.macro", isActive: macroEnabled)
-                                        ModeButton(isActive: macroEnabled) {
-                                            Haptics.click()
-                                            macroEnabled.toggle()
-                                            camera.setMacroEnabled(macroEnabled)
-                                            if macroEnabled {
-                                                isManualFocusEnabled = false
-                                            }
-                                        }
-                                    }
-                                    VStack(spacing: 8) {
-                                        ModeIcon(icon: "timer", isActive: timerSeconds > 0)
-                                        ModeButton(isActive: timerSeconds > 0) {
-                                            Haptics.click()
-                                            if timerSeconds == 0 { timerSeconds = 3 }
-                                            else if timerSeconds == 3 { timerSeconds = 10 }
-                                            else { timerSeconds = 0 }
-                                        }
-                                    }
-                                    VStack(spacing: 8) {
-                                        ModeIcon(icon: "rectangle.on.rectangle", isActive: showGrid)
-                                        ModeButton(isActive: showGrid) {
-                                            Haptics.click()
-                                            showGrid.toggle()
-                                        }
-                                    }
-                                }
-                                .frame(width: 88, height: 48)  // Match flash button dimensions
-                            }
-                            .padding(.horizontal, DS.pageMargin)
-
-                            // ROW 4: Thumbnail | Shutter | WB
-                            HStack(alignment: .center, spacing: 0) {
-                                ThumbnailPill(image: lastCapturedImage) {
-                                    Haptics.click()
-                                    showPhotoBook = true
-                                }
-
-                                Spacer()
-
-                                ShutterButton(isCapturing: isCapturing) {
-                                    Haptics.heavy()
-                                    handleCapture()
-                                }
-
-                                Spacer()
-
-                                WBPill(
-                                    whiteBalanceIndex: $whiteBalanceIndex,
-                                    onChanged: { mode in
-                                        camera.setWhiteBalance(mode: mode)
-                                    }
-                                )
-                            }
-                            .padding(.horizontal, DS.pageMargin)
-                        }
+                        // Home-indicator pad — invisible pull target
+                        Color.clear
+                            .frame(height: max(safeBottom * 0.55, 8))
+                            .frame(maxWidth: .infinity)
+                            .contentShape(Rectangle())
+                            .gesture(bottomDeckSwipe)
                     }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 4)
                     .background {
                         ControlsGrain()
                     }
-                    // Swipe down for the super-compact deck, up to restore.
-                    // Must be simultaneous: the scrubbers claim drags that start on
-                    // them, but they only respond to horizontal movement, and this
-                    // gesture only acts on clearly vertical swipes.
-                    .simultaneousGesture(deckSwipe(collapseOnSwipeUp: false) { bottomCollapsed = $0 })
                 }
                 .padding(.top, safeTop)
-                .padding(.bottom, safeBottom * 0.7)
 
                 if showFlash {
                     Color.white.ignoresSafeArea()
@@ -671,6 +555,209 @@ struct ContentView: View {
                     }
                 }
             }
+    }
+
+    /// Bottom deck: swipe down collapses, swipe up expands.
+    /// Soft thresholds — viewfinder glass bar + shutter row + grabber all pull.
+    private var bottomDeckSwipe: some Gesture {
+        DragGesture(minimumDistance: 6, coordinateSpace: .local)
+            .onChanged { value in
+                let dy = value.translation.height
+                let dx = value.translation.width
+                // Ignore mostly-horizontal scrubber drags
+                guard abs(dy) > abs(dx) * 0.55 else { return }
+                if bottomCollapsed {
+                    // Pull up (negative) to peek expand
+                    bottomDeckDrag = min(0, max(dy, -160))
+                } else {
+                    // Pull down (positive) to peek collapse
+                    bottomDeckDrag = max(0, min(dy, 160))
+                }
+            }
+            .onEnded { value in
+                let dy = value.translation.height
+                let dx = value.translation.width
+                let predicted = value.predictedEndTranslation.height
+                let effective = abs(predicted) > abs(dy) ? predicted : dy
+
+                let committedDrag = bottomDeckDrag
+                withAnimation(.interactiveSpring(response: 0.38, dampingFraction: 0.86, blendDuration: 0.12)) {
+                    bottomDeckDrag = 0
+                    // Vertical wins easily; scrubbers still own clear horizontal pans
+                    guard abs(effective) > abs(dx) * 0.45 else { return }
+                    if bottomCollapsed {
+                        if effective < -12 || committedDrag < -18 {
+                            bottomCollapsed = false
+                        }
+                    } else if effective > 12 || committedDrag > 18 {
+                        bottomCollapsed = true
+                    }
+                }
+            }
+    }
+
+    private var bottomCompactDeck: some View {
+        HStack(alignment: .center, spacing: 0) {
+            ThumbnailPill(image: lastCapturedImage) {
+                Haptics.click()
+                showPhotoBook = true
+            }
+
+            Spacer()
+
+            ShutterButton(isCapturing: isCapturing) {
+                Haptics.heavy()
+                handleCapture()
+            }
+
+            Spacer()
+
+            // Compact deck: WB where ISO/shutter readout used to sit
+            WBPill(
+                whiteBalanceIndex: $whiteBalanceIndex,
+                onChanged: { mode in
+                    camera.setWhiteBalance(mode: mode)
+                }
+            )
+        }
+        .padding(.horizontal, DS.pageMargin)
+        .padding(.vertical, 6)
+        .contentShape(Rectangle())
+    }
+
+    private var bottomExpandedDeck: some View {
+        VStack(spacing: 0) {
+            // ROW 1: Zoom control (full width)
+            LensRingControl(
+                focalLength: $focalLength,
+                isoValue: $isoValue,
+                onFocalLengthChanged: { fl in
+                    camera.switchToLens(focalLength: fl)
+                    let zoomMap: [Int: CGFloat] = [13: 0.5, 24: 1.0, 48: 2.0, 120: 5.0]
+                    zoomValue = zoomMap[fl] ?? CGFloat(fl) / 24.0
+                    let iso = isoValue
+                    let shutter = shutterSpeedIndex
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                        if camera.isManualExposure {
+                            camera.setISO(Float(iso))
+                            camera.setShutterSpeed(index: shutter)
+                        }
+                    }
+                },
+                onISOChanged: { iso in
+                    camera.setISO(Float(iso))
+                }
+            )
+            .frame(height: 44)
+            .padding(.horizontal, DS.pageMargin)
+
+            Spacer().frame(height: 2)
+
+            // ROW 2: ISO & Shutter side by side
+            HStack(spacing: 4) {
+                ISOScrubberHorizontal(
+                    iso: $isoValue,
+                    onChanged: { iso in
+                        camera.setISO(Float(iso))
+                    }
+                )
+
+                ShutterScrubber(
+                    shutterSpeed: $shutterSpeedIndex,
+                    onChanged: { idx in
+                        camera.setShutterSpeed(index: idx)
+                        let evShift = Float(idx - 9) * 0.5
+                        exposureValue = max(-2, min(2, evShift))
+                    }
+                )
+            }
+            .frame(height: 44)
+            .padding(.horizontal, DS.pageMargin)
+
+            Spacer().frame(height: 6)
+
+            // ROW 3: Flash | Format | Mode icons+buttons
+            HStack(alignment: .center, spacing: 0) {
+                FlashButtonPill(flashMode: camera.flashMode) {
+                    Haptics.click()
+                    camera.cycleFlash()
+                }
+                .frame(width: 88)
+
+                Spacer()
+
+                FormatTogglePill(format: $captureFormat) { newFormat in
+                    switch newFormat {
+                    case .heic: camera.captureFormat = .heic
+                    case .jpeg: camera.captureFormat = .jpeg
+                    case .raw: camera.captureFormat = .raw
+                    }
+                }
+
+                Spacer()
+
+                HStack(spacing: 12) {
+                    VStack(spacing: 8) {
+                        ModeIcon(icon: "camera.macro", isActive: macroEnabled)
+                        ModeButton(isActive: macroEnabled) {
+                            Haptics.click()
+                            macroEnabled.toggle()
+                            camera.setMacroEnabled(macroEnabled)
+                            if macroEnabled {
+                                isManualFocusEnabled = false
+                            }
+                        }
+                    }
+                    VStack(spacing: 8) {
+                        ModeIcon(icon: "timer", isActive: timerSeconds > 0)
+                        ModeButton(isActive: timerSeconds > 0) {
+                            Haptics.click()
+                            if timerSeconds == 0 { timerSeconds = 3 }
+                            else if timerSeconds == 3 { timerSeconds = 10 }
+                            else { timerSeconds = 0 }
+                        }
+                    }
+                    VStack(spacing: 8) {
+                        ModeIcon(icon: "rectangle.on.rectangle", isActive: showGrid)
+                        ModeButton(isActive: showGrid) {
+                            Haptics.click()
+                            showGrid.toggle()
+                        }
+                    }
+                }
+                .frame(width: 88, height: 48)
+            }
+            .padding(.horizontal, DS.pageMargin)
+            .contentShape(Rectangle())
+            .simultaneousGesture(bottomDeckSwipe)
+
+            // ROW 4: Thumbnail | Shutter | WB — big pull zone around shutter
+            HStack(alignment: .center, spacing: 0) {
+                ThumbnailPill(image: lastCapturedImage) {
+                    Haptics.click()
+                    showPhotoBook = true
+                }
+
+                Spacer()
+
+                ShutterButton(isCapturing: isCapturing) {
+                    Haptics.heavy()
+                    handleCapture()
+                }
+
+                Spacer()
+
+                WBPill(
+                    whiteBalanceIndex: $whiteBalanceIndex,
+                    onChanged: { mode in
+                        camera.setWhiteBalance(mode: mode)
+                    }
+                )
+            }
+            .padding(.horizontal, DS.pageMargin)
+            .contentShape(Rectangle())
+            .simultaneousGesture(bottomDeckSwipe)
+        }
     }
 
     private func handleCapture() {
@@ -1016,56 +1103,57 @@ struct TickerValue: View {
     }
 }
 
-// MARK: - ISO Scrubber Horizontal (Hybrid: Old Layout + Ticker Animation)
-struct ISOScrubberHorizontal: View {
-    @Binding var iso: Int
-    let onChanged: (Int) -> Void
+// MARK: - Native snap scrubber
+/// Classic DSLR chrome (prev | label+value | next + ticks) with UIScrollView snap under the hood.
+struct NativeSnapScrubber<Value: Hashable>: View {
+    let label: String
+    let values: [Value]
+    @Binding var selection: Value
+    var suffix: String? = nil
+    var sideLabelWidth: CGFloat = 32
+    var tickCount: Int = 16
+    var title: (Value) -> String
+    var onChanged: (Value) -> Void
 
-    private let isoValues = [100, 200, 400, 800, 1600, 3200, 6400]
-    @State private var dragOffset: CGFloat = 0
-    @State private var isDragging = false
-    @State private var startIndex: Int = 0
-    @State private var tickerOffset: CGFloat = 0
+    @State private var scrollID: Value?
+    @State private var isScrolling = false
 
     private var currentIndex: Int {
-        isoValues.firstIndex(of: iso) ?? 3
+        values.firstIndex(of: selection) ?? 0
     }
 
-    private var prevISO: String {
-        currentIndex > 0 ? "\(isoValues[currentIndex - 1])" : ""
+    private var prevTitle: String {
+        currentIndex > 0 ? title(values[currentIndex - 1]) : ""
     }
 
-    private var nextISO: String {
-        currentIndex < isoValues.count - 1 ? "\(isoValues[currentIndex + 1])" : ""
+    private var nextTitle: String {
+        currentIndex < values.count - 1 ? title(values[currentIndex + 1]) : ""
     }
 
     var body: some View {
         GeometryReader { geo in
+            let itemWidth = max(36, geo.size.width / 5)
+            let sideInset = max((geo.size.width - itemWidth) / 2, 0)
+
             ZStack {
-                // Outer dark frame
+                // Classic control chrome
                 RoundedRectangle(cornerRadius: 5)
                     .fill(Color.black)
-
-                // Inner frame
                 RoundedRectangle(cornerRadius: 5)
                     .fill(Color(hex: "242424"))
                     .padding(2)
-
-                // Inner stroke
                 RoundedRectangle(cornerRadius: 4)
                     .stroke(Color(hex: "444444"), lineWidth: 0.5)
                     .padding(2)
 
-                // Tick marks at bottom with yellow center indicator
+                // Tick marks + center indicator (original aesthetic)
                 Canvas { ctx, size in
-                    let tickCount = 16
                     let usableWidth = size.width - 24
-                    let spacing = usableWidth / CGFloat(tickCount - 1)
-                    let offset = dragOffset * 0.08
+                    let spacing = usableWidth / CGFloat(max(tickCount - 1, 1))
                     let centerX = size.width / 2
 
                     for i in 0..<tickCount {
-                        let x = 12 + CGFloat(i) * spacing + offset
+                        let x = 12 + CGFloat(i) * spacing
                         guard x >= 6 && x <= size.width - 6 else { continue }
                         let isMajor = i % 4 == 0
                         let h: CGFloat = isMajor ? 5 : 3
@@ -1073,95 +1161,153 @@ struct ISOScrubberHorizontal: View {
                         ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.25 : 0.1)))
                     }
 
-                    // Center indicator (white at rest, yellow when active)
-                    let indicatorHeight: CGFloat = isDragging ? 14 : 10
-                    let indicatorWidth: CGFloat = isDragging ? 2.5 : 2
+                    let indicatorHeight: CGFloat = isScrolling ? 14 : 10
+                    let indicatorWidth: CGFloat = isScrolling ? 2.5 : 2
                     let indicatorRect = CGRect(
                         x: centerX - indicatorWidth / 2,
                         y: size.height - indicatorHeight - 2,
                         width: indicatorWidth,
                         height: indicatorHeight
                     )
-                    let indicatorColor = isDragging ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white.opacity(0.7)
+                    let indicatorColor = isScrolling
+                        ? Color(red: 1.0, green: 0.85, blue: 0.35)
+                        : Color.white.opacity(0.7)
                     ctx.fill(Path(indicatorRect), with: .color(indicatorColor))
                 }
+                .allowsHitTesting(false)
 
-                // Content: prev | ticker center | next
+                // Classic readout: prev | label + value (+suffix) | next
                 HStack(spacing: 0) {
-                    // Prev value (static)
-                    Text(prevISO)
-                        .font(DS.mono(9, weight: .medium))
+                    Text(prevTitle)
+                        .font(DS.mono(suffix == nil ? 9 : 9, weight: .medium))
                         .foregroundColor(DS.textSecondary)
-                        .frame(width: 32, alignment: .center)
-                        .opacity(isDragging ? 0.7 : 0.4)
+                        .frame(width: sideLabelWidth, alignment: .center)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .opacity(isScrolling ? 0.7 : 0.4)
 
-                    Spacer()
+                    Spacer(minLength: 0)
 
-                    // Center: Label + Ticker Value
-                    HStack(spacing: 2) {
-                        Text("ISO")
-                            .font(DS.mono(9, weight: .medium))
-                            .foregroundColor(isDragging ? DS.accent : DS.textSecondary)
+                    HStack(spacing: suffix == nil ? 2 : 0) {
+                        if suffix == nil {
+                            Text(label)
+                                .font(DS.mono(9, weight: .medium))
+                                .foregroundColor(isScrolling ? DS.accent : DS.textSecondary)
+                        }
 
-                        TickerValue(
-                            values: isoValues.map { "\($0)" },
-                            currentIndex: currentIndex,
-                            tickerOffset: tickerOffset,
-                            isDragging: isDragging,
-                            itemWidth: 55
-                        )
-                        .frame(width: 55)
+                        Text(title(selection))
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundColor(isScrolling ? DS.accent : .white)
+                            .scaleEffect(isScrolling ? 1.12 : 1.0)
+                            .contentTransition(.numericText())
+                            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: selection)
+                            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isScrolling)
+
+                        if let suffix {
+                            Text(suffix)
+                                .font(DS.mono(9, weight: .medium))
+                                .foregroundColor(isScrolling ? DS.accent : .white)
+                        }
                     }
 
-                    Spacer()
+                    Spacer(minLength: 0)
 
-                    // Next value (static)
-                    Text(nextISO)
-                        .font(DS.mono(9, weight: .medium))
+                    Text(nextTitle)
+                        .font(DS.mono(suffix == nil ? 9 : 9, weight: .medium))
                         .foregroundColor(DS.textSecondary)
-                        .frame(width: 32, alignment: .center)
-                        .opacity(isDragging ? 0.7 : 0.4)
+                        .frame(width: sideLabelWidth, alignment: .center)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .opacity(isScrolling ? 0.7 : 0.4)
                 }
                 .padding(.horizontal, 6)
                 .padding(.bottom, 8)
-            }
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        if !isDragging {
-                            isDragging = true
-                            startIndex = currentIndex
-                        }
-                        dragOffset = value.translation.width
-                        // Horizontal ticker offset for film roll feel
-                        tickerOffset = value.translation.width * 0.15
+                .allowsHitTesting(false)
 
-                        let stepWidth: CGFloat = 35
-                        let steps = Int(-value.translation.width / stepWidth)
-                        let newIndex = max(0, min(isoValues.count - 1, startIndex + steps))
-                        if newIndex != currentIndex {
-                            Haptics.light()
-                            let newISO = isoValues[newIndex]
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                                iso = newISO
-                            }
-                            onChanged(newISO)
+                // Invisible native scroll — keeps UIScrollView physics, hides the strip UI
+                ScrollView(.horizontal) {
+                    HStack(spacing: 0) {
+                        ForEach(values, id: \.self) { value in
+                            Color.clear
+                                .frame(width: itemWidth, height: max(geo.size.height, 36))
+                                .id(value)
                         }
                     }
-                    .onEnded { _ in
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) {
-                            isDragging = false
-                            dragOffset = 0
-                            tickerOffset = 0
-                        }
-                    }
-            )
+                    .scrollTargetLayout()
+                }
+                .scrollTargetBehavior(.viewAligned)
+                .scrollPosition(id: $scrollID)
+                .scrollIndicators(.hidden)
+                .safeAreaPadding(.horizontal, sideInset)
+                .contentShape(Rectangle())
+            }
+        }
+        .onAppear { scrollID = selection }
+        .onChange(of: selection) { _, newValue in
+            if scrollID != newValue { scrollID = newValue }
+        }
+        .onChange(of: scrollID) { _, newValue in
+            guard let newValue, newValue != selection else { return }
+            isScrolling = true
+            selection = newValue
+            onChanged(newValue)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                isScrolling = false
+            }
+        }
+        .sensoryFeedback(.selection, trigger: selection)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(title(selection) + (suffix.map { " \($0)" } ?? ""))
+        .accessibilityAdjustableAction { direction in
+            guard let idx = values.firstIndex(of: selection) else { return }
+            switch direction {
+            case .increment:
+                if idx + 1 < values.count {
+                    selection = values[idx + 1]
+                    scrollID = selection
+                    onChanged(selection)
+                }
+            case .decrement:
+                if idx > 0 {
+                    selection = values[idx - 1]
+                    scrollID = selection
+                    onChanged(selection)
+                }
+            @unknown default:
+                break
+            }
         }
     }
 }
 
-// MARK: - Lens Ring Control (WB-style with ticks)
+// MARK: - ISO Scrubber Horizontal
+struct ISOScrubberHorizontal: View {
+    @Binding var iso: Int
+    let onChanged: (Int) -> Void
+
+    private let isoValues = [100, 200, 400, 800, 1600, 3200, 6400]
+
+    var body: some View {
+        NativeSnapScrubber(
+            label: "ISO",
+            values: isoValues,
+            selection: Binding(
+                get: {
+                    if isoValues.contains(iso) { return iso }
+                    return isoValues.min(by: { abs($0 - iso) < abs($1 - iso) }) ?? 800
+                },
+                set: { iso = $0 }
+            ),
+            sideLabelWidth: 32,
+            tickCount: 16,
+            title: { "\($0)" },
+            onChanged: onChanged
+        )
+    }
+}
+
+// MARK: - Lens Ring Control
 struct LensRingControl: View {
     @Binding var focalLength: Int
     @Binding var isoValue: Int
@@ -1169,157 +1315,27 @@ struct LensRingControl: View {
     let onISOChanged: (Int) -> Void
 
     private let focalLengths = [13, 24, 48, 120]
-    private let isoValues = [100, 200, 400, 800, 1600, 3200]
-
-    @State private var tickOffset: CGFloat = 0
-    @State private var accumulatedDrag: CGFloat = 0
-    @State private var isDragging = false
-
-    private var currentIndex: Int {
-        focalLengths.firstIndex(of: focalLength) ?? 0
-    }
-
-    private var prevFocalLength: String {
-        currentIndex > 0 ? "\(focalLengths[currentIndex - 1])" : ""
-    }
-
-    private var nextFocalLength: String {
-        currentIndex < focalLengths.count - 1 ? "\(focalLengths[currentIndex + 1])" : ""
-    }
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                // Outer dark frame
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color.black)
-
-                // Inner frame
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color(hex: "242424"))
-                    .padding(2)
-
-                // Inner stroke
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
-                    .padding(2)
-
-                // Tick marks at bottom with yellow center indicator
-                Canvas { ctx, size in
-                    let tickCount = 20
-                    let usableWidth = size.width - 24
-                    let spacing = usableWidth / CGFloat(tickCount - 1)
-                    let offset = tickOffset * 0.08
-                    let centerX = size.width / 2
-
-                    for i in 0..<tickCount {
-                        let x = 12 + CGFloat(i) * spacing + offset
-                        guard x >= 6 && x <= size.width - 6 else { continue }
-                        let isMajor = i % 4 == 0
-                        let h: CGFloat = isMajor ? 5 : 3
-                        let rect = CGRect(x: x - 0.5, y: size.height - h - 4, width: 1, height: h)
-                        ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.25 : 0.1)))
-                    }
-
-                    // Center indicator (white at rest, yellow when active)
-                    let indicatorHeight: CGFloat = isDragging ? 14 : 10
-                    let indicatorWidth: CGFloat = isDragging ? 2.5 : 2
-                    let indicatorRect = CGRect(
-                        x: centerX - indicatorWidth / 2,
-                        y: size.height - indicatorHeight - 2,
-                        width: indicatorWidth,
-                        height: indicatorHeight
-                    )
-                    let indicatorColor = isDragging ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white.opacity(0.7)
-                    ctx.fill(Path(indicatorRect), with: .color(indicatorColor))
-                }
-
-                // Content with prev/next values (yellow when active)
-                HStack(spacing: 0) {
-                    Text(prevFocalLength)
-                        .font(DS.mono(9, weight: .medium))
-                        .foregroundColor(DS.textSecondary)
-                        .frame(width: 28, alignment: .center)
-
-                    Spacer()
-
-                    // Animated focal length with TickerValue
-                    HStack(spacing: 0) {
-                        TickerValue(
-                            values: focalLengths.map { "\($0)" },
-                            currentIndex: currentIndex,
-                            tickerOffset: tickOffset,
-                            isDragging: isDragging,
-                            itemWidth: 40
-                        )
-                        Text("MM")
-                            .font(DS.mono(9, weight: .medium))
-                            .foregroundColor(isDragging ? DS.accent : .white)
-                    }
-
-                    Spacer()
-
-                    Text(nextFocalLength)
-                        .font(DS.mono(9, weight: .medium))
-                        .foregroundColor(DS.textSecondary)
-                        .frame(width: 28, alignment: .center)
-                }
-                .padding(.horizontal, 6)
-                .padding(.bottom, 6)
+        NativeSnapScrubber(
+            label: "LENS",
+            values: focalLengths,
+            selection: Binding(
+                get: {
+                    if focalLengths.contains(focalLength) { return focalLength }
+                    return focalLengths.min(by: { abs($0 - focalLength) < abs($1 - focalLength) }) ?? 24
+                },
+                set: { focalLength = $0 }
+            ),
+            suffix: "MM",
+            sideLabelWidth: 28,
+            tickCount: 20,
+            title: { "\($0)" },
+            onChanged: { fl in
+                onFocalLengthChanged(fl)
+                onISOChanged(isoValue)
             }
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        if !isDragging { isDragging = true }
-                        tickOffset = value.translation.width
-
-                        let stepWidth: CGFloat = 45
-                        let steps = Int((value.translation.width - accumulatedDrag) / stepWidth)
-
-                        if steps != 0 {
-                            accumulatedDrag += CGFloat(steps) * stepWidth
-
-                            if steps < 0 {
-                                for _ in 0..<abs(steps) {
-                                    if currentIndex < focalLengths.count - 1 {
-                                        Haptics.light()
-                                        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                                            focalLength = focalLengths[currentIndex + 1]
-                                        }
-                                        onFocalLengthChanged(focalLength)
-                                    }
-                                }
-                            } else {
-                                for _ in 0..<steps {
-                                    if currentIndex > 0 {
-                                        Haptics.light()
-                                        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                                            focalLength = focalLengths[currentIndex - 1]
-                                        }
-                                        onFocalLengthChanged(focalLength)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .onEnded { _ in
-                        isDragging = false
-                        accumulatedDrag = 0
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                            tickOffset = 0
-                        }
-                    }
-            )
-            .onTapGesture {
-                Haptics.click()
-                let newIndex = (currentIndex + 1) % focalLengths.count
-                withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                    focalLength = focalLengths[newIndex]
-                }
-                onFocalLengthChanged(focalLength)
-            }
-        }
+        )
     }
 }
 
@@ -1590,7 +1606,7 @@ struct Triangle: Shape {
     }
 }
 
-// MARK: - Shutter Button (machined steel — brush grain + knurled collar)
+// MARK: - Shutter Button (brushed steel — matte metal, not chrome)
 struct ShutterButton: View {
     let isCapturing: Bool
     let action: () -> Void
@@ -1600,17 +1616,17 @@ struct ShutterButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Knurled steel collar
+                // Knurled steel collar — muted, low-contrast lathe bands
                 Circle()
                     .fill(
                         AngularGradient(
                             colors: [
-                                Color(red: 0.42, green: 0.43, blue: 0.45),
-                                Color(red: 0.22, green: 0.23, blue: 0.25),
-                                Color(red: 0.38, green: 0.39, blue: 0.42),
-                                Color(red: 0.18, green: 0.19, blue: 0.21),
-                                Color(red: 0.40, green: 0.41, blue: 0.44),
-                                Color(red: 0.42, green: 0.43, blue: 0.45)
+                                Color(red: 0.34, green: 0.35, blue: 0.37),
+                                Color(red: 0.20, green: 0.21, blue: 0.23),
+                                Color(red: 0.30, green: 0.31, blue: 0.33),
+                                Color(red: 0.17, green: 0.18, blue: 0.19),
+                                Color(red: 0.32, green: 0.33, blue: 0.35),
+                                Color(red: 0.34, green: 0.35, blue: 0.37)
                             ],
                             center: .center
                         )
@@ -1618,12 +1634,12 @@ struct ShutterButton: View {
                     .frame(width: 76, height: 76)
                     .overlay {
                         Circle()
-                            .fill(Color(red: 0.32, green: 0.33, blue: 0.36))
+                            .fill(Color(red: 0.26, green: 0.27, blue: 0.29))
                             .colorEffect(
                                 ShaderLibrary.metallicSurface(
                                     .float2(76, 76),
-                                    .float(isPressed ? 0.55 : 0.85),
-                                    .float2(0.30, 0.18)
+                                    .float(isPressed ? 0.70 : 1.05),
+                                    .float2(0.28, 0.22)
                                 )
                             )
                             .clipShape(Circle())
@@ -1634,87 +1650,86 @@ struct ShutterButton: View {
                     .stroke(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(isPressed ? 0.35 : 0.55),
-                                Color.white.opacity(0.08),
-                                Color.black.opacity(0.55)
+                                Color.white.opacity(isPressed ? 0.14 : 0.22),
+                                Color.white.opacity(0.04),
+                                Color.black.opacity(0.65)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         ),
-                        lineWidth: 1.25
+                        lineWidth: 1.1
                     )
                     .frame(width: 76, height: 76)
 
                 // Recess between collar and face
                 Circle()
-                    .stroke(Color.black.opacity(isPressed ? 0.75 : 0.45), lineWidth: isPressed ? 2.5 : 1.5)
+                    .stroke(Color.black.opacity(isPressed ? 0.8 : 0.55), lineWidth: isPressed ? 2.5 : 1.75)
                     .frame(width: 66, height: 66)
 
-                // Raised steel face
+                // Raised brushed-steel face
                 ZStack {
                     Circle()
-                        .fill(Color(red: 0.30, green: 0.31, blue: 0.34))
+                        .fill(Color(red: 0.24, green: 0.25, blue: 0.27))
                         .frame(width: 60, height: 60)
                         .colorEffect(
                             ShaderLibrary.metallicSurface(
                                 .float2(60, 60),
-                                .float(isPressed ? 0.4 : 0.75),
-                                .float2(0.34, 0.26)
+                                .float(isPressed ? 0.55 : 0.95),
+                                .float2(0.32, 0.28)
                             )
                         )
                         .clipShape(Circle())
 
-                    // Specular catch light
+                    // Soft sheen only — no screen-blend chrome hotspot
                     Circle()
                         .fill(
                             RadialGradient(
                                 colors: [
-                                    Color.white.opacity(isPressed ? 0.08 : 0.22),
+                                    Color.white.opacity(isPressed ? 0.03 : 0.08),
                                     Color.clear
                                 ],
-                                center: UnitPoint(x: 0.32, y: 0.28),
+                                center: UnitPoint(x: 0.34, y: 0.30),
                                 startRadius: 0,
-                                endRadius: 28
+                                endRadius: 30
                             )
                         )
                         .frame(width: 60, height: 60)
-                        .blendMode(.screen)
 
                     Circle()
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(isPressed ? 0.12 : 0.38),
+                                    Color.white.opacity(isPressed ? 0.06 : 0.16),
                                     Color.clear,
-                                    Color.black.opacity(0.4)
+                                    Color.black.opacity(0.45)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
-                            lineWidth: 1
+                            lineWidth: 0.9
                         )
                         .frame(width: 58, height: 58)
 
                     ForEach(0..<4, id: \.self) { i in
                         Circle()
-                            .stroke(Color.white.opacity(0.06), lineWidth: 0.6)
+                            .stroke(Color.white.opacity(0.035), lineWidth: 0.55)
                             .frame(width: CGFloat(50 - i * 9), height: CGFloat(50 - i * 9))
                     }
 
                     if isCapturing {
                         Circle()
-                            .fill(Color.white.opacity(0.16))
+                            .fill(Color.white.opacity(0.10))
                             .frame(width: 60, height: 60)
                     }
                 }
                 .scaleEffect(isPressed ? 0.95 : 1.0)
                 .shadow(
-                    color: Color.black.opacity(isPressed ? 0.2 : 0.55),
-                    radius: isPressed ? 0.5 : 4,
-                    y: isPressed ? 0 : 2
+                    color: Color.black.opacity(isPressed ? 0.25 : 0.5),
+                    radius: isPressed ? 0.5 : 3,
+                    y: isPressed ? 0 : 1.5
                 )
             }
-            .shadow(color: Color.black.opacity(0.55), radius: isPressed ? 2 : 8, y: isPressed ? 1 : 4)
+            .shadow(color: Color.black.opacity(0.5), radius: isPressed ? 2 : 6, y: isPressed ? 1 : 3)
             .animation(.spring(response: 0.12, dampingFraction: 0.65), value: isPressed)
         }
         .buttonStyle(PlainButtonStyle())
@@ -3075,145 +3090,27 @@ struct FStopScrubber: View {
     }
 }
 
-// MARK: - Shutter Speed Scrubber (Hybrid: Old Layout + Ticker Animation)
+// MARK: - Shutter Speed Scrubber
 struct ShutterScrubber: View {
     @Binding var shutterSpeed: Int
     let onChanged: (Int) -> Void
 
     private let speeds = ["4\"", "2\"", "1\"", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60", "1/125", "1/250", "1/500", "1/1000", "1/2000", "1/4000"]
-    @State private var dragOffset: CGFloat = 0
-    @State private var isDragging = false
-    @State private var startIndex: Int = 0
-    @State private var tickerOffset: CGFloat = 0
-
-    private var prevSpeed: String {
-        shutterSpeed > 0 ? speeds[shutterSpeed - 1] : ""
-    }
-
-    private var nextSpeed: String {
-        shutterSpeed < speeds.count - 1 ? speeds[shutterSpeed + 1] : ""
-    }
+    private var indices: [Int] { Array(speeds.indices) }
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                // Outer dark frame
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color.black)
-
-                // Inner frame
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color(hex: "242424"))
-                    .padding(2)
-
-                // Inner stroke
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
-                    .padding(2)
-
-                // Tick marks at bottom with yellow center indicator
-                Canvas { ctx, size in
-                    let tickCount = 16
-                    let usableWidth = size.width - 24
-                    let spacing = usableWidth / CGFloat(tickCount - 1)
-                    let offset = dragOffset * 0.08
-                    let centerX = size.width / 2
-
-                    for i in 0..<tickCount {
-                        let x = 12 + CGFloat(i) * spacing + offset
-                        guard x >= 6 && x <= size.width - 6 else { continue }
-                        let isMajor = i % 4 == 0
-                        let h: CGFloat = isMajor ? 5 : 3
-                        let rect = CGRect(x: x - 0.5, y: size.height - h - 4, width: 1, height: h)
-                        ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.25 : 0.1)))
-                    }
-
-                    // Center indicator (white at rest, yellow when active)
-                    let indicatorHeight: CGFloat = isDragging ? 14 : 10
-                    let indicatorWidth: CGFloat = isDragging ? 2.5 : 2
-                    let indicatorRect = CGRect(
-                        x: centerX - indicatorWidth / 2,
-                        y: size.height - indicatorHeight - 2,
-                        width: indicatorWidth,
-                        height: indicatorHeight
-                    )
-                    let indicatorColor = isDragging ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white.opacity(0.7)
-                    ctx.fill(Path(indicatorRect), with: .color(indicatorColor))
-                }
-
-                // Content: prev | ticker center | next
-                HStack(spacing: 0) {
-                    // Prev value (static)
-                    Text(prevSpeed)
-                        .font(DS.mono(8, weight: .medium))
-                        .foregroundColor(DS.textSecondary)
-                        .frame(width: 36, alignment: .center)
-                        .lineLimit(1)
-                        .opacity(isDragging ? 0.7 : 0.4)
-
-                    Spacer()
-
-                    // Center: Label + Ticker Value
-                    HStack(spacing: 4) {
-                        Text("S")
-                            .font(DS.mono(9, weight: .medium))
-                            .foregroundColor(isDragging ? DS.accent : DS.textSecondary)
-
-                        TickerValue(
-                            values: speeds,
-                            currentIndex: shutterSpeed,
-                            tickerOffset: tickerOffset,
-                            isDragging: isDragging,
-                            itemWidth: 55
-                        )
-                        .frame(width: 55)
-                    }
-
-                    Spacer()
-
-                    // Next value (static)
-                    Text(nextSpeed)
-                        .font(DS.mono(8, weight: .medium))
-                        .foregroundColor(DS.textSecondary)
-                        .frame(width: 36, alignment: .center)
-                        .lineLimit(1)
-                        .opacity(isDragging ? 0.7 : 0.4)
-                }
-                .padding(.horizontal, 6)
-                .padding(.bottom, 8)
-            }
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        if !isDragging {
-                            isDragging = true
-                            startIndex = shutterSpeed
-                        }
-                        dragOffset = value.translation.width
-                        // Horizontal ticker offset for film roll feel
-                        tickerOffset = value.translation.width * 0.15
-
-                        let stepWidth: CGFloat = 30
-                        let steps = Int(-value.translation.width / stepWidth)
-                        let newIndex = max(0, min(speeds.count - 1, startIndex + steps))
-                        if newIndex != shutterSpeed {
-                            Haptics.light()
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                                shutterSpeed = newIndex
-                            }
-                            onChanged(newIndex)
-                        }
-                    }
-                    .onEnded { _ in
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) {
-                            isDragging = false
-                            dragOffset = 0
-                            tickerOffset = 0
-                        }
-                    }
-            )
-        }
+        NativeSnapScrubber(
+            label: "S",
+            values: indices,
+            selection: Binding(
+                get: { min(max(shutterSpeed, 0), speeds.count - 1) },
+                set: { shutterSpeed = $0 }
+            ),
+            sideLabelWidth: 36,
+            tickCount: 16,
+            title: { speeds[$0] },
+            onChanged: onChanged
+        )
     }
 }
 

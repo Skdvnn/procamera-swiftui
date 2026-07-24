@@ -2,15 +2,15 @@ import SwiftUI
 import Photos
 import AVFoundation
 
-// MARK: - Motion (mechanical film-lever — no springs, no bounce)
+// MARK: - Motion (page-turn cull — no springs, no bounce)
 
 enum CullMotion {
     /// Snap-back after a drag miss
     static let flick = Animation.timingCurve(0.2, 0.8, 0.2, 1.0, duration: 0.16)
-    /// Frame leaving the gate
-    static let advanceOut = Animation.timingCurve(0.4, 0.0, 0.7, 0.3, duration: 0.13)
-    /// Next frame seating into the gate
-    static let advanceIn = Animation.timingCurve(0.15, 0.7, 0.2, 1.0, duration: 0.2)
+    /// Page leaf curling away (keep / reject / swipe)
+    static let pageTurn = Animation.timingCurve(0.22, 0.7, 0.18, 1.0, duration: 0.46)
+    /// Cancelled peel settling back
+    static let pageCancel = Animation.timingCurve(0.2, 0.85, 0.2, 1.0, duration: 0.22)
     /// Grease-pencil draw-on
     static let draw = Animation.timingCurve(0.25, 0.1, 0.25, 1.0, duration: 0.28)
     /// KEEP / OUT stamp punch
@@ -966,11 +966,11 @@ struct CullSessionView: View {
     @State private var loupeTouch: CGPoint?
     @State private var loupeImage: UIImage?
     @State private var loupeLoading = false
-    @State private var advanceDir: Int = 0
-    /// Film-gate slide (points). Negative = advancing forward.
-    @State private var gateOffset: CGFloat = 0
-    @State private var gateOpacity: Double = 1
-    @State private var gateScale: CGFloat = 1
+    /// 1 = turn forward (next), -1 = turn back (previous)
+    @State private var turnDirection: Int = 1
+    /// 0…1 committed page-curl progress (after keep/reject or swipe release)
+    @State private var turnProgress: CGFloat = 0
+    @State private var incomingIndex: Int? = nil
     @State private var isAdvancing = false
     @State private var markDrawKey: Int = 0
     @State private var showCoach = false
@@ -1190,9 +1190,9 @@ struct CullSessionView: View {
                     .accessibilityLabel("Keep frame")
                 }
 
-                Text("HOLD TO LOUPE  ·  SWIPE TO MARK  ·  DOUBLE-TAP UNDO")
+                Text("HOLD TO LOUPE  ·  SWIPE TO MARK  ·  PAGE TURNS NEXT  ·  DOUBLE-TAP UNDO")
                     .font(.system(size: 7, weight: .semibold, design: .monospaced))
-                    .tracking(1.2)
+                    .tracking(1.0)
                     .foregroundColor(.white.opacity(0.22))
             }
             .padding(.top, 10)
@@ -1264,7 +1264,7 @@ struct CullSessionView: View {
                 }
                 .background(Color(hex: "14110e"))
                 .onChange(of: index) { _, new in
-                    withAnimation(CullMotion.advanceIn) {
+                    withAnimation(CullMotion.pageTurn) {
                         proxy.scrollTo(new, anchor: .center)
                     }
                 }
@@ -1326,23 +1326,82 @@ struct CullSessionView: View {
     }
 
     private func cullCanvas(shot: ShotMetadata, size: CGSize) -> some View {
+        let peel = pagePeelAmount(in: size)
+        let forward = pageTurningForward(in: size)
+        let underIdx = incomingIndex ?? (forward ? index + 1 : index - 1)
+        let underShot = (underIdx >= 0 && underIdx < shots.count) ? shots[underIdx] : nil
+
+        return ZStack {
+            // Page underneath the turning leaf
+            if peel > 0.02, let underShot {
+                cullFrameImage(shot: underShot, size: size, animatedMark: false)
+                    .scaleEffect(0.985 + 0.015 * peel)
+                    .opacity(0.55 + 0.45 * Double(peel))
+            }
+
+            interactiveCullLeaf(shot: shot, size: size, peel: peel, forward: forward)
+
+            if let loupeTouch, let loupeImage {
+                LoupeView(image: loupeImage, touch: loupeTouch, container: size)
+                    .zIndex(20)
+            } else if loupeLoading, let loupeTouch {
+                ProgressView()
+                    .tint(CullPalette.amber)
+                    .position(x: loupeTouch.x, y: max(60, loupeTouch.y - 90))
+            }
+        }
+    }
+
+    private func interactiveCullLeaf(
+        shot: ShotMetadata,
+        size: CGSize,
+        peel: CGFloat,
+        forward: Bool
+    ) -> some View {
+        cullFrameImage(shot: shot, size: size, animatedMark: true)
+            .contentShape(Rectangle())
+            .offset(y: isAdvancing ? 0 : dragOffset.height)
+            .rotation3DEffect(
+                .degrees(Double(peel) * (forward ? -118 : 118)),
+                axis: (x: 0, y: 1, z: 0),
+                anchor: forward ? .leading : .trailing,
+                perspective: 0.62
+            )
+            .overlay(alignment: forward ? .leading : .trailing) {
+                LinearGradient(
+                    colors: [
+                        Color.black.opacity(0.55 * Double(peel)),
+                        Color.black.opacity(0.12 * Double(peel)),
+                        .clear
+                    ],
+                    startPoint: forward ? .leading : .trailing,
+                    endPoint: forward ? .trailing : .leading
+                )
+                .frame(width: size.width * 0.22)
+                .allowsHitTesting(false)
+            }
+            .shadow(
+                color: Color.black.opacity(0.45 * Double(min(1, peel * 1.4))),
+                radius: 18 * peel,
+                x: forward ? 10 * peel : -10 * peel,
+                y: 4
+            )
+            .gesture(cullDrag(in: size))
+            .simultaneousGesture(
+                loupeGesture(
+                    in: size,
+                    fallback: store.image(for: shot) ?? store.thumbnail(for: shot) ?? UIImage()
+                )
+            )
+            .onTapGesture(count: 2) { performUndo() }
+    }
+
+    private func cullFrameImage(shot: ShotMetadata, size: CGSize, animatedMark: Bool) -> some View {
         let state = marks.state(for: shot.id)
         let seed = strokeSeed(for: shot.id)
         let image = store.image(for: shot) ?? store.thumbnail(for: shot)
 
-        return ZStack {
-            // Adjacent frame peeks while scrubbing horizontally
-            EdgePeekFrames(
-                prev: index > 0
-                    ? (store.thumbnail(for: shots[index - 1]) ?? store.image(for: shots[index - 1]))
-                    : nil,
-                next: index + 1 < shots.count
-                    ? (store.thumbnail(for: shots[index + 1]) ?? store.image(for: shots[index + 1]))
-                    : nil,
-                dragX: dragOffset.width,
-                size: size
-            )
-
+        return Group {
             if let image {
                 Image(uiImage: image)
                     .resizable()
@@ -1356,28 +1415,32 @@ struct CullSessionView: View {
                             seed: seed,
                             lineWidth: 4.5,
                             padding: size.width * 0.14,
-                            animated: true
+                            animated: animatedMark
                         )
                         .id("\(shot.id)-\(state.rawValue)-\(markDrawKey)")
                     }
-                    .scaleEffect(gateScale)
-                    .offset(x: gateOffset + dragOffset.width, y: dragOffset.height)
-                    .opacity(gateOpacity * (1.0 - Double(min(0.28, abs(dragOffset.width) / 420))))
-                    .rotationEffect(.degrees(Double(dragOffset.width) / 80 + Double(gateOffset) / 140))
-                    .gesture(cullDrag(in: size))
-                    .simultaneousGesture(loupeGesture(in: size, fallback: image))
-                    .onTapGesture(count: 2) { performUndo() }
-            }
-
-            if let loupeTouch, let loupeImage {
-                LoupeView(image: loupeImage, touch: loupeTouch, container: size)
-                    .zIndex(20)
-            } else if loupeLoading, let loupeTouch {
-                ProgressView()
-                    .tint(CullPalette.amber)
-                    .position(x: loupeTouch.x, y: max(60, loupeTouch.y - 90))
+            } else {
+                Color.black.opacity(0.001)
+                    .frame(width: size.width, height: size.height)
             }
         }
+    }
+
+    /// Interactive horizontal peel + committed turn progress.
+    private func pagePeelAmount(in size: CGSize) -> CGFloat {
+        if isAdvancing || turnProgress > 0 {
+            return min(1, max(0, turnProgress))
+        }
+        guard abs(dragOffset.width) > abs(dragOffset.height) else { return 0 }
+        return min(1, abs(dragOffset.width) / max(120, size.width * 0.52))
+    }
+
+    private func pageTurningForward(in _: CGSize) -> Bool {
+        if isAdvancing || turnProgress > 0 {
+            return turnDirection > 0
+        }
+        // Swipe left → turn forward to next page
+        return dragOffset.width <= 0
     }
 
     private func cullDrag(in size: CGSize) -> some Gesture {
@@ -1418,31 +1481,29 @@ struct CullSessionView: View {
 
                 if abs(dy) > abs(dx) && (inThumbZone || abs(dy) > 48) {
                     if dy < -48 {
-                        // Commit keep — lift out the top of the gate
-                        commitDragMark(.keep, lift: CGSize(width: 0, height: -size.height * 0.12))
+                        commitDragMark(.keep)
                     } else if dy > 48 {
-                        commitDragMark(.reject, lift: CGSize(width: 0, height: size.height * 0.12))
+                        commitDragMark(.reject)
                     } else {
                         withAnimation(CullMotion.flick) { dragOffset = .zero }
                     }
                 } else if abs(dx) > 56 {
                     let dir = dx < 0 ? 1 : -1
-                    // Carry residual horizontal into the advance
-                    let carry = dx
+                    // Finish the peel as a page turn
+                    let peel = min(1, abs(dx) / max(120, size.width * 0.52))
+                    turnDirection = dir
+                    turnProgress = peel
                     dragOffset = .zero
-                    advance(dir, carryX: carry)
+                    advance(dir, fromPeel: peel)
                 } else {
-                    withAnimation(CullMotion.flick) { dragOffset = .zero }
+                    withAnimation(CullMotion.pageCancel) { dragOffset = .zero }
                 }
             }
     }
 
-    private func commitDragMark(_ state: FrameMarkState, lift: CGSize) {
-        withAnimation(CullMotion.advanceOut) {
-            dragOffset = lift
-            gateOpacity = 0.55
-            gateScale = 0.97
-        }
+    private func commitDragMark(_ state: FrameMarkState) {
+        // Seat the vertical mark gesture, then page-turn to the next leaf
+        withAnimation(CullMotion.flick) { dragOffset = .zero }
         applyMark(state, alreadyLifted: true)
     }
 
@@ -1508,13 +1569,8 @@ struct CullSessionView: View {
             withAnimation(CullMotion.stampFade) { flashMark = nil }
         }
 
-        // Seat the mark, then film-advance
-        let delay: TimeInterval = alreadyLifted ? 0.18 : 0.3
-        if !alreadyLifted {
-            withAnimation(CullMotion.draw) {
-                // brief hold so the grease pencil reads
-            }
-        }
+        // Seat the mark, then curl the leaf to the next frame
+        let delay: TimeInterval = alreadyLifted ? 0.16 : 0.28
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             advance(1)
         }
@@ -1540,60 +1596,61 @@ struct CullSessionView: View {
         UIImpactFeedbackGenerator(style: .soft).impactOccurred()
     }
 
-    private func advance(_ delta: Int, carryX: CGFloat = 0) {
+    private func advance(_ delta: Int, fromPeel: CGFloat = 0) {
         let next = index + delta
         guard next >= 0, next < shots.count else {
-            withAnimation(CullMotion.flick) {
+            withAnimation(CullMotion.pageCancel) {
                 dragOffset = .zero
-                gateOffset = 0
-                gateOpacity = 1
-                gateScale = 1
+                turnProgress = 0
+                incomingIndex = nil
             }
+            isAdvancing = false
             if progress.unmarked == 0 { showFinish = true }
             return
         }
-        advance(to: next, dir: delta, carryX: carryX)
+        advance(to: next, dir: delta, fromPeel: fromPeel)
     }
 
-    private func advance(to next: Int, dir: Int? = nil, carryX: CGFloat = 0) {
+    private func advance(to next: Int, dir: Int? = nil, fromPeel: CGFloat = 0) {
         guard next != index, !isAdvancing else {
             if next == index {
-                withAnimation(CullMotion.flick) { dragOffset = .zero }
+                withAnimation(CullMotion.pageCancel) {
+                    dragOffset = .zero
+                    turnProgress = 0
+                }
             }
             return
         }
-        let width = UIScreen.main.bounds.width
         let direction = dir ?? (next > index ? 1 : -1)
-        advanceDir = direction
+        turnDirection = direction
+        incomingIndex = next
         isAdvancing = true
+        dragOffset = .zero
 
-        // 1) Current frame exits the gate (film lever out)
-        withAnimation(CullMotion.advanceOut) {
-            gateOffset = carryX + CGFloat(-direction) * width * 0.42
-            gateOpacity = 0
-            gateScale = 0.96
-            dragOffset = .zero
+        // Resume from interactive peel when the finger already started the curl
+        if fromPeel > 0.02 {
+            var seed = Transaction()
+            seed.disablesAnimations = true
+            withTransaction(seed) { turnProgress = fromPeel }
+        } else {
+            var seed = Transaction()
+            seed.disablesAnimations = true
+            withTransaction(seed) { turnProgress = 0 }
         }
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.13) {
-            // 2) Swap frame while off-gate, stage incoming from the opposite side
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) {
+        withAnimation(CullMotion.pageTurn) {
+            turnProgress = 1
+        }
+
+        // Keep the outgoing leaf bound to the old index until the curl finishes,
+        // then seat the next page face-up with no reverse spin.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.46) {
+            var end = Transaction()
+            end.disablesAnimations = true
+            withTransaction(end) {
                 index = next
-                gateOffset = CGFloat(direction) * width * 0.28
-                gateOpacity = 0.35
-                gateScale = 1.02
-            }
-
-            // 3) Seat into the gate
-            withAnimation(CullMotion.advanceIn) {
-                gateOffset = 0
-                gateOpacity = 1
-                gateScale = 1
-            }
-
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                turnProgress = 0
+                incomingIndex = nil
                 isAdvancing = false
             }
             UISelectionFeedbackGenerator().selectionChanged()

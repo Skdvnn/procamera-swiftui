@@ -560,32 +560,24 @@ struct AnalogDisplayPanel: View {
                 .padding(2)
 
             if compact {
-                // Minimized: slim analog meters instead of dials
-                // (the dials don't render legibly below full size)
-                HStack(alignment: .center, spacing: 16) {
+                // Minimized: focus + EV meters full width.
+                // ISO/shutter already live in the viewfinder histogram bar.
+                HStack(alignment: .center, spacing: 14) {
                     CompactMeter(
                         label: "FOCUS",
                         value: CGFloat(focusPosition),
                         display: isAutoFocus ? "AF" : String(format: "%.2f", focusPosition)
                     )
+                    .frame(maxWidth: .infinity)
 
                     CompactMeter(
                         label: "EV",
                         value: CGFloat((exposureValue + 2) / 4),
                         display: String(format: "%+.1f", exposureValue)
                     )
-
-                    VStack(alignment: .trailing, spacing: 3) {
-                        Text("ISO \(iso)")
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.85))
-                        Text(Self.speedLabels[max(0, min(Self.speedLabels.count - 1, shutterSpeedIndex))])
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.5))
-                    }
-                    .frame(width: 58, alignment: .trailing)
+                    .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 14)
+                .padding(.horizontal, 12)
                 .padding(.vertical, 8)
             } else {
                 // Content - centered vertically
@@ -649,9 +641,9 @@ struct CompactMeter: View {
                 let clamped = min(max(value, 0), 1)
 
                 ZStack(alignment: .leading) {
-                    // Tick marks
+                    // Tick marks — denser when the meter stretches full width
                     Canvas { ctx, size in
-                        let tickCount = 9
+                        let tickCount = max(9, Int(size.width / 14))
                         for i in 0..<tickCount {
                             let x = CGFloat(i) / CGFloat(tickCount - 1) * (size.width - 1)
                             let isMajor = i % 2 == 0

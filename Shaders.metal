@@ -123,7 +123,7 @@ float noise(float2 st) {
 }
 
 // MARK: - Metallic Surface Shader
-// Horizontal brush grain + hard specular — reads as machined steel, not plastic.
+// Horizontal brush grain + soft sheen — matte machined steel, not chrome.
 [[ stitchable ]] half4 metallicSurface(
     float2 position,
     half4 color,
@@ -134,29 +134,29 @@ float noise(float2 st) {
     float2 uv = position / size;
 
     // Anisotropic brush: dense horizontal streaks + coarser lathe bands
-    float brushed = noise(float2(uv.x * 320.0, uv.y * 12.0)) * roughness;
-    float brushed2 = noise(float2(uv.x * 110.0, uv.y * 5.0)) * roughness * 0.55;
-    float micro = (noise(uv * 480.0) - 0.5) * roughness * 0.25;
+    float brushed = noise(float2(uv.x * 280.0, uv.y * 14.0)) * roughness;
+    float brushed2 = noise(float2(uv.x * 90.0, uv.y * 6.0)) * roughness * 0.65;
+    float micro = (noise(uv * 420.0) - 0.5) * roughness * 0.30;
 
-    // Specular highlight (cool steel)
+    // Broad, dull specular — brushed metal scatters light, no hard hotspot
     float2 lightDir = normalize(lightPos - uv);
     float ndl = max(dot(lightDir, float2(0.0, 1.0)), 0.0);
-    float soft = pow(ndl, 12.0) * 0.35;
-    float hard = pow(ndl, 64.0) * 0.55;
+    float soft = pow(ndl, 6.0) * 0.22;
+    float hard = pow(ndl, 22.0) * 0.10;
     float specular = soft + hard;
 
-    // Edge fresnel
+    // Edge fresnel (kept subtle so rims don't read as chrome)
     float edge = length(uv - float2(0.5, 0.5)) * 2.0;
-    float fresnel = pow(smoothstep(0.55, 1.0, edge), 1.4) * 0.28;
+    float fresnel = pow(smoothstep(0.60, 1.0, edge), 1.6) * 0.14;
 
     half3 result = color.rgb;
-    // Cool metal cast
-    result = mix(result, half3(result.r * 0.92, result.g * 0.95, result.b * 1.05), half(0.35));
-    result += half3((brushed * 0.16 + brushed2 * 0.10 + micro) * 1.1);
-    result += half3(specular * 0.62) * half3(0.95, 0.97, 1.0);
-    result += half3(fresnel) * half3(0.85, 0.88, 0.95);
+    // Neutral steel cast (slightly cooler, not silver-blue)
+    result = mix(result, half3(result.r * 0.94, result.g * 0.96, result.b * 1.02), half(0.28));
+    result += half3((brushed * 0.14 + brushed2 * 0.11 + micro) * 0.95);
+    result += half3(specular * 0.28) * half3(0.92, 0.94, 0.97);
+    result += half3(fresnel) * half3(0.75, 0.78, 0.84);
     // Contact shadow at bottom so it feels raised metal, not a flat fill
-    result *= half(1.0 - smoothstep(0.55, 1.05, uv.y) * 0.18);
+    result *= half(1.0 - smoothstep(0.50, 1.05, uv.y) * 0.22);
 
     return half4(clamp(result, 0.0h, 1.0h), color.a);
 }
