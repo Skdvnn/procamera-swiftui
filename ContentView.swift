@@ -337,14 +337,13 @@ struct ContentView: View {
                                 .contentShape(Rectangle())
                                 .simultaneousGesture(bottomDeckSwipe)
                             }
-                            // Tall invisible band above the glass bar for easier vertical pull
+                            // Invisible pull band over the glass bar (no visible handle)
                             .overlay(alignment: .bottom) {
                                 Color.clear
-                                    .frame(height: 72)
+                                    .frame(height: 56)
                                     .frame(maxWidth: .infinity)
                                     .contentShape(Rectangle())
                                     .simultaneousGesture(bottomDeckSwipe)
-                                    .padding(.bottom, 4)
                             }
 
                             // Inner shadow overlay (deeper inset effect like DSLR viewfinder)
@@ -384,20 +383,9 @@ struct ContentView: View {
 
                     Spacer().frame(height: viewfinderToControlsSpacing)
 
-                    // BOTTOM CONTROLS — deck swipe lives on grabber / compact row /
-                    // home-indicator pad only, so ISO·shutter·lens ScrollViews own pans.
+                    // BOTTOM CONTROLS — hidden pull (no grabber). Glass bar + shutter
+                    // row + home pad own vertical swipe; scrubbers own horizontal.
                     VStack(spacing: 0) {
-                        // Grabber + top reach — always a collapse/expand target
-                        Capsule()
-                            .fill(Color.white.opacity(bottomCollapsed ? 0.32 : 0.16))
-                            .frame(width: bottomCollapsed ? 48 : 36, height: 5)
-                            .padding(.top, bottomCollapsed ? 22 : 14)
-                            .padding(.bottom, bottomCollapsed ? 10 : 6)
-                            .opacity(1.0 - min(abs(bottomDeckDrag) / 140.0, 0.35))
-                            .frame(maxWidth: .infinity)
-                            .contentShape(Rectangle())
-                            .gesture(bottomDeckSwipe)
-
                         ZStack(alignment: .bottom) {
                             if bottomCollapsed {
                                 bottomCompactDeck
@@ -428,14 +416,15 @@ struct ContentView: View {
                             value: bottomCollapsed
                         )
 
-                        // Home-indicator pad under the deck — easy pull target
+                        // Home-indicator pad — invisible pull target
                         Color.clear
-                            .frame(height: max(safeBottom * 0.85, 16))
+                            .frame(height: max(safeBottom * 0.55, 8))
                             .frame(maxWidth: .infinity)
                             .contentShape(Rectangle())
                             .gesture(bottomDeckSwipe)
                     }
                     .frame(maxWidth: .infinity)
+                    .padding(.top, 4)
                     .background {
                         ControlsGrain()
                     }
@@ -632,9 +621,7 @@ struct ContentView: View {
             )
         }
         .padding(.horizontal, DS.pageMargin)
-        .padding(.vertical, 10)
-        // Extra invisible reach above the compact row so swipe-up isn't a tiny target
-        .padding(.top, 8)
+        .padding(.vertical, 6)
         .contentShape(Rectangle())
     }
 
@@ -768,7 +755,6 @@ struct ContentView: View {
                 )
             }
             .padding(.horizontal, DS.pageMargin)
-            .padding(.vertical, 6)
             .contentShape(Rectangle())
             .simultaneousGesture(bottomDeckSwipe)
         }
@@ -1117,24 +1103,40 @@ struct TickerValue: View {
     }
 }
 
-// MARK: - Native snap scrubber (UIScrollView physics + viewAligned)
-/// Discrete value picker built on iOS scroll targets — not a hand-rolled DragGesture.
+// MARK: - Native snap scrubber
+/// Classic DSLR chrome (prev | label+value | next + ticks) with UIScrollView snap under the hood.
 struct NativeSnapScrubber<Value: Hashable>: View {
     let label: String
     let values: [Value]
     @Binding var selection: Value
-    var itemWidth: CGFloat = 60
+    var suffix: String? = nil
+    var sideLabelWidth: CGFloat = 32
+    var tickCount: Int = 16
     var title: (Value) -> String
     var onChanged: (Value) -> Void
 
     @State private var scrollID: Value?
     @State private var isScrolling = false
 
+    private var currentIndex: Int {
+        values.firstIndex(of: selection) ?? 0
+    }
+
+    private var prevTitle: String {
+        currentIndex > 0 ? title(values[currentIndex - 1]) : ""
+    }
+
+    private var nextTitle: String {
+        currentIndex < values.count - 1 ? title(values[currentIndex + 1]) : ""
+    }
+
     var body: some View {
         GeometryReader { geo in
+            let itemWidth = max(36, geo.size.width / 5)
             let sideInset = max((geo.size.width - itemWidth) / 2, 0)
 
             ZStack {
+                // Classic control chrome
                 RoundedRectangle(cornerRadius: 5)
                     .fill(Color.black)
                 RoundedRectangle(cornerRadius: 5)
@@ -1144,17 +1146,90 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                     .stroke(Color(hex: "444444"), lineWidth: 0.5)
                     .padding(2)
 
-                // Native UIScrollView snap strip — values center under the hairline
+                // Tick marks + center indicator (original aesthetic)
+                Canvas { ctx, size in
+                    let usableWidth = size.width - 24
+                    let spacing = usableWidth / CGFloat(max(tickCount - 1, 1))
+                    let centerX = size.width / 2
+
+                    for i in 0..<tickCount {
+                        let x = 12 + CGFloat(i) * spacing
+                        guard x >= 6 && x <= size.width - 6 else { continue }
+                        let isMajor = i % 4 == 0
+                        let h: CGFloat = isMajor ? 5 : 3
+                        let rect = CGRect(x: x - 0.5, y: size.height - h - 4, width: 1, height: h)
+                        ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.25 : 0.1)))
+                    }
+
+                    let indicatorHeight: CGFloat = isScrolling ? 14 : 10
+                    let indicatorWidth: CGFloat = isScrolling ? 2.5 : 2
+                    let indicatorRect = CGRect(
+                        x: centerX - indicatorWidth / 2,
+                        y: size.height - indicatorHeight - 2,
+                        width: indicatorWidth,
+                        height: indicatorHeight
+                    )
+                    let indicatorColor = isScrolling
+                        ? Color(red: 1.0, green: 0.85, blue: 0.35)
+                        : Color.white.opacity(0.7)
+                    ctx.fill(Path(indicatorRect), with: .color(indicatorColor))
+                }
+                .allowsHitTesting(false)
+
+                // Classic readout: prev | label + value (+suffix) | next
+                HStack(spacing: 0) {
+                    Text(prevTitle)
+                        .font(DS.mono(suffix == nil ? 9 : 9, weight: .medium))
+                        .foregroundColor(DS.textSecondary)
+                        .frame(width: sideLabelWidth, alignment: .center)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .opacity(isScrolling ? 0.7 : 0.4)
+
+                    Spacer(minLength: 0)
+
+                    HStack(spacing: suffix == nil ? 2 : 0) {
+                        if suffix == nil {
+                            Text(label)
+                                .font(DS.mono(9, weight: .medium))
+                                .foregroundColor(isScrolling ? DS.accent : DS.textSecondary)
+                        }
+
+                        Text(title(selection))
+                            .font(.system(size: 12, weight: .bold, design: .monospaced))
+                            .foregroundColor(isScrolling ? DS.accent : .white)
+                            .scaleEffect(isScrolling ? 1.12 : 1.0)
+                            .contentTransition(.numericText())
+                            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: selection)
+                            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isScrolling)
+
+                        if let suffix {
+                            Text(suffix)
+                                .font(DS.mono(9, weight: .medium))
+                                .foregroundColor(isScrolling ? DS.accent : .white)
+                        }
+                    }
+
+                    Spacer(minLength: 0)
+
+                    Text(nextTitle)
+                        .font(DS.mono(suffix == nil ? 9 : 9, weight: .medium))
+                        .foregroundColor(DS.textSecondary)
+                        .frame(width: sideLabelWidth, alignment: .center)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                        .opacity(isScrolling ? 0.7 : 0.4)
+                }
+                .padding(.horizontal, 6)
+                .padding(.bottom, 8)
+                .allowsHitTesting(false)
+
+                // Invisible native scroll — keeps UIScrollView physics, hides the strip UI
                 ScrollView(.horizontal) {
                     HStack(spacing: 0) {
                         ForEach(values, id: \.self) { value in
-                            let selected = value == selection
-                            Text(title(value))
-                                .font(DS.mono(selected ? 13 : 11, weight: selected ? .bold : .medium))
-                                .foregroundColor(selected ? .white : DS.textSecondary)
-                                .opacity(selected ? 1 : 0.42)
-                                .scaleEffect(selected ? 1.06 : 1)
-                                .frame(width: itemWidth, height: max(geo.size.height - 6, 28))
+                            Color.clear
+                                .frame(width: itemWidth, height: max(geo.size.height, 36))
                                 .id(value)
                         }
                     }
@@ -1164,59 +1239,26 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                 .scrollPosition(id: $scrollID)
                 .scrollIndicators(.hidden)
                 .safeAreaPadding(.horizontal, sideInset)
-                .mask(
-                    LinearGradient(
-                        colors: [.clear, .black, .black, .clear],
-                        startPoint: .leading,
-                        endPoint: .trailing
-                    )
-                )
-
-                // Leading label + center hairline (chrome overlays scroll)
-                HStack {
-                    Text(label)
-                        .font(DS.mono(9, weight: .semibold))
-                        .foregroundColor(isScrolling ? DS.accent : DS.textSecondary)
-                        .padding(.leading, 8)
-                    Spacer(minLength: 0)
-                }
-                .allowsHitTesting(false)
-
-                VStack(spacing: 0) {
-                    Spacer(minLength: 0)
-                    RoundedRectangle(cornerRadius: 1)
-                        .fill(isScrolling
-                              ? Color(red: 1.0, green: 0.85, blue: 0.35)
-                              : Color.white.opacity(0.75))
-                        .frame(width: isScrolling ? 2.5 : 2, height: isScrolling ? 14 : 10)
-                        .padding(.bottom, 4)
-                }
-                .allowsHitTesting(false)
+                .contentShape(Rectangle())
             }
         }
-        .onAppear {
-            scrollID = selection
-        }
+        .onAppear { scrollID = selection }
         .onChange(of: selection) { _, newValue in
-            if scrollID != newValue {
-                withAnimation(.easeOut(duration: 0.15)) {
-                    scrollID = newValue
-                }
-            }
+            if scrollID != newValue { scrollID = newValue }
         }
         .onChange(of: scrollID) { _, newValue in
             guard let newValue, newValue != selection else { return }
             isScrolling = true
             selection = newValue
             onChanged(newValue)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
                 isScrolling = false
             }
         }
         .sensoryFeedback(.selection, trigger: selection)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
-        .accessibilityValue(title(selection))
+        .accessibilityValue(title(selection) + (suffix.map { " \($0)" } ?? ""))
         .accessibilityAdjustableAction { direction in
             guard let idx = values.firstIndex(of: selection) else { return }
             switch direction {
@@ -1239,7 +1281,7 @@ struct NativeSnapScrubber<Value: Hashable>: View {
     }
 }
 
-// MARK: - ISO Scrubber Horizontal (native snap scroll)
+// MARK: - ISO Scrubber Horizontal
 struct ISOScrubberHorizontal: View {
     @Binding var iso: Int
     let onChanged: (Int) -> Void
@@ -1253,22 +1295,21 @@ struct ISOScrubberHorizontal: View {
             selection: Binding(
                 get: {
                     if isoValues.contains(iso) { return iso }
-                    // Snap orphan values to nearest stop
                     return isoValues.min(by: { abs($0 - iso) < abs($1 - iso) }) ?? 800
                 },
                 set: { iso = $0 }
             ),
-            itemWidth: 56,
+            sideLabelWidth: 32,
+            tickCount: 16,
             title: { "\($0)" },
             onChanged: onChanged
         )
     }
 }
 
-// MARK: - Lens Ring Control (native snap scroll)
+// MARK: - Lens Ring Control
 struct LensRingControl: View {
     @Binding var focalLength: Int
-    /// Retained for call-site compatibility (exposure sync lives in the parent).
     @Binding var isoValue: Int
     let onFocalLengthChanged: (Int) -> Void
     let onISOChanged: (Int) -> Void
@@ -1277,7 +1318,7 @@ struct LensRingControl: View {
 
     var body: some View {
         NativeSnapScrubber(
-            label: "MM",
+            label: "LENS",
             values: focalLengths,
             selection: Binding(
                 get: {
@@ -1286,11 +1327,12 @@ struct LensRingControl: View {
                 },
                 set: { focalLength = $0 }
             ),
-            itemWidth: 52,
+            suffix: "MM",
+            sideLabelWidth: 28,
+            tickCount: 20,
             title: { "\($0)" },
             onChanged: { fl in
                 onFocalLengthChanged(fl)
-                // Parent already re-pushes ISO after lens swap; keep callback wired.
                 onISOChanged(isoValue)
             }
         )
@@ -1564,7 +1606,7 @@ struct Triangle: Shape {
     }
 }
 
-// MARK: - Shutter Button (matte machined steel — grain, not plastic gloss)
+// MARK: - Shutter Button (brushed steel — matte metal, not chrome)
 struct ShutterButton: View {
     let isCapturing: Bool
     let action: () -> Void
@@ -1574,17 +1616,17 @@ struct ShutterButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Collar — low-contrast lathe, almost flat gunmetal
+                // Knurled steel collar — muted, low-contrast lathe bands
                 Circle()
                     .fill(
                         AngularGradient(
                             colors: [
-                                Color(red: 0.28, green: 0.29, blue: 0.30),
-                                Color(red: 0.16, green: 0.17, blue: 0.18),
-                                Color(red: 0.25, green: 0.26, blue: 0.27),
-                                Color(red: 0.14, green: 0.15, blue: 0.16),
-                                Color(red: 0.27, green: 0.28, blue: 0.29),
-                                Color(red: 0.28, green: 0.29, blue: 0.30)
+                                Color(red: 0.34, green: 0.35, blue: 0.37),
+                                Color(red: 0.20, green: 0.21, blue: 0.23),
+                                Color(red: 0.30, green: 0.31, blue: 0.33),
+                                Color(red: 0.17, green: 0.18, blue: 0.19),
+                                Color(red: 0.32, green: 0.33, blue: 0.35),
+                                Color(red: 0.34, green: 0.35, blue: 0.37)
                             ],
                             center: .center
                         )
@@ -1592,12 +1634,12 @@ struct ShutterButton: View {
                     .frame(width: 76, height: 76)
                     .overlay {
                         Circle()
-                            .fill(Color(red: 0.20, green: 0.21, blue: 0.22))
+                            .fill(Color(red: 0.26, green: 0.27, blue: 0.29))
                             .colorEffect(
                                 ShaderLibrary.metallicSurface(
                                     .float2(76, 76),
-                                    .float(isPressed ? 0.9 : 1.25),
-                                    .float2(0.40, 0.35)
+                                    .float(isPressed ? 0.70 : 1.05),
+                                    .float2(0.28, 0.22)
                                 )
                             )
                             .clipShape(Circle())
@@ -1608,71 +1650,86 @@ struct ShutterButton: View {
                     .stroke(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(isPressed ? 0.06 : 0.10),
-                                Color.black.opacity(0.15),
-                                Color.black.opacity(0.7)
+                                Color.white.opacity(isPressed ? 0.14 : 0.22),
+                                Color.white.opacity(0.04),
+                                Color.black.opacity(0.65)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         ),
-                        lineWidth: 1
+                        lineWidth: 1.1
                     )
                     .frame(width: 76, height: 76)
 
                 // Recess between collar and face
                 Circle()
-                    .stroke(Color.black.opacity(isPressed ? 0.85 : 0.65), lineWidth: isPressed ? 2.5 : 2)
+                    .stroke(Color.black.opacity(isPressed ? 0.8 : 0.55), lineWidth: isPressed ? 2.5 : 1.75)
                     .frame(width: 66, height: 66)
 
-                // Face — heavy brush, almost no specular
+                // Raised brushed-steel face
                 ZStack {
                     Circle()
-                        .fill(Color(red: 0.18, green: 0.19, blue: 0.20))
+                        .fill(Color(red: 0.24, green: 0.25, blue: 0.27))
                         .frame(width: 60, height: 60)
                         .colorEffect(
                             ShaderLibrary.metallicSurface(
                                 .float2(60, 60),
-                                .float(isPressed ? 0.75 : 1.2),
-                                .float2(0.45, 0.40)
+                                .float(isPressed ? 0.55 : 0.95),
+                                .float2(0.32, 0.28)
                             )
                         )
                         .clipShape(Circle())
+
+                    // Soft sheen only — no screen-blend chrome hotspot
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    Color.white.opacity(isPressed ? 0.03 : 0.08),
+                                    Color.clear
+                                ],
+                                center: UnitPoint(x: 0.34, y: 0.30),
+                                startRadius: 0,
+                                endRadius: 30
+                            )
+                        )
+                        .frame(width: 60, height: 60)
 
                     Circle()
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(isPressed ? 0.03 : 0.07),
+                                    Color.white.opacity(isPressed ? 0.06 : 0.16),
                                     Color.clear,
-                                    Color.black.opacity(0.5)
+                                    Color.black.opacity(0.45)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
-                            lineWidth: 0.8
+                            lineWidth: 0.9
                         )
                         .frame(width: 58, height: 58)
 
-                    ForEach(0..<3, id: \.self) { i in
+                    ForEach(0..<4, id: \.self) { i in
                         Circle()
-                            .stroke(Color.white.opacity(0.02), lineWidth: 0.5)
-                            .frame(width: CGFloat(48 - i * 10), height: CGFloat(48 - i * 10))
+                            .stroke(Color.white.opacity(0.035), lineWidth: 0.55)
+                            .frame(width: CGFloat(50 - i * 9), height: CGFloat(50 - i * 9))
                     }
 
                     if isCapturing {
                         Circle()
-                            .fill(Color.white.opacity(0.06))
+                            .fill(Color.white.opacity(0.10))
                             .frame(width: 60, height: 60)
                     }
                 }
                 .scaleEffect(isPressed ? 0.95 : 1.0)
                 .shadow(
-                    color: Color.black.opacity(isPressed ? 0.3 : 0.45),
-                    radius: isPressed ? 0.5 : 2,
-                    y: isPressed ? 0 : 1
+                    color: Color.black.opacity(isPressed ? 0.25 : 0.5),
+                    radius: isPressed ? 0.5 : 3,
+                    y: isPressed ? 0 : 1.5
                 )
             }
-            .shadow(color: Color.black.opacity(0.4), radius: isPressed ? 1 : 3, y: isPressed ? 1 : 2)
+            .shadow(color: Color.black.opacity(0.5), radius: isPressed ? 2 : 6, y: isPressed ? 1 : 3)
             .animation(.spring(response: 0.12, dampingFraction: 0.65), value: isPressed)
         }
         .buttonStyle(PlainButtonStyle())
@@ -3033,7 +3090,7 @@ struct FStopScrubber: View {
     }
 }
 
-// MARK: - Shutter Speed Scrubber (native snap scroll)
+// MARK: - Shutter Speed Scrubber
 struct ShutterScrubber: View {
     @Binding var shutterSpeed: Int
     let onChanged: (Int) -> Void
@@ -3049,7 +3106,8 @@ struct ShutterScrubber: View {
                 get: { min(max(shutterSpeed, 0), speeds.count - 1) },
                 set: { shutterSpeed = $0 }
             ),
-            itemWidth: 58,
+            sideLabelWidth: 36,
+            tickCount: 16,
             title: { speeds[$0] },
             onChanged: onChanged
         )

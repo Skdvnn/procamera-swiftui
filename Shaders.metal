@@ -123,7 +123,7 @@ float noise(float2 st) {
 }
 
 // MARK: - Metallic Surface Shader
-// Heavy brush grain, near-zero specular — matte gunmetal, not plastic gloss.
+// Horizontal brush grain + soft sheen — matte machined steel, not chrome.
 [[ stitchable ]] half4 metallicSurface(
     float2 position,
     half4 color,
@@ -133,29 +133,30 @@ float noise(float2 st) {
 ) {
     float2 uv = position / size;
 
-    // Dense anisotropic brush + coarse lathe — texture does the work
-    float brushed = noise(float2(uv.x * 340.0, uv.y * 16.0)) * roughness;
-    float brushed2 = noise(float2(uv.x * 120.0, uv.y * 7.0)) * roughness * 0.75;
-    float micro = (noise(uv * 520.0) - 0.5) * roughness * 0.35;
+    // Anisotropic brush: dense horizontal streaks + coarser lathe bands
+    float brushed = noise(float2(uv.x * 280.0, uv.y * 14.0)) * roughness;
+    float brushed2 = noise(float2(uv.x * 90.0, uv.y * 6.0)) * roughness * 0.65;
+    float micro = (noise(uv * 420.0) - 0.5) * roughness * 0.30;
 
-    // Extremely soft ambient sheen only (no hot specular)
+    // Broad, dull specular — brushed metal scatters light, no hard hotspot
     float2 lightDir = normalize(lightPos - uv);
     float ndl = max(dot(lightDir, float2(0.0, 1.0)), 0.0);
-    float soft = pow(ndl, 3.5) * 0.10;
-    float specular = soft;
+    float soft = pow(ndl, 6.0) * 0.22;
+    float hard = pow(ndl, 22.0) * 0.10;
+    float specular = soft + hard;
 
-    // Minimal edge lift so it doesn't read as chrome plastic
+    // Edge fresnel (kept subtle so rims don't read as chrome)
     float edge = length(uv - float2(0.5, 0.5)) * 2.0;
-    float fresnel = pow(smoothstep(0.70, 1.0, edge), 1.8) * 0.06;
+    float fresnel = pow(smoothstep(0.60, 1.0, edge), 1.6) * 0.14;
 
     half3 result = color.rgb;
-    // Warm-neutral gunmetal cast
-    result = mix(result, half3(result.r * 0.97, result.g * 0.97, result.b * 0.99), half(0.22));
-    result += half3((brushed * 0.18 + brushed2 * 0.14 + micro) * 1.05);
-    result += half3(specular * 0.12) * half3(0.90, 0.91, 0.93);
-    result += half3(fresnel) * half3(0.70, 0.72, 0.75);
-    // Deeper contact shadow — raised steel, not a glossy button
-    result *= half(1.0 - smoothstep(0.45, 1.05, uv.y) * 0.28);
+    // Neutral steel cast (slightly cooler, not silver-blue)
+    result = mix(result, half3(result.r * 0.94, result.g * 0.96, result.b * 1.02), half(0.28));
+    result += half3((brushed * 0.14 + brushed2 * 0.11 + micro) * 0.95);
+    result += half3(specular * 0.28) * half3(0.92, 0.94, 0.97);
+    result += half3(fresnel) * half3(0.75, 0.78, 0.84);
+    // Contact shadow at bottom so it feels raised metal, not a flat fill
+    result *= half(1.0 - smoothstep(0.50, 1.05, uv.y) * 0.22);
 
     return half4(clamp(result, 0.0h, 1.0h), color.a);
 }
