@@ -284,41 +284,35 @@ final class LensFXEngine {
 
         // Keep the preview pipeline alive even if a single filter misbehaves
         let result: CIImage
-        do {
-            switch fx {
-            case .none:
-                result = image
-            case .liquid:
-                result = applyLiquid(to: image, time: time)
-            case .chrome:
-                result = applyChrome(to: image, time: time)
-            case .instant:
-                result = applyInstant(to: image)
-            case .dream:
-                result = applyDream(to: image)
-            case .fisheye:
-                result = applyFisheye(to: image)
-            case .thermal:
-                result = applyThermal(to: image)
-            case .xray:
-                result = applyXRay(to: image)
-            case .vhs:
-                result = applyVHS(to: image, time: time)
-            case .kaleido:
-                result = applyKaleido(to: image, time: time)
-            case .pixel8:
-                result = applyPixel8(to: image)
-            case .toon:
-                result = applySimpleFilter(name: "CIComicEffect", to: image)
-            case .mirror:
-                result = applyMirror(to: image)
-            case .negative:
-                result = applyNegative(to: image)
-            }
-        } catch {
-            // CIFilter graphs shouldn't throw, but keep preview alive if they do
-            print("LensFX apply failed for \(fx.name): \(error)")
-            return image
+        switch fx {
+        case .none:
+            result = image
+        case .liquid:
+            result = applyLiquid(to: image, time: time)
+        case .chrome:
+            result = applyChrome(to: image, time: time)
+        case .instant:
+            result = applyInstant(to: image)
+        case .dream:
+            result = applyDream(to: image)
+        case .fisheye:
+            result = applyFisheye(to: image)
+        case .thermal:
+            result = applyThermal(to: image)
+        case .xray:
+            result = applyXRay(to: image)
+        case .vhs:
+            result = applyVHS(to: image, time: time)
+        case .kaleido:
+            result = applyKaleido(to: image, time: time)
+        case .pixel8:
+            result = applyPixel8(to: image)
+        case .toon:
+            result = applySimpleFilter(name: "CIComicEffect", to: image)
+        case .mirror:
+            result = applyMirror(to: image)
+        case .negative:
+            result = applyNegative(to: image)
         }
 
         let outExtent = result.extent

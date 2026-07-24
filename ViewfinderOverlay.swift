@@ -91,19 +91,28 @@ struct ViewfinderOverlay: View {
         .overlay(alignment: .topTrailing) {
             VStack(spacing: 8) {
                 chromeButton {
-                    showFXMenu = false
-                    showFilmMenu.toggle()
+                    // Instant toggle — never animate over Metal camera chrome.
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) {
+                        showFXMenu = false
+                        showFilmMenu.toggle()
+                    }
                 } label: {
                     Image(systemName: "film")
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(filmFilter == .none
-                                         ? .white.opacity(0.8)
-                                         : Color(red: 1.0, green: 0.85, blue: 0.35))
+                        .foregroundColor(showFilmMenu || filmFilter != .none
+                                         ? Color(red: 1.0, green: 0.85, blue: 0.35)
+                                         : .white.opacity(0.8))
                 }
 
                 chromeButton {
-                    showFilmMenu = false
-                    showFXMenu.toggle()
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) {
+                        showFilmMenu = false
+                        showFXMenu.toggle()
+                    }
                 } label: {
                     Image(systemName: "water.waves")
                         .font(.system(size: 13, weight: .medium))
@@ -119,8 +128,12 @@ struct ViewfinderOverlay: View {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
-                        showFilmMenu = false
-                        showFXMenu = false
+                        var t = Transaction()
+                        t.disablesAnimations = true
+                        withTransaction(t) {
+                            showFilmMenu = false
+                            showFXMenu = false
+                        }
                     }
             }
         }
@@ -523,8 +536,17 @@ struct LeicaFilmPicker: View {
                     ForEach(FilmFilterMode.allCases, id: \.self) { filter in
                         Button(action: {
                             VFHaptics.click()
-                            selectedFilter = filter
-                            isPresented = false
+                            // Same as Lens FX: dismiss first, apply on next turn so
+                            // the live Metal/CI preview doesn't enable mid-teardown.
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) {
+                                isPresented = false
+                            }
+                            let chosen = filter
+                            DispatchQueue.main.async {
+                                selectedFilter = chosen
+                            }
                         }) {
                             HStack(spacing: 8) {
                                 Text(selectedFilter == filter ? ">" : " ")
@@ -683,7 +705,11 @@ struct LensFXPicker: View {
             VFHaptics.click()
             // Dismiss first, then apply FX on the next turn so the Metal
             // preview pipeline doesn't enable mid-teardown.
-            isPresented = false
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                isPresented = false
+            }
             let chosen = fx
             DispatchQueue.main.async {
                 selectedFX = chosen

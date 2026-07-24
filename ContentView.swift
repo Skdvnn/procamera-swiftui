@@ -409,12 +409,21 @@ struct ContentView: View {
             camera.selectedLensFX = lensFX
         }
         .onChange(of: filmFilter) { _, newFilter in
-            syncFilmFilter(newFilter)
+            // Apply without inheriting any animation transaction into camera chrome.
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                syncFilmFilter(newFilter)
+            }
         }
         .onChange(of: lensFX) { _, newFX in
-            camera.selectedLensFX = newFX
-            if !newFX.isTouchReactive {
-                LensFXEngine.shared.setTouch(x: 0.5, y: 0.5, force: 0, velX: 0, velY: 0, active: false)
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                camera.selectedLensFX = newFX
+                if !newFX.isTouchReactive {
+                    LensFXEngine.shared.setTouch(x: 0.5, y: 0.5, force: 0, velX: 0, velY: 0, active: false)
+                }
             }
         }
         .fullScreenCover(isPresented: $showPhotoBook) {
