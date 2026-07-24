@@ -21,6 +21,21 @@ class CameraManager: NSObject, ObservableObject {
     @Published var whiteBalance: AVCaptureDevice.WhiteBalanceGains?
     @Published var zoomFactor: CGFloat = 1.0
     @Published var isManualExposure: Bool = false
+    @Published var isAEAFLocked: Bool = false
+    /// Hardware lens aperture (read-only; phones don't stop down).
+    @Published var lensAperture: Float = 0
+    @Published var focusPeakingEnabled: Bool = false {
+        didSet {
+            syncPipelineSelection()
+            refreshLivePreviewState()
+        }
+    }
+    @Published var zebraEnabled: Bool = false {
+        didSet {
+            syncPipelineSelection()
+            refreshLivePreviewState()
+        }
+    }
     @Published var selectedFilmFilter: FilmFilter = .none {
         didSet {
             syncPipelineSelection()
@@ -52,6 +67,8 @@ class CameraManager: NSObject, ObservableObject {
     private let pipelineLock = NSLock()
     private var pipelineFilmFilter: FilmFilter = .none
     private var pipelineLensFX: LensFXMode = .none
+    private var pipelinePeaking = false
+    private var pipelineZebra = false
 
     // Remember the user's manual exposure so lens/format switches can re-apply it
     private var manualShutterIndex: Int?
@@ -273,6 +290,7 @@ class CameraManager: NSObject, ObservableObject {
             self.maxExposure = maxBias
             self.minShutterDuration = minDuration
             self.maxShutterDuration = maxDuration
+            self.lensAperture = device.lensAperture
         }
     }
 
@@ -280,13 +298,15 @@ class CameraManager: NSObject, ObservableObject {
         pipelineLock.lock()
         pipelineFilmFilter = selectedFilmFilter
         pipelineLensFX = selectedLensFX
+        pipelinePeaking = focusPeakingEnabled
+        pipelineZebra = zebraEnabled
         pipelineLock.unlock()
     }
 
-    private func currentPipelineSelection() -> (FilmFilter, LensFXMode) {
+    private func currentPipelineSelection() -> (FilmFilter, LensFXMode, Bool, Bool) {
         pipelineLock.lock()
         defer { pipelineLock.unlock() }
-        return (pipelineFilmFilter, pipelineLensFX)
+        return (pipelineFilmFilter, pipelineLensFX, pipelinePeaking, pipelineZebra)
     }
 
     /// Re-apply stored manual ISO/shutter after a lens or format change.
@@ -674,9 +694,76 @@ class CameraManager: NSObject, ObservableObject {
                 device.unlockForConfiguration()
                 DispatchQueue.main.async {
                     self.isManualExposure = false
+                    self.isAEAFLocked = false
                 }
             } catch {
                 print("Error setting auto exposure: \(error)")
+            }
+        }
+    }
+
+    /// Lock both AF and AE at the current values (pro half-press analogue).
+    func setAEAFLocked(_ locked: Bool) {
+        guard let device = videoDeviceInput?.device else { return }
+
+        sessionQueue.async {
+            do {
+                try device.lockForConfiguration()
+                if locked {
+                    if device.isFocusModeSupported(.locked) {
+                        device.focusMode = .locked
+                    }
+                    // Don't clobber custom ISO/shutter; only lock auto-exposure modes.
+                    if !self.isManualExposure, device.isExposureModeSupported(.locked) {
+                        device.exposureMode = .locked
+                    }
+                } else {
+                    if device.isFocusModeSupported(.continuousAutoFocus) {
+                        device.focusMode = .continuousAutoFocus
+                    }
+                    if !self.isManualExposure, device.isExposureModeSupported(.continuousAutoExposure) {
+                        device.exposureMode = .continuousAutoExposure
+                    }
+                }
+                device.unlockForConfiguration()
+                DispatchQueue.main.async {
+                    self.isAEAFLocked = locked
+                    if !locked {
+                        self.isManualFocus = false
+                    }
+                }
+            } catch {
+                print("Error setting AE/AF lock: \(error)")
+            }
+        }
+    }
+
+    /// Continuous AF + auto exposure — one-tap exit from manual / lock.
+    func returnToAuto() {
+        setAutoExposure()
+        guard let device = videoDeviceInput?.device else { return }
+        sessionQueue.async {
+            do {
+                try device.lockForConfiguration()
+                if device.isFocusModeSupported(.continuousAutoFocus) {
+                    device.focusMode = .continuousAutoFocus
+                }
+                if device.isExposurePointOfInterestSupported {
+                    device.exposurePointOfInterest = CGPoint(x: 0.5, y: 0.5)
+                }
+                if device.isFocusPointOfInterestSupported {
+                    device.focusPointOfInterest = CGPoint(x: 0.5, y: 0.5)
+                }
+                device.setExposureTargetBias(0) { _ in }
+                device.unlockForConfiguration()
+                DispatchQueue.main.async {
+                    self.isManualFocus = false
+                    self.isAEAFLocked = false
+                    self.exposureValue = 0
+                    self.lensPosition = device.lensPosition
+                }
+            } catch {
+                print("Error returning to auto: \(error)")
             }
         }
     }
@@ -1281,7 +1368,8 @@ class CameraManager: NSObject, ObservableObject {
     // stale filtered output, so toggling never appears stuck
     private func refreshLivePreviewState() {
         lastPreviewFrameTime = 0
-        if selectedFilmFilter == .none && selectedLensFX == .none {
+        if selectedFilmFilter == .none && selectedLensFX == .none
+            && !focusPeakingEnabled && !zebraEnabled {
             filteredPreviewImage = nil
         }
     }
@@ -1395,8 +1483,10 @@ class CameraManager: NSObject, ObservableObject {
             guard captureLensFX.isTouchReactive else { return nil }
             return LensFXEngine.shared.snapshotForCapture()
         }()
-        let shouldProcess = captureFormat != .raw
-        let needsFXBake = shouldProcess && (captureLensFX != .none || captureFilmFilter != .none)
+        // Always bake film/FX into the UIImage companion (gallery + Photos JPEG/HEIC).
+        // RAW DNG stays clean via the separate raw callback — honesty for the preview twin.
+        let shouldProcess = true
+        let needsFXBake = captureLensFX != .none || captureFilmFilter != .none
 
         if needsFXBake {
             isBakingStill = true
@@ -1417,12 +1507,14 @@ class CameraManager: NSObject, ObservableObject {
             DispatchQueue.global(qos: .userInitiated).async {
 
                 let filteredImage: UIImage
-                if shouldProcess {
+                if shouldProcess && needsFXBake {
                     filteredImage = self.applyLensFX(
                         captureLensFX,
                         to: self.applyFilmFilter(captureFilmFilter, to: image),
                         touch: captureTouch
                     )
+                } else if shouldProcess {
+                    filteredImage = image
                 } else {
                     filteredImage = image
                 }
@@ -1558,8 +1650,8 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
 
         // Handle live preview processing (film filter and/or lens FX, not during long exposure)
-        let (filmFilter, lensFX) = currentPipelineSelection()
-        let wantsLiveProcessing = filmFilter != .none || lensFX != .none
+        let (filmFilter, lensFX, peaking, zebra) = currentPipelineSelection()
+        let wantsLiveProcessing = filmFilter != .none || lensFX != .none || peaking || zebra
         if wantsLiveProcessing && !isLongExposureCapturing && !isBakingStill {
 
             let currentTime = CFAbsoluteTimeGetCurrent()
@@ -1572,6 +1664,12 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 processed = applyFilmFilter(to: processed, filter: filmFilter)
                 if lensFX != .none {
                     processed = LensFXEngine.shared.apply(lensFX, to: processed, time: currentTime)
+                }
+                if peaking {
+                    processed = ViewfinderMonitor.applyFocusPeaking(to: processed)
+                }
+                if zebra {
+                    processed = ViewfinderMonitor.applyZebra(to: processed)
                 }
 
                 DispatchQueue.main.async {

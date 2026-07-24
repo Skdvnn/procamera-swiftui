@@ -174,10 +174,13 @@ struct ContentView: View {
     @StateObject private var camera = CameraManager()
     @Environment(\.colorScheme) var colorScheme  // Track color scheme changes
 
-    @State private var showGrid = true
+    @AppStorage("cam.showGrid") private var showGrid = true
+    @AppStorage("cam.focusPeaking") private var focusPeaking = false
+    @AppStorage("cam.zebra") private var zebraEnabled = false
+    @AppStorage("cam.showLevel") private var showLevel = true
     @State private var timerSeconds = 0
     @State private var timerCountdown = 0
-    @State private var photoCount = 9999
+    @State private var photoCount = 0
     @State private var lastCapturedImage: UIImage?
     @State private var showFlash = false
     @State private var showFocusPoint = false
@@ -190,7 +193,6 @@ struct ContentView: View {
     @State private var macroEnabled = false
     @State private var isCapturing = false
     @State private var isRecording = false
-    @State private var selectedMode: Int = 1
     @State private var whiteBalanceIndex: Int = 0
     @State private var isManualFocusEnabled = false
     @State private var isLocked = false
@@ -199,7 +201,8 @@ struct ContentView: View {
     @State private var isoValue: Int = 800
     @State private var focalLength: Int = 24
     @State private var zoomValue: CGFloat = 1.0
-    @State private var apertureValue: Float = 2.8
+    /// Hardware lens aperture readout only (phones don't stop down).
+    @State private var apertureValue: Float = 0
     @State private var shutterSpeedIndex: Int = 9  // Default to 1/125
     @State private var aspectRatio: AspectRatioMode = .full
     @State private var filmFilter: FilmFilterMode = .none
@@ -212,7 +215,6 @@ struct ContentView: View {
     @StateObject private var gallery = GalleryStore()
     @State private var showPhotoBook = false
 
-    private let modes = ["P", "A", "T"]
     private let shutterSpeeds = ["4\"", "2\"", "1\"", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60", "1/125", "1/250", "1/500", "1/1000", "1/2000", "1/4000"]
     private let isoValues = [100, 200, 400, 800, 1600, 3200]
     private let focalLengths = [13, 24, 48, 120]
@@ -334,7 +336,12 @@ struct ContentView: View {
                                 aperture: apertureValue,
                                 photoCount: photoCount,
                                 exposureValue: exposureValue,
-                                captureFormat: captureFormat
+                                captureFormat: captureFormat,
+                                aspectLabel: aspectRatio.shortLabel,
+                                isLocked: isLocked,
+                                isManualExposure: camera.isManualExposure,
+                                onToggleLock: { toggleAEAFLock() },
+                                onReturnToAuto: { returnToAuto() }
                             )
                             .padding(.horizontal, 14)
                             .padding(.bottom, CollapsedChrome.histogramBottomPad(safeBottom: safeBottom))
@@ -354,10 +361,23 @@ struct ContentView: View {
                             showGrid: showGrid,
                             aspectRatio: $aspectRatio,
                             filmFilter: $filmFilter,
-                            lensFX: $lensFX
+                            lensFX: $lensFX,
+                            focusPeaking: $focusPeaking,
+                            onFlipCamera: {
+                                Haptics.click()
+                                camera.switchCamera()
+                            }
                         )
                         .padding(.horizontal, bottomCollapsed ? 6 : DS.pageMargin)
                         .zIndex(40)
+
+                        if showLevel {
+                            HorizonLevelIndicator()
+                                .padding(.top, 18)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                                .allowsHitTesting(false)
+                                .zIndex(35)
+                        }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .layoutPriority(1)
@@ -407,6 +427,25 @@ struct ContentView: View {
             // Sync initial filter state
             syncFilmFilter(filmFilter)
             camera.selectedLensFX = lensFX
+            camera.focusPeakingEnabled = focusPeaking
+            camera.zebraEnabled = zebraEnabled
+            photoCount = gallery.shots.count
+            if let last = gallery.shots.last, let img = gallery.thumbnail(for: last) ?? gallery.image(for: last) {
+                lastCapturedImage = img
+            }
+            apertureValue = camera.lensAperture
+        }
+        .onChange(of: focusPeaking) { _, on in
+            camera.focusPeakingEnabled = on
+        }
+        .onChange(of: zebraEnabled) { _, on in
+            camera.zebraEnabled = on
+        }
+        .onChange(of: camera.lensAperture) { _, value in
+            apertureValue = value
+        }
+        .onChange(of: camera.isAEAFLocked) { _, locked in
+            isLocked = locked
         }
         .onChange(of: filmFilter) { _, newFilter in
             // Apply without inheriting any animation transaction into camera chrome.
@@ -438,7 +477,7 @@ struct ContentView: View {
             date: Date(),
             iso: isoValue,
             shutter: shutterSpeeds[shutterSpeedIndex],
-            aperture: apertureValue,
+            aperture: apertureValue > 0 ? apertureValue : 0,
             ev: exposureValue,
             filmFilter: filmFilter.name,
             lensFX: lensFX.name,
@@ -473,6 +512,34 @@ struct ContentView: View {
     private func syncCaptureControlsToCamera() {
         syncFilmFilter(filmFilter)
         camera.selectedLensFX = lensFX
+    }
+
+    private func toggleAEAFLock() {
+        Haptics.click()
+        let next = !isLocked
+        isLocked = next
+        camera.setAEAFLocked(next)
+    }
+
+    private func returnToAuto() {
+        Haptics.medium()
+        isLocked = false
+        isManualFocusEnabled = false
+        exposureValue = 0
+        camera.returnToAuto()
+    }
+
+    /// Apply aspect crop then dual-write gallery + Photos.
+    private func finishCapturedImage(_ img: UIImage) {
+        let framed: UIImage
+        if let aspect = aspectRatio.framedAspect {
+            framed = img.croppedToAspect(aspect)
+        } else {
+            framed = img
+        }
+        lastCapturedImage = framed
+        photoCount += 1
+        recordShot(framed)
     }
 
     private func handleFocusTap(_ point: CGPoint, in size: CGSize) {
@@ -630,7 +697,12 @@ struct ContentView: View {
                             aperture: apertureValue,
                             photoCount: photoCount,
                             exposureValue: exposureValue,
-                            captureFormat: captureFormat
+                            captureFormat: captureFormat,
+                            aspectLabel: aspectRatio.shortLabel,
+                            isLocked: isLocked,
+                            isManualExposure: camera.isManualExposure,
+                            onToggleLock: { toggleAEAFLock() },
+                            onReturnToAuto: { returnToAuto() }
                         )
                         .padding(.horizontal, 8)
                         // Keep clear of the viewfinder bottom edge / swipe strip so it
@@ -876,7 +948,7 @@ struct ContentView: View {
 
                 Spacer()
 
-                HStack(spacing: 12) {
+                HStack(spacing: 10) {
                     VStack(spacing: 8) {
                         ModeIcon(icon: "camera.macro", isActive: macroEnabled)
                         ModeButton(isActive: macroEnabled) {
@@ -904,8 +976,15 @@ struct ContentView: View {
                             showGrid.toggle()
                         }
                     }
+                    VStack(spacing: 8) {
+                        ModeIcon(icon: "waveform.path.ecg", isActive: zebraEnabled)
+                        ModeButton(isActive: zebraEnabled) {
+                            Haptics.click()
+                            zebraEnabled.toggle()
+                        }
+                    }
                 }
-                .frame(width: 88, height: 48)
+                .frame(width: 112, height: 48)
             }
             .padding(.horizontal, DS.pageMargin)
             .contentShape(Rectangle())
@@ -989,9 +1068,7 @@ struct ContentView: View {
             ) { img in
                 isCapturing = false
                 if let img = img {
-                    lastCapturedImage = img
-                    photoCount += 1
-                    recordShot(img)
+                    finishCapturedImage(img)
                 }
             }
         } else {
@@ -1006,11 +1083,7 @@ struct ContentView: View {
             ) { img in
                 isCapturing = false
                 if let img = img {
-                    lastCapturedImage = img
-                    photoCount += 1
-                    // Dual-writes sandbox + Photos (processed preview; RAW DNG
-                    // is handled separately inside CameraManager).
-                    recordShot(img)
+                    finishCapturedImage(img)
                 }
             }
         }
@@ -1081,6 +1154,11 @@ struct RefractiveGlassInfoBar: View {
     let photoCount: Int
     let exposureValue: Float
     let captureFormat: CaptureFormat
+    var aspectLabel: String = "FULL"
+    var isLocked: Bool = false
+    var isManualExposure: Bool = false
+    var onToggleLock: (() -> Void)? = nil
+    var onReturnToAuto: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 10) {
@@ -1094,23 +1172,32 @@ struct RefractiveGlassInfoBar: View {
                     Text(captureFormat.label)
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundColor(captureFormat == .raw ? DS.accent : .white)
-                    Text("L")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .padding(.horizontal, 3)
-                        .padding(.vertical, 1)
-                        .background(
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(Color.white)
-                        )
-                        .foregroundColor(.black)
-                    Text("1:1")
+                    Button {
+                        onToggleLock?()
+                    } label: {
+                        Text("L")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 1)
+                            .background(
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(isLocked ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white)
+                            )
+                            .foregroundColor(.black)
+                    }
+                    .buttonStyle(.plain)
+                    Text(aspectLabel)
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                 }
                 HStack(spacing: 6) {
                     Text(formatNumber(photoCount))
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    Text("F\(String(format: "%.1f", aperture))")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    // Hardware f-number only — phones can't stop down.
+                    if aperture > 0.5 {
+                        Text("ƒ\(String(format: "%.1f", aperture))")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.55))
+                    }
                 }
             }
             .foregroundColor(.white)
@@ -1120,11 +1207,20 @@ struct RefractiveGlassInfoBar: View {
             // ISO & Shutter
             VStack(alignment: .trailing, spacing: 2) {
                 HStack(spacing: 3) {
-                    Text("A")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .padding(.horizontal, 3)
-                        .padding(.vertical, 1)
-                        .background(RoundedRectangle(cornerRadius: 2).stroke(Color.white, lineWidth: 0.5))
+                    Button {
+                        onReturnToAuto?()
+                    } label: {
+                        Text("A")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 1)
+                            .background(
+                                RoundedRectangle(cornerRadius: 2)
+                                    .stroke(isManualExposure ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white, lineWidth: 0.5)
+                            )
+                            .foregroundColor(isManualExposure ? Color(red: 1.0, green: 0.85, blue: 0.35) : .white)
+                    }
+                    .buttonStyle(.plain)
                     Text("ISO \(iso)")
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                 }

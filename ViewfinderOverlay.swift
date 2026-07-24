@@ -47,6 +47,8 @@ struct ViewfinderOverlay: View {
     @Binding var aspectRatio: AspectRatioMode
     @Binding var filmFilter: FilmFilterMode
     @Binding var lensFX: LensFXMode
+    @Binding var focusPeaking: Bool
+    var onFlipCamera: (() -> Void)? = nil
     @State private var showFilmMenu = false
     @State private var showFXMenu = false
 
@@ -77,14 +79,38 @@ struct ViewfinderOverlay: View {
             .allowsHitTesting(false)
         }
         .overlay(alignment: .topLeading) {
-            chromeButton {
-                showFilmMenu = false
-                showFXMenu = false
-                aspectRatio = aspectRatio.next
-            } label: {
-                Text(aspectRatio.label)
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.9))
+            VStack(spacing: 8) {
+                chromeButton {
+                    showFilmMenu = false
+                    showFXMenu = false
+                    aspectRatio = aspectRatio.next
+                } label: {
+                    Text(aspectRatio.label)
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.9))
+                }
+
+                chromeButton {
+                    onFlipCamera?()
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath.camera")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(.white.opacity(0.85))
+                }
+
+                chromeButton {
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) {
+                        focusPeaking.toggle()
+                    }
+                } label: {
+                    Image(systemName: "plus.viewfinder")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(focusPeaking
+                                         ? Color(red: 0.35, green: 0.95, blue: 0.45)
+                                         : .white.opacity(0.8))
+                }
             }
             .padding(16)
         }
