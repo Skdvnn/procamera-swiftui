@@ -1127,7 +1127,7 @@ class CameraManager: NSObject, ObservableObject {
 
         // Bake UIImage orientation into pixels; CIImage(image:) ignores it
         if image.imageOrientation != .up {
-            ciImage = ciImage.oriented(CGImagePropertyOrientation(image.imageOrientation))
+            ciImage = ciImage.oriented(image.imageOrientation.cgImageOrientation)
         }
 
 
