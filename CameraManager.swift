@@ -1559,16 +1559,6 @@ class CameraManager: NSObject, ObservableObject {
         photoOutput.capturePhoto(with: settings, delegate: self)
     }
 
-    // MARK: - Video Recording (stub for now)
-    func startRecording() {
-        print("Recording started")
-        // TODO: Implement video recording
-    }
-
-    func stopRecording() {
-        print("Recording stopped")
-        // TODO: Implement video recording
-    }
 
     func saveToPhotoLibrary(_ image: UIImage, completion: @escaping (String?) -> Void) {
         PhotosLibraryService.saveImage(image, completion: completion)

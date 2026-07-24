@@ -107,6 +107,12 @@ struct ShutterSettingsSheet: View {
                     }
                 }
 
+                Section("External shutter") {
+                    Text("Volume buttons, Camera Control, and Bluetooth/HID remotes (gamepad A / trigger) fire the shutter.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                }
+
                 Section("About") {
                     LabeledContent("App", value: "Shutter")
                     LabeledContent("Build", value: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—")

@@ -1,7 +1,9 @@
 import Foundation
 import SwiftUI
-
-// MARK: - Saved film + Lens FX recipes
+import AVFoundation
+import MediaPlayer
+import UIKit
+import GameController
 
 struct LookRecipe: Codable, Identifiable, Equatable {
     var id: UUID
@@ -83,13 +85,10 @@ final class LookRecipeStore: ObservableObject {
     }
 }
 
-// MARK: - Volume → shutter
-
-import AVFoundation
-import MediaPlayer
-import UIKit
+// MARK: - Volume / HID → shutter
 
 /// Steals volume-button presses for shutter (system HUD suppressed via offscreen MPVolumeView).
+/// Also listens for connected game-controller / HID remotes that expose a digital shutter button.
 @MainActor
 final class VolumeShutterObserver: NSObject, ObservableObject {
     var onShutter: (() -> Void)?
@@ -99,6 +98,7 @@ final class VolumeShutterObserver: NSObject, ObservableObject {
     private var ignoring = false
     private let volumeView = MPVolumeView(frame: CGRect(x: -1000, y: -1000, width: 1, height: 1))
     private weak var hostView: UIView?
+    private var controllerObservers: [Any] = []
 
     func start(in view: UIView?) {
         stop()
@@ -114,12 +114,18 @@ final class VolumeShutterObserver: NSObject, ObservableObject {
                 self.handleVolume(session.outputVolume)
             }
         }
+        startControllerListening()
     }
 
     func stop() {
         observation?.invalidate()
         observation = nil
         volumeView.removeFromSuperview()
+        for o in controllerObservers {
+            NotificationCenter.default.removeObserver(o)
+        }
+        controllerObservers.removeAll()
+        GCController.controllers().forEach { $0.extendedGamepad?.valueChangedHandler = nil }
     }
 
     private func handleVolume(_ volume: Float) {
@@ -127,7 +133,6 @@ final class VolumeShutterObserver: NSObject, ObservableObject {
         if abs(volume - lastVolume) < 0.001 { return }
         lastVolume = volume
         onShutter?()
-        // Nudge volume back toward mid so repeated presses keep working at the edges.
         restoreMidVolumeIfNeeded(volume)
     }
 
@@ -141,6 +146,33 @@ final class VolumeShutterObserver: NSObject, ObservableObject {
             }
             self.lastVolume = 0.5
             self.ignoring = false
+        }
+    }
+
+    private func startControllerListening() {
+        let connect = NotificationCenter.default.addObserver(
+            forName: .GCControllerDidConnect,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let pad = (note.object as? GCController)?.extendedGamepad else { return }
+            self?.bind(pad)
+        }
+        let disconnect = NotificationCenter.default.addObserver(
+            forName: .GCControllerDidDisconnect,
+            object: nil,
+            queue: .main
+        ) { _ in }
+        controllerObservers = [connect, disconnect]
+        GCController.controllers().compactMap(\.extendedGamepad).forEach(bind)
+    }
+
+    private func bind(_ pad: GCExtendedGamepad) {
+        pad.buttonA.pressedChangedHandler = { [weak self] _, _, pressed in
+            if pressed { Task { @MainActor in self?.onShutter?() } }
+        }
+        pad.rightTrigger.pressedChangedHandler = { [weak self] _, _, pressed in
+            if pressed { Task { @MainActor in self?.onShutter?() } }
         }
     }
 }

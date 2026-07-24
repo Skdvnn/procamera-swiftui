@@ -196,7 +196,6 @@ struct ContentView: View {
     @State private var lastExposureHapticStep: Int = 0
     @State private var macroEnabled = false
     @State private var isCapturing = false
-    @State private var isRecording = false
     @State private var whiteBalanceIndex: Int = 0
     @State private var isManualFocusEnabled = false
     @State private var isLocked = false
@@ -402,6 +401,20 @@ struct ContentView: View {
                                 .allowsHitTesting(false)
                                 .zIndex(35)
                         }
+
+                        // Active shoot mode chip
+                        Text((ShootMode(rawValue: shootModeRaw) ?? .street).title.uppercased())
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .tracking(1.2)
+                            .foregroundColor(.white.opacity(0.7))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(Color.black.opacity(0.4)))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                            .padding(.leading, bottomCollapsed ? 20 : 24)
+                            .padding(.bottom, bottomCollapsed ? 100 : 16)
+                            .allowsHitTesting(false)
+                            .zIndex(36)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .layoutPriority(1)
@@ -1284,11 +1297,6 @@ struct ContentView: View {
         }
     }
 
-    private func toggleRecording() {
-        isRecording.toggle()
-        if isRecording { camera.startRecording() }
-        else { camera.stopRecording() }
-    }
 }
 
 // MARK: - Viewfinder Vignette (Subtle corner darkening only)
@@ -2319,81 +2327,6 @@ struct ScaleButtonStyle: ButtonStyle {
     }
 }
 
-// MARK: - Record Button (Video recording)
-struct RecordButton: View {
-    let isRecording: Bool
-    let action: () -> Void
-
-    @State private var isPressed = false
-
-    var body: some View {
-        Button(action: action) {
-            ZStack {
-                // Outer bezel
-                Circle()
-                    .fill(DS.controlBg)
-                    .frame(width: 52, height: 52)
-
-                // Inner shadow
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.black.opacity(0.5), Color.clear, Color.white.opacity(0.03)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .frame(width: 48, height: 48)
-
-                // Outer stroke
-                Circle()
-                    .stroke(DS.strokeOuter, lineWidth: 1)
-                    .frame(width: 52, height: 52)
-
-                // Inner stroke
-                Circle()
-                    .stroke(DS.strokeInner, lineWidth: 1)
-                    .frame(width: 48, height: 48)
-
-                // Red record indicator
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                Color(red: 0.95, green: 0.25, blue: 0.25),
-                                Color(red: 0.75, green: 0.15, blue: 0.15)
-                            ],
-                            center: UnitPoint(x: 0.35, y: 0.35),
-                            startRadius: 0,
-                            endRadius: 12
-                        )
-                    )
-                    .frame(width: 22, height: 22)
-                    .scaleEffect(isRecording ? 0.7 : 1.0)
-                    .animation(.easeInOut(duration: 0.2), value: isRecording)
-
-                // Recording pulse
-                if isRecording {
-                    Circle()
-                        .stroke(Color.red.opacity(0.5), lineWidth: 2)
-                        .frame(width: 28, height: 28)
-                        .scaleEffect(isRecording ? 1.3 : 1.0)
-                        .opacity(isRecording ? 0 : 1)
-                        .animation(.easeOut(duration: 1).repeatForever(autoreverses: false), value: isRecording)
-                }
-            }
-            .shadow(color: Color.black.opacity(0.4), radius: 4, y: 2)
-            .animation(.easeOut(duration: 0.1), value: isPressed)
-        }
-        .buttonStyle(PlainButtonStyle())
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
-        )
-    }
-}
-
 // MARK: - Flash Button (Figma exact: 80x42 pill, #2c2c2c fill, #444444 stroke)
 struct FlashButtonCompact: View {
     let flashMode: AVCaptureDevice.FlashMode
@@ -2692,53 +2625,6 @@ struct FormatTogglePill: View {
             .frame(width: toggleWidth, height: toggleHeight)
         }
         .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Record Button Compact (For stacking)
-struct RecordButtonCompact: View {
-    let isRecording: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            ZStack {
-                Circle()
-                    .fill(DS.controlBg)
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.black.opacity(0.4), Color.clear, Color.white.opacity(0.02)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .padding(2)
-                Circle()
-                    .stroke(DS.strokeOuter, lineWidth: 1)
-                Circle()
-                    .stroke(DS.strokeInner, lineWidth: 1)
-                    .padding(2)
-
-                // Red record dot
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                Color(red: 0.95, green: 0.25, blue: 0.25),
-                                Color(red: 0.7, green: 0.15, blue: 0.15)
-                            ],
-                            center: UnitPoint(x: 0.35, y: 0.35),
-                            startRadius: 0,
-                            endRadius: 10
-                        )
-                    )
-                    .frame(width: 18, height: 18)
-                    .scaleEffect(isRecording ? 0.7 : 1.0)
-                    .animation(.easeInOut(duration: 0.2), value: isRecording)
-            }
-        }
-        .buttonStyle(ProButtonStyle())
     }
 }
 
@@ -3521,131 +3407,6 @@ struct ISOScrubberVertical: View {
                     }
             )
         }
-    }
-}
-
-// MARK: - F-Stop Scrubber (DSLR-style drag control)
-struct FStopScrubber: View {
-    @Binding var aperture: Float
-    let onChanged: (Float) -> Void
-
-    private let fStops: [Float] = [1.8, 2.8, 4.0, 5.6, 8.0, 11, 16, 22]
-    @State private var dragOffset: CGFloat = 0
-    @State private var isDragging = false
-    @State private var startIndex: Int = 0
-
-    private var currentIndex: Int {
-        fStops.firstIndex(where: { abs($0 - aperture) < 0.5 }) ?? 0
-    }
-
-    var body: some View {
-        GeometryReader { _ in
-            ZStack {
-                // Background
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(DS.controlBg)
-
-                // Inner shadow
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.black.opacity(0.4), Color.clear, Color.white.opacity(0.02)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .padding(2)
-
-                // Outer stroke
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(DS.strokeOuter, lineWidth: 1)
-
-                // Inner stroke
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(DS.strokeInner, lineWidth: 1)
-                    .padding(2)
-
-                // Ticks at bottom only
-                Canvas { ctx, size in
-                    let tickCount = 24
-                    let usableWidth = size.width - 20
-                    let spacing = usableWidth / CGFloat(tickCount - 1)
-                    let offset = dragOffset * 0.15
-                    let startX: CGFloat = 10
-
-                    for i in 0..<tickCount {
-                        let x = startX + CGFloat(i) * spacing + offset
-                        guard x >= 4 && x <= size.width - 4 else { continue }
-
-                        let isMajor = i % 4 == 0
-                        let tickHeight: CGFloat = isMajor ? 5 : 3
-                        let opacity = isMajor ? 0.25 : 0.1
-
-                        let rect = CGRect(
-                            x: x - 0.5,
-                            y: size.height - tickHeight - 4,
-                            width: 1,
-                            height: tickHeight
-                        )
-                        ctx.fill(Path(rect), with: .color(Color.white.opacity(opacity)))
-                    }
-                }
-
-                // Content - text at top
-                VStack(spacing: 0) {
-                    HStack(spacing: 2) {
-                        Text("f/")
-                            .font(DS.mono(9, weight: .medium))
-                            .foregroundColor(DS.textSecondary)
-                        Text(fStopLabel(aperture))
-                            .font(DS.mono(13, weight: .bold))
-                            .foregroundColor(DS.textPrimary)
-                    }
-                    .padding(.top, 6)
-
-                    Spacer()
-
-                    // Center indicator
-                    Rectangle()
-                        .fill(DS.accent)
-                        .frame(width: 2, height: 6)
-                        .padding(.bottom, 3)
-                }
-            }
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        if !isDragging {
-                            isDragging = true
-                            startIndex = currentIndex
-                        }
-                        dragOffset = value.translation.width
-
-                        let stepWidth: CGFloat = 35
-                        let steps = Int(-value.translation.width / stepWidth)
-                        let newIndex = max(0, min(fStops.count - 1, startIndex + steps))
-
-                        if newIndex != currentIndex {
-                            Haptics.light()
-                            aperture = fStops[newIndex]
-                            onChanged(aperture)
-                        }
-                    }
-                    .onEnded { _ in
-                        isDragging = false
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                            dragOffset = 0
-                        }
-                    }
-            )
-        }
-    }
-
-    private func fStopLabel(_ f: Float) -> String {
-        if f >= 10 { return String(format: "%.0f", f) }
-        if f == floor(f) { return String(format: "%.0f", f) }
-        return String(format: "%.1f", f)
     }
 }
 

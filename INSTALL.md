@@ -1,6 +1,6 @@
 # Getting ProCamera on your iPhone
 
-The app installs as **"Shutter cam"** and requires iOS 17.0 or later.
+The app installs as **"Shutter"** and requires iOS 17.0 or later.
 
 Every push to `master` (and `claude/*` branches) triggers the
 [Build IPA](../../actions/workflows/build-ipa.yml) workflow, which produces an
@@ -73,6 +73,6 @@ uploads a build. One-time setup:
 Until the secrets are configured, the workflow skips itself with a warning
 instead of failing.
 
-Note: TestFlight installs the Release app ("Shutter cam",
+Note: TestFlight installs the Release app ("Shutter",
 `com.skylardann.filmcam`) — it lives side by side with a Debug
 "Shutter DEV" install and won't touch it.

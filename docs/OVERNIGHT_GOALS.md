@@ -1,17 +1,28 @@
-# Overnight pro-pass goals (cursor/overnight-pro-pass-1a29)
+# Overnight pro-pass — COMPLETE
 
-## Phase 1–3
-See earlier checkboxes (truth, lock, peaking, looks, volume, iOS integration).
+Branch: `cursor/overnight-pro-pass-1a29` · PR #17 · Build **27**
 
-## Phase 4 — First-plan leftovers (build 26)
-- [x] Settings sheet (gear) + shoot modes Street / Night / Studio / Film
-- [x] Proof PDF export from Darkroom finish sheet
-- [x] Session map chip when Photos locations exist
-- [x] Unify film enum (`FilmFilterMode` == pipeline filter)
-- [x] Brand UI → **Shutter** (Darkroom, albums, display name)
-- [x] Defuse unused MetalShutterSurface helper
-- [ ] Full dead-control deletion (`RecordButton` / `FStopScrubber` still present but unwired)
-- [ ] Dedicated Bluetooth shutter protocol (volume + Camera Control cover common cases)
+## Original product plan
+- [x] Truth pass (aspect crop, real info bar, hardware ƒ, RAW companion, no fake P/A/T)
+- [x] AE/AF lock + return-to-auto
+- [x] Focus peaking + zebra + horizon level
+- [x] Front camera + persisted defaults
+- [x] Honest long exposure (HARDWARE / STACKED)
+- [x] Look recipes + hold-to-compare
+- [x] Volume shutter
+- [x] Settings sheet + Street / Night / Studio / Film modes
+- [x] Proof PDF from Darkroom
+- [x] Session map when geotagged
+- [x] Unify film enum
+- [x] Brand → Shutter
+- [x] Delete dead Record / F-Stop / Metal shutter / video stubs
+- [x] External shutter: volume + Camera Control + Bluetooth/HID gamepad
 
-## Out of scope
-Video, Halide scopes, replacing system Camera icon
+## System integration
+- [x] Shortcuts / App Intents / URL schemes / quick actions
+- [x] Home + Lock Screen widgets + Control Center
+- [x] Locked Camera Capture extension (iOS 18)
+
+## Intentionally out of scope
+- Video product, Halide scopes, more FX, social feed
+- Replacing the system Camera app icon (not allowed by iOS)

@@ -296,25 +296,6 @@ extension View {
     }
 }
 
-// MARK: - Metal Shutter Button Surface (unused helper — do not animate shader args)
-struct MetalShutterSurface_UNUSED: View {
-    let size: CGFloat
-    let isPressed: Bool
-
-    var body: some View {
-        // Shader float stays CONSTANT — never wire isPressed into stitchable args.
-        Rectangle()
-            .fill(Color.white)
-            .frame(width: size, height: size)
-            .colorEffect(
-                ShaderLibrary.shutterButtonMetal(
-                    .float2(size, size),
-                    .float(0.0)
-                )
-            )
-            .brightness(isPressed ? -0.04 : 0)
-    }
-}
 
 // MARK: - Leica Vulcanite Texture (Metal Shader)
 struct LeicaVulcaniteTexture: View {
