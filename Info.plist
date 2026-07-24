@@ -19,17 +19,60 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
-	<string>22</string>
+	<string>27</string>
 	<key>CKSharingSupported</key>
 	<true/>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.skylardann.filmcam.shutter</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>shuttercam</string>
+				<string>procamera</string>
+			</array>
+		</dict>
+	</array>
+	<key>UIApplicationShortcutItems</key>
+	<array>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.skylardann.filmcam.capture</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Capture</string>
+			<key>UIApplicationShortcutItemSubtitle</key>
+			<string>Open and shoot</string>
+			<key>UIApplicationShortcutItemIconType</key>
+			<string>UIApplicationShortcutIconTypeCapturePhoto</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.skylardann.filmcam.darkroom</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Darkroom</string>
+			<key>UIApplicationShortcutItemSubtitle</key>
+			<string>Cull your shots</string>
+			<key>UIApplicationShortcutItemIconType</key>
+			<string>UIApplicationShortcutIconTypeLove</string>
+		</dict>
+		<dict>
+			<key>UIApplicationShortcutItemType</key>
+			<string>com.skylardann.filmcam.timer</string>
+			<key>UIApplicationShortcutItemTitle</key>
+			<string>Timer 3s</string>
+			<key>UIApplicationShortcutItemIconType</key>
+			<string>UIApplicationShortcutIconTypeTime</string>
+		</dict>
+	</array>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>ProCamera needs access to your camera for photo capture</string>
+	<string>Shutter needs the camera for photos, Lock Screen capture, and Control Center.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>ShutterCraft saves your shots to Photos so keepers can be shared as an album.</string>
+	<string>Shutter saves your shots to Photos so keepers can be shared as an album.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>ShutterCraft needs Photos access to save shots, delete rejects after a cull, and export keepers as an album.</string>
+	<string>Shutter needs Photos access to save shots, delete rejects after a cull, and export keepers as an album.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
@@ -54,6 +97,10 @@
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>NSUserActivityTypes</key>
+	<array>
+		<string>NSUserActivityTypeLockedCameraCapture</string>
 	</array>
 </dict>
 </plist>

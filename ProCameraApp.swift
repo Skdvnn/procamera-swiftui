@@ -1,6 +1,7 @@
 import SwiftUI
 import Fingertips
 import CloudKit
+import AppIntents
 
 class FingerTipAppDelegate: NSObject, UIApplicationDelegate {
     func application(_ application: UIApplication,
@@ -9,6 +10,38 @@ class FingerTipAppDelegate: NSObject, UIApplicationDelegate {
         let config = UISceneConfiguration(name: nil, sessionRole: connectingSceneSession.role)
         config.delegateClass = FingerTipSceneDelegate.self
         return config
+    }
+
+    func application(
+        _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        if let shortcut = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem {
+            handleShortcut(shortcut)
+        }
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
+        performActionFor shortcutItem: UIApplicationShortcutItem,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        handleShortcut(shortcutItem)
+        completionHandler(true)
+    }
+
+    private func handleShortcut(_ item: UIApplicationShortcutItem) {
+        switch item.type {
+        case "com.skylardann.filmcam.capture":
+            ShutterDeepLinkCenter.post(.capture)
+        case "com.skylardann.filmcam.darkroom":
+            ShutterDeepLinkCenter.post(.darkroom)
+        case "com.skylardann.filmcam.timer":
+            ShutterDeepLinkCenter.post(.timer(seconds: 3))
+        default:
+            ShutterDeepLinkCenter.post(.openCamera)
+        }
     }
 }
 
@@ -30,6 +63,72 @@ class FingerTipSceneDelegate: NSObject, UIWindowSceneDelegate {
         ) { [weak fingerTipWindow] _ in
             guard let w = fingerTipWindow else { return }
             w.alwaysShowTouches.toggle()
+        }
+
+        // Cold-start deep links / universal activities / shortcuts
+        for context in connectionOptions.urlContexts {
+            ShutterDeepLinkCenter.post(url: context.url)
+        }
+        if let activity = connectionOptions.userActivities.first {
+            handleUserActivity(activity)
+        }
+        if let shortcut = connectionOptions.shortcutItem {
+            NotificationCenter.default.post(
+                name: .shutterDeepLink,
+                object: nil,
+                userInfo: ["shortcut": shortcut.type]
+            )
+            switch shortcut.type {
+            case "com.skylardann.filmcam.capture":
+                ShutterDeepLinkCenter.post(.capture)
+            case "com.skylardann.filmcam.darkroom":
+                ShutterDeepLinkCenter.post(.darkroom)
+            case "com.skylardann.filmcam.timer":
+                ShutterDeepLinkCenter.post(.timer(seconds: 3))
+            default:
+                break
+            }
+        }
+    }
+
+    func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+        for context in URLContexts {
+            ShutterDeepLinkCenter.post(url: context.url)
+        }
+    }
+
+    func scene(_ scene: UIScene, continue userActivity: NSUserActivity) {
+        handleUserActivity(userActivity)
+    }
+
+    func windowScene(
+        _ windowScene: UIWindowScene,
+        performActionFor shortcutItem: UIApplicationShortcutItem,
+        completionHandler: @escaping (Bool) -> Void
+    ) {
+        switch shortcutItem.type {
+        case "com.skylardann.filmcam.capture":
+            ShutterDeepLinkCenter.post(.capture)
+        case "com.skylardann.filmcam.darkroom":
+            ShutterDeepLinkCenter.post(.darkroom)
+        case "com.skylardann.filmcam.timer":
+            ShutterDeepLinkCenter.post(.timer(seconds: 3))
+        default:
+            ShutterDeepLinkCenter.post(.openCamera)
+        }
+        completionHandler(true)
+    }
+
+    private func handleUserActivity(_ activity: NSUserActivity) {
+        // LockedCameraCapture framework constant — use string so iOS 17 builds link cleanly.
+        if activity.activityType == "NSUserActivityTypeLockedCameraCapture" {
+            let film = activity.userInfo?["film"] as? String
+            let fx = activity.userInfo?["fx"] as? String
+            ShutterDeepLinkCenter.post(.look(film: film, fx: fx))
+            return
+        }
+        if let url = activity.webpageURL {
+            ShutterDeepLinkCenter.post(url: url)
         }
     }
 

@@ -152,7 +152,7 @@ extension Color {
 let vulcaniteBlack = DS.pageBg
 
 // MARK: - Capture Format
-enum CaptureFormat: CaseIterable {
+enum CaptureFormat: String, CaseIterable, Hashable {
     case heic, jpeg, raw
 
     var label: String {
@@ -174,10 +174,17 @@ struct ContentView: View {
     @StateObject private var camera = CameraManager()
     @Environment(\.colorScheme) var colorScheme  // Track color scheme changes
 
-    @State private var showGrid = true
+    @AppStorage("cam.showGrid") private var showGrid = true
+    @AppStorage("cam.focusPeaking") private var focusPeaking = false
+    @AppStorage("cam.zebra") private var zebraEnabled = false
+    @AppStorage("cam.showLevel") private var showLevel = true
+    @AppStorage("cam.shootMode") private var shootModeRaw: String = ShootMode.street.rawValue
+    @AppStorage("cam.defaultFilm") private var defaultFilmRaw: Int = FilmFilterMode.none.rawValue
+    @AppStorage("cam.captureFormat") private var captureFormatRaw: String = CaptureFormat.heic.rawValue
+    @State private var showSettings = false
     @State private var timerSeconds = 0
     @State private var timerCountdown = 0
-    @State private var photoCount = 9999
+    @State private var photoCount = 0
     @State private var lastCapturedImage: UIImage?
     @State private var showFlash = false
     @State private var showFocusPoint = false
@@ -189,8 +196,6 @@ struct ContentView: View {
     @State private var lastExposureHapticStep: Int = 0
     @State private var macroEnabled = false
     @State private var isCapturing = false
-    @State private var isRecording = false
-    @State private var selectedMode: Int = 1
     @State private var whiteBalanceIndex: Int = 0
     @State private var isManualFocusEnabled = false
     @State private var isLocked = false
@@ -199,7 +204,8 @@ struct ContentView: View {
     @State private var isoValue: Int = 800
     @State private var focalLength: Int = 24
     @State private var zoomValue: CGFloat = 1.0
-    @State private var apertureValue: Float = 2.8
+    /// Hardware lens aperture readout only (phones don't stop down).
+    @State private var apertureValue: Float = 0
     @State private var shutterSpeedIndex: Int = 9  // Default to 1/125
     @State private var aspectRatio: AspectRatioMode = .full
     @State private var filmFilter: FilmFilterMode = .none
@@ -210,9 +216,24 @@ struct ContentView: View {
     /// Live vertical drag on the bottom deck (positive = pulling down / collapsing).
     @State private var bottomDeckDrag: CGFloat = 0
     @StateObject private var gallery = GalleryStore()
+    @StateObject private var volumeShutter = VolumeShutterObserver()
     @State private var showPhotoBook = false
+    @State private var showingCleanCompare = false
 
-    private let modes = ["P", "A", "T"]
+    private var shootModeBinding: Binding<ShootMode> {
+        Binding(
+            get: { ShootMode(rawValue: shootModeRaw) ?? .street },
+            set: { shootModeRaw = $0.rawValue }
+        )
+    }
+
+    private var defaultFilmBinding: Binding<FilmFilterMode> {
+        Binding(
+            get: { FilmFilterMode(rawValue: defaultFilmRaw) ?? .none },
+            set: { defaultFilmRaw = $0.rawValue }
+        )
+    }
+
     private let shutterSpeeds = ["4\"", "2\"", "1\"", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60", "1/125", "1/250", "1/500", "1/1000", "1/2000", "1/4000"]
     private let isoValues = [100, 200, 400, 800, 1600, 3200]
     private let focalLengths = [13, 24, 48, 120]
@@ -334,7 +355,12 @@ struct ContentView: View {
                                 aperture: apertureValue,
                                 photoCount: photoCount,
                                 exposureValue: exposureValue,
-                                captureFormat: captureFormat
+                                captureFormat: captureFormat,
+                                aspectLabel: aspectRatio.shortLabel,
+                                isLocked: isLocked,
+                                isManualExposure: camera.isManualExposure,
+                                onToggleLock: { toggleAEAFLock() },
+                                onReturnToAuto: { returnToAuto() }
                             )
                             .padding(.horizontal, 14)
                             .padding(.bottom, CollapsedChrome.histogramBottomPad(safeBottom: safeBottom))
@@ -354,10 +380,41 @@ struct ContentView: View {
                             showGrid: showGrid,
                             aspectRatio: $aspectRatio,
                             filmFilter: $filmFilter,
-                            lensFX: $lensFX
+                            lensFX: $lensFX,
+                            focusPeaking: $focusPeaking,
+                            onFlipCamera: {
+                                Haptics.click()
+                                camera.switchCamera()
+                            },
+                            onSaveLook: {
+                                LookRecipeStore.shared.saveCurrent(film: filmFilter, lensFX: lensFX)
+                                Haptics.medium()
+                            }
                         )
                         .padding(.horizontal, bottomCollapsed ? 6 : DS.pageMargin)
                         .zIndex(40)
+
+                        if showLevel {
+                            HorizonLevelIndicator()
+                                .padding(.top, 18)
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                                .allowsHitTesting(false)
+                                .zIndex(35)
+                        }
+
+                        // Active shoot mode chip
+                        Text((ShootMode(rawValue: shootModeRaw) ?? .street).title.uppercased())
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .tracking(1.2)
+                            .foregroundColor(.white.opacity(0.7))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Capsule().fill(Color.black.opacity(0.4)))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                            .padding(.leading, bottomCollapsed ? 20 : 24)
+                            .padding(.bottom, bottomCollapsed ? 100 : 16)
+                            .allowsHitTesting(false)
+                            .zIndex(36)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .layoutPriority(1)
@@ -407,6 +464,60 @@ struct ContentView: View {
             // Sync initial filter state
             syncFilmFilter(filmFilter)
             camera.selectedLensFX = lensFX
+            camera.focusPeakingEnabled = focusPeaking
+            camera.zebraEnabled = zebraEnabled
+            photoCount = gallery.shots.count
+            if let last = gallery.shots.last, let img = gallery.thumbnail(for: last) ?? gallery.image(for: last) {
+                lastCapturedImage = img
+            }
+            apertureValue = camera.lensAperture
+            if let fmt = CaptureFormat(rawValue: captureFormatRaw) {
+                captureFormat = fmt
+                switch fmt {
+                case .heic: camera.captureFormat = .heic
+                case .jpeg: camera.captureFormat = .jpeg
+                case .raw: camera.captureFormat = .raw
+                }
+            }
+            let film = FilmFilterMode(rawValue: defaultFilmRaw) ?? .none
+            if filmFilter == .none, film != .none {
+                filmFilter = film
+            }
+            volumeShutter.onShutter = {
+                handleCapture()
+            }
+            // Attach offscreen volume view to key window when available.
+            DispatchQueue.main.async {
+                let host = UIApplication.shared.connectedScenes
+                    .compactMap { $0 as? UIWindowScene }
+                    .flatMap(\.windows)
+                    .first { $0.isKeyWindow }
+                volumeShutter.start(in: host)
+            }
+            syncCaptureContextToSystem()
+        }
+        .onDisappear {
+            volumeShutter.stop()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .shutterDeepLink)) { note in
+            if let link = note.userInfo?["link"] as? ShutterDeepLink {
+                applyDeepLink(link)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .shutterHardwareShutter)) { _ in
+            handleCapture()
+        }
+        .onChange(of: focusPeaking) { _, on in
+            camera.focusPeakingEnabled = on
+        }
+        .onChange(of: zebraEnabled) { _, on in
+            camera.zebraEnabled = on
+        }
+        .onChange(of: camera.lensAperture) { _, value in
+            apertureValue = value
+        }
+        .onChange(of: camera.isAEAFLocked) { _, locked in
+            isLocked = locked
         }
         .onChange(of: filmFilter) { _, newFilter in
             // Apply without inheriting any animation transaction into camera chrome.
@@ -415,6 +526,7 @@ struct ContentView: View {
             withTransaction(t) {
                 syncFilmFilter(newFilter)
             }
+            syncCaptureContextToSystem()
         }
         .onChange(of: lensFX) { _, newFX in
             var t = Transaction()
@@ -425,9 +537,26 @@ struct ContentView: View {
                     LensFXEngine.shared.setTouch(x: 0.5, y: 0.5, force: 0, velX: 0, velY: 0, active: false)
                 }
             }
+            syncCaptureContextToSystem()
         }
         .fullScreenCover(isPresented: $showPhotoBook) {
             CullLibraryView(store: gallery)
+        }
+        .sheet(isPresented: $showSettings) {
+            ShutterSettingsSheet(
+                shootMode: shootModeBinding,
+                showGrid: $showGrid,
+                focusPeaking: $focusPeaking,
+                zebraEnabled: $zebraEnabled,
+                showLevel: $showLevel,
+                captureFormat: $captureFormat,
+                defaultFilm: defaultFilmBinding,
+                onApplyMode: { applyShootMode($0) },
+                onDismiss: {
+                    captureFormatRaw = captureFormat.rawValue
+                    showSettings = false
+                }
+            )
         }
     }
 
@@ -438,7 +567,7 @@ struct ContentView: View {
             date: Date(),
             iso: isoValue,
             shutter: shutterSpeeds[shutterSpeedIndex],
-            aperture: apertureValue,
+            aperture: apertureValue > 0 ? apertureValue : 0,
             ev: exposureValue,
             filmFilter: filmFilter.name,
             lensFX: lensFX.name,
@@ -452,20 +581,11 @@ struct ContentView: View {
     }
 
     private func syncFilmFilter(_ filter: FilmFilterMode) {
-        camera.selectedFilmFilter = cameraFilmFilter(from: filter)
+        camera.selectedFilmFilter = filter
     }
 
-    private func cameraFilmFilter(from filter: FilmFilterMode) -> CameraManager.FilmFilter {
-        switch filter {
-        case .none: return .none
-        case .portra400: return .portra400
-        case .kodakGold: return .kodakGold
-        case .ektar100: return .ektar100
-        case .trix400: return .trix400
-        case .velvia50: return .velvia50
-        case .cinestill800: return .cinestill800
-        case .instant: return .instant
-        }
+    private func cameraFilmFilter(from filter: FilmFilterMode) -> FilmFilterMode {
+        filter
     }
 
     /// Push viewfinder controls into CameraManager immediately before shutter
@@ -473,6 +593,141 @@ struct ContentView: View {
     private func syncCaptureControlsToCamera() {
         syncFilmFilter(filmFilter)
         camera.selectedLensFX = lensFX
+    }
+
+    private func applyShootMode(_ mode: ShootMode) {
+        shootModeRaw = mode.rawValue
+        switch mode {
+        case .street:
+            showGrid = true
+            focusPeaking = false
+            zebraEnabled = false
+            shutterSpeedIndex = 10 // 1/250
+            isoValue = 400
+            camera.setShutterSpeed(index: 10)
+            camera.setISO(400)
+            camera.returnToAuto()
+            isLocked = false
+        case .night:
+            showGrid = false
+            focusPeaking = true
+            zebraEnabled = true
+            shutterSpeedIndex = 2 // 1"
+            isoValue = 1600
+            camera.setShutterSpeed(index: 2)
+            camera.setISO(1600)
+        case .studio:
+            showGrid = true
+            focusPeaking = true
+            zebraEnabled = true
+            shutterSpeedIndex = 9 // 1/125
+            isoValue = 200
+            camera.setShutterSpeed(index: 9)
+            camera.setISO(200)
+            camera.setAEAFLocked(true)
+            isLocked = true
+        case .film:
+            showGrid = true
+            focusPeaking = false
+            zebraEnabled = false
+            let film = FilmFilterMode(rawValue: defaultFilmRaw) ?? .portra400
+            filmFilter = film == .none ? .portra400 : film
+            lensFX = .none
+            shutterSpeedIndex = 8 // 1/60
+            isoValue = 400
+            camera.setShutterSpeed(index: 8)
+            camera.setISO(400)
+            camera.returnToAuto()
+            isLocked = false
+        }
+        syncCaptureContextToSystem()
+        Haptics.medium()
+    }
+
+    private func toggleAEAFLock() {
+        Haptics.click()
+        let next = !isLocked
+        isLocked = next
+        camera.setAEAFLocked(next)
+    }
+
+    private func returnToAuto() {
+        Haptics.medium()
+        isLocked = false
+        isManualFocusEnabled = false
+        exposureValue = 0
+        camera.returnToAuto()
+    }
+
+    private func applyDeepLink(_ link: ShutterDeepLink) {
+        switch link {
+        case .openCamera:
+            showPhotoBook = false
+        case .capture:
+            showPhotoBook = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                handleCapture()
+            }
+        case .darkroom:
+            showPhotoBook = true
+        case .look(let filmName, let fxName):
+            showPhotoBook = false
+            if let filmName,
+               let film = FilmFilterMode.allCases.first(where: {
+                   $0.name.compare(filmName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+               }) {
+                filmFilter = film
+            }
+            if let fxName,
+               let fx = LensFXMode.allCases.first(where: {
+                   $0.name.compare(fxName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+               }) {
+                lensFX = fx
+            }
+        case .timer(let seconds):
+            timerSeconds = [0, 3, 10].contains(seconds) ? seconds : 3
+        case .peaking(let on):
+            focusPeaking = on
+        case .flip:
+            camera.switchCamera()
+        }
+        syncCaptureContextToSystem()
+    }
+
+    private func syncCaptureContextToSystem() {
+        let ctx = ShutterCaptureContext(
+            useFrontCamera: camera.currentCamera == .front,
+            filmName: filmFilter.name,
+            lensFXName: lensFX.name,
+            timerSeconds: timerSeconds,
+            peaking: focusPeaking
+        )
+        ctx.saveToAppGroup()
+        let lookNames = ([filmFilter.name] + LookRecipeStore.shared.recipes.map(\.film.name))
+            .filter { $0 != "None" }
+        var unique: [String] = []
+        for name in lookNames where !unique.contains(name) {
+            unique.append(name)
+        }
+        ShutterAppGroup.defaults.set(Array(unique.prefix(4)), forKey: "widget.lookNames")
+        if #available(iOS 18.0, *) {
+            Task {
+                try? await ShutterCameraCaptureIntent.updateAppContext(ctx)
+            }
+        }
+    }
+
+    /// Apply aspect crop then dual-write gallery + Photos.
+    private func finishCapturedImage(_ img: UIImage) {
+        let framed: UIImage
+        if let aspect = aspectRatio.framedAspect {
+            framed = img.croppedToAspect(aspect)
+        } else {
+            framed = img
+        }
+        lastCapturedImage = framed
+        photoCount += 1
+        recordShot(framed)
     }
 
     private func handleFocusTap(_ point: CGPoint, in size: CGSize) {
@@ -594,7 +849,12 @@ struct ContentView: View {
                         },
                         onMorphTouch: handleMorphTouch,
                         exposureDragEnabled: showFocusPoint || isDraggingExposure,
-                        onExposureDrag: handleExposureDrag
+                        onExposureDrag: handleExposureDrag,
+                        onCompareHold: { holding in
+                            showingCleanCompare = holding
+                            camera.previewLooksBypassed = holding
+                            if holding { Haptics.light() }
+                        }
                     )
                     .frame(width: vfGeo.size.width, height: vfGeo.size.height)
 
@@ -615,7 +875,22 @@ struct ContentView: View {
                 }
 
                 if camera.isLongExposureCapturing {
-                    LongExposureProgressOverlay(progress: camera.longExposureProgress)
+                    LongExposureProgressOverlay(
+                        progress: camera.longExposureProgress,
+                        pathLabel: camera.longExposurePathLabel
+                    )
+                }
+
+                if showingCleanCompare {
+                    Text("CLEAN")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Color.black.opacity(0.55)))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .padding(.top, 56)
+                        .allowsHitTesting(false)
                 }
 
                 // Histogram inside frame only when expanded — sits above the deck
@@ -630,7 +905,12 @@ struct ContentView: View {
                             aperture: apertureValue,
                             photoCount: photoCount,
                             exposureValue: exposureValue,
-                            captureFormat: captureFormat
+                            captureFormat: captureFormat,
+                            aspectLabel: aspectRatio.shortLabel,
+                            isLocked: isLocked,
+                            isManualExposure: camera.isManualExposure,
+                            onToggleLock: { toggleAEAFLock() },
+                            onReturnToAuto: { returnToAuto() }
                         )
                         .padding(.horizontal, 8)
                         // Keep clear of the viewfinder bottom edge / swipe strip so it
@@ -876,7 +1156,14 @@ struct ContentView: View {
 
                 Spacer()
 
-                HStack(spacing: 12) {
+                HStack(spacing: 8) {
+                    VStack(spacing: 8) {
+                        ModeIcon(icon: "gearshape", isActive: showSettings)
+                        ModeButton(isActive: showSettings) {
+                            Haptics.click()
+                            showSettings = true
+                        }
+                    }
                     VStack(spacing: 8) {
                         ModeIcon(icon: "camera.macro", isActive: macroEnabled)
                         ModeButton(isActive: macroEnabled) {
@@ -905,7 +1192,7 @@ struct ContentView: View {
                         }
                     }
                 }
-                .frame(width: 88, height: 48)
+                .frame(width: 120, height: 48)
             }
             .padding(.horizontal, DS.pageMargin)
             .contentShape(Rectangle())
@@ -989,9 +1276,7 @@ struct ContentView: View {
             ) { img in
                 isCapturing = false
                 if let img = img {
-                    lastCapturedImage = img
-                    photoCount += 1
-                    recordShot(img)
+                    finishCapturedImage(img)
                 }
             }
         } else {
@@ -1006,21 +1291,12 @@ struct ContentView: View {
             ) { img in
                 isCapturing = false
                 if let img = img {
-                    lastCapturedImage = img
-                    photoCount += 1
-                    // Dual-writes sandbox + Photos (processed preview; RAW DNG
-                    // is handled separately inside CameraManager).
-                    recordShot(img)
+                    finishCapturedImage(img)
                 }
             }
         }
     }
 
-    private func toggleRecording() {
-        isRecording.toggle()
-        if isRecording { camera.startRecording() }
-        else { camera.stopRecording() }
-    }
 }
 
 // MARK: - Viewfinder Vignette (Subtle corner darkening only)
@@ -1040,6 +1316,7 @@ struct ViewfinderVignette: View {
 // MARK: - Long Exposure Progress (viewfinder ring during computational LE)
 struct LongExposureProgressOverlay: View {
     let progress: Float
+    var pathLabel: String = ""
 
     var body: some View {
         ZStack {
@@ -1062,10 +1339,17 @@ struct LongExposureProgressOverlay: View {
                         .foregroundColor(.white)
                 }
 
-                Text("LONG EXPOSURE")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .tracking(1.5)
-                    .foregroundColor(.white.opacity(0.7))
+                VStack(spacing: 4) {
+                    Text("LONG EXPOSURE")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .tracking(1.5)
+                        .foregroundColor(.white.opacity(0.7))
+                    if !pathLabel.isEmpty {
+                        Text(pathLabel == "HW" ? "HARDWARE" : "STACKED")
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.45))
+                    }
+                }
             }
         }
         .allowsHitTesting(false)
@@ -1081,6 +1365,11 @@ struct RefractiveGlassInfoBar: View {
     let photoCount: Int
     let exposureValue: Float
     let captureFormat: CaptureFormat
+    var aspectLabel: String = "FULL"
+    var isLocked: Bool = false
+    var isManualExposure: Bool = false
+    var onToggleLock: (() -> Void)? = nil
+    var onReturnToAuto: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 10) {
@@ -1094,23 +1383,32 @@ struct RefractiveGlassInfoBar: View {
                     Text(captureFormat.label)
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundColor(captureFormat == .raw ? DS.accent : .white)
-                    Text("L")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .padding(.horizontal, 3)
-                        .padding(.vertical, 1)
-                        .background(
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(Color.white)
-                        )
-                        .foregroundColor(.black)
-                    Text("1:1")
+                    Button {
+                        onToggleLock?()
+                    } label: {
+                        Text("L")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 1)
+                            .background(
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(isLocked ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white)
+                            )
+                            .foregroundColor(.black)
+                    }
+                    .buttonStyle(.plain)
+                    Text(aspectLabel)
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                 }
                 HStack(spacing: 6) {
                     Text(formatNumber(photoCount))
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    Text("F\(String(format: "%.1f", aperture))")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    // Hardware f-number only — phones can't stop down.
+                    if aperture > 0.5 {
+                        Text("ƒ\(String(format: "%.1f", aperture))")
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.55))
+                    }
                 }
             }
             .foregroundColor(.white)
@@ -1120,11 +1418,20 @@ struct RefractiveGlassInfoBar: View {
             // ISO & Shutter
             VStack(alignment: .trailing, spacing: 2) {
                 HStack(spacing: 3) {
-                    Text("A")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .padding(.horizontal, 3)
-                        .padding(.vertical, 1)
-                        .background(RoundedRectangle(cornerRadius: 2).stroke(Color.white, lineWidth: 0.5))
+                    Button {
+                        onReturnToAuto?()
+                    } label: {
+                        Text("A")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 1)
+                            .background(
+                                RoundedRectangle(cornerRadius: 2)
+                                    .stroke(isManualExposure ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white, lineWidth: 0.5)
+                            )
+                            .foregroundColor(isManualExposure ? Color(red: 1.0, green: 0.85, blue: 0.35) : .white)
+                    }
+                    .buttonStyle(.plain)
                     Text("ISO \(iso)")
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                 }
@@ -2020,81 +2327,6 @@ struct ScaleButtonStyle: ButtonStyle {
     }
 }
 
-// MARK: - Record Button (Video recording)
-struct RecordButton: View {
-    let isRecording: Bool
-    let action: () -> Void
-
-    @State private var isPressed = false
-
-    var body: some View {
-        Button(action: action) {
-            ZStack {
-                // Outer bezel
-                Circle()
-                    .fill(DS.controlBg)
-                    .frame(width: 52, height: 52)
-
-                // Inner shadow
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.black.opacity(0.5), Color.clear, Color.white.opacity(0.03)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .frame(width: 48, height: 48)
-
-                // Outer stroke
-                Circle()
-                    .stroke(DS.strokeOuter, lineWidth: 1)
-                    .frame(width: 52, height: 52)
-
-                // Inner stroke
-                Circle()
-                    .stroke(DS.strokeInner, lineWidth: 1)
-                    .frame(width: 48, height: 48)
-
-                // Red record indicator
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                Color(red: 0.95, green: 0.25, blue: 0.25),
-                                Color(red: 0.75, green: 0.15, blue: 0.15)
-                            ],
-                            center: UnitPoint(x: 0.35, y: 0.35),
-                            startRadius: 0,
-                            endRadius: 12
-                        )
-                    )
-                    .frame(width: 22, height: 22)
-                    .scaleEffect(isRecording ? 0.7 : 1.0)
-                    .animation(.easeInOut(duration: 0.2), value: isRecording)
-
-                // Recording pulse
-                if isRecording {
-                    Circle()
-                        .stroke(Color.red.opacity(0.5), lineWidth: 2)
-                        .frame(width: 28, height: 28)
-                        .scaleEffect(isRecording ? 1.3 : 1.0)
-                        .opacity(isRecording ? 0 : 1)
-                        .animation(.easeOut(duration: 1).repeatForever(autoreverses: false), value: isRecording)
-                }
-            }
-            .shadow(color: Color.black.opacity(0.4), radius: 4, y: 2)
-            .animation(.easeOut(duration: 0.1), value: isPressed)
-        }
-        .buttonStyle(PlainButtonStyle())
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
-        )
-    }
-}
-
 // MARK: - Flash Button (Figma exact: 80x42 pill, #2c2c2c fill, #444444 stroke)
 struct FlashButtonCompact: View {
     let flashMode: AVCaptureDevice.FlashMode
@@ -2393,53 +2625,6 @@ struct FormatTogglePill: View {
             .frame(width: toggleWidth, height: toggleHeight)
         }
         .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Record Button Compact (For stacking)
-struct RecordButtonCompact: View {
-    let isRecording: Bool
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            ZStack {
-                Circle()
-                    .fill(DS.controlBg)
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.black.opacity(0.4), Color.clear, Color.white.opacity(0.02)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .padding(2)
-                Circle()
-                    .stroke(DS.strokeOuter, lineWidth: 1)
-                Circle()
-                    .stroke(DS.strokeInner, lineWidth: 1)
-                    .padding(2)
-
-                // Red record dot
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                Color(red: 0.95, green: 0.25, blue: 0.25),
-                                Color(red: 0.7, green: 0.15, blue: 0.15)
-                            ],
-                            center: UnitPoint(x: 0.35, y: 0.35),
-                            startRadius: 0,
-                            endRadius: 10
-                        )
-                    )
-                    .frame(width: 18, height: 18)
-                    .scaleEffect(isRecording ? 0.7 : 1.0)
-                    .animation(.easeInOut(duration: 0.2), value: isRecording)
-            }
-        }
-        .buttonStyle(ProButtonStyle())
     }
 }
 
@@ -3222,131 +3407,6 @@ struct ISOScrubberVertical: View {
                     }
             )
         }
-    }
-}
-
-// MARK: - F-Stop Scrubber (DSLR-style drag control)
-struct FStopScrubber: View {
-    @Binding var aperture: Float
-    let onChanged: (Float) -> Void
-
-    private let fStops: [Float] = [1.8, 2.8, 4.0, 5.6, 8.0, 11, 16, 22]
-    @State private var dragOffset: CGFloat = 0
-    @State private var isDragging = false
-    @State private var startIndex: Int = 0
-
-    private var currentIndex: Int {
-        fStops.firstIndex(where: { abs($0 - aperture) < 0.5 }) ?? 0
-    }
-
-    var body: some View {
-        GeometryReader { _ in
-            ZStack {
-                // Background
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(DS.controlBg)
-
-                // Inner shadow
-                RoundedRectangle(cornerRadius: 10)
-                    .fill(
-                        LinearGradient(
-                            colors: [Color.black.opacity(0.4), Color.clear, Color.white.opacity(0.02)],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        )
-                    )
-                    .padding(2)
-
-                // Outer stroke
-                RoundedRectangle(cornerRadius: 10)
-                    .stroke(DS.strokeOuter, lineWidth: 1)
-
-                // Inner stroke
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(DS.strokeInner, lineWidth: 1)
-                    .padding(2)
-
-                // Ticks at bottom only
-                Canvas { ctx, size in
-                    let tickCount = 24
-                    let usableWidth = size.width - 20
-                    let spacing = usableWidth / CGFloat(tickCount - 1)
-                    let offset = dragOffset * 0.15
-                    let startX: CGFloat = 10
-
-                    for i in 0..<tickCount {
-                        let x = startX + CGFloat(i) * spacing + offset
-                        guard x >= 4 && x <= size.width - 4 else { continue }
-
-                        let isMajor = i % 4 == 0
-                        let tickHeight: CGFloat = isMajor ? 5 : 3
-                        let opacity = isMajor ? 0.25 : 0.1
-
-                        let rect = CGRect(
-                            x: x - 0.5,
-                            y: size.height - tickHeight - 4,
-                            width: 1,
-                            height: tickHeight
-                        )
-                        ctx.fill(Path(rect), with: .color(Color.white.opacity(opacity)))
-                    }
-                }
-
-                // Content - text at top
-                VStack(spacing: 0) {
-                    HStack(spacing: 2) {
-                        Text("f/")
-                            .font(DS.mono(9, weight: .medium))
-                            .foregroundColor(DS.textSecondary)
-                        Text(fStopLabel(aperture))
-                            .font(DS.mono(13, weight: .bold))
-                            .foregroundColor(DS.textPrimary)
-                    }
-                    .padding(.top, 6)
-
-                    Spacer()
-
-                    // Center indicator
-                    Rectangle()
-                        .fill(DS.accent)
-                        .frame(width: 2, height: 6)
-                        .padding(.bottom, 3)
-                }
-            }
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        if !isDragging {
-                            isDragging = true
-                            startIndex = currentIndex
-                        }
-                        dragOffset = value.translation.width
-
-                        let stepWidth: CGFloat = 35
-                        let steps = Int(-value.translation.width / stepWidth)
-                        let newIndex = max(0, min(fStops.count - 1, startIndex + steps))
-
-                        if newIndex != currentIndex {
-                            Haptics.light()
-                            aperture = fStops[newIndex]
-                            onChanged(aperture)
-                        }
-                    }
-                    .onEnded { _ in
-                        isDragging = false
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                            dragOffset = 0
-                        }
-                    }
-            )
-        }
-    }
-
-    private func fStopLabel(_ f: Float) -> String {
-        if f >= 10 { return String(format: "%.0f", f) }
-        if f == floor(f) { return String(format: "%.0f", f) }
-        return String(format: "%.1f", f)
     }
 }
 

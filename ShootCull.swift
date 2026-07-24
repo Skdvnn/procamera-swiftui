@@ -236,7 +236,7 @@ enum SessionTitle {
 // MARK: - Photos library bridge (dual-write helper)
 
 enum PhotosLibraryService {
-    static let albumTitle = "ShutterCraft"
+    static let albumTitle = "Shutter"
 
     static func requestReadWrite(completion: @escaping (PHAuthorizationStatus) -> Void) {
         PHPhotoLibrary.requestAuthorization(for: .readWrite, handler: completion)

@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import AVFoundation
+import AVKit
 import CoreImage
 import MetalKit
 
@@ -17,6 +18,8 @@ struct FilteredCameraPreview: UIViewRepresentable {
     var exposureDragEnabled: Bool = false
     /// translation.height in points (finger down = positive), ended flag.
     var onExposureDrag: ((CGFloat, Bool) -> Void)?
+    /// Long-press hold-to-compare (true while held).
+    var onCompareHold: ((Bool) -> Void)? = nil
 
     func makeUIView(context: Context) -> FilteredPreviewView {
         let view = FilteredPreviewView()
@@ -35,6 +38,12 @@ struct FilteredCameraPreview: UIViewRepresentable {
         panGesture.delegate = context.coordinator
         view.addGestureRecognizer(panGesture)
 
+        let longPress = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
+        longPress.minimumPressDuration = 0.45
+        longPress.allowableMovement = 12
+        longPress.delegate = context.coordinator
+        view.addGestureRecognizer(longPress)
+
         context.coordinator.tapGesture = tapGesture
         context.coordinator.panGesture = panGesture
 
@@ -49,6 +58,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
         context.coordinator.onMorphTouch = onMorphTouch
         context.coordinator.exposureDragEnabled = exposureDragEnabled
         context.coordinator.onExposureDrag = onExposureDrag
+        context.coordinator.onCompareHold = onCompareHold
     }
 
     func makeCoordinator() -> Coordinator {
@@ -57,7 +67,8 @@ struct FilteredCameraPreview: UIViewRepresentable {
             onPinch: onPinch,
             onMorphTouch: onMorphTouch,
             exposureDragEnabled: exposureDragEnabled,
-            onExposureDrag: onExposureDrag
+            onExposureDrag: onExposureDrag,
+            onCompareHold: onCompareHold
         )
     }
 
@@ -67,6 +78,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
         var onMorphTouch: ((CGPoint, CGPoint, Bool) -> Void)?
         var exposureDragEnabled: Bool
         var onExposureDrag: ((CGFloat, Bool) -> Void)?
+        var onCompareHold: ((Bool) -> Void)?
         var lastScale: CGFloat = 1.0
         weak var tapGesture: UITapGestureRecognizer?
         weak var panGesture: UIPanGestureRecognizer?
@@ -74,6 +86,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
         private var lastPanPoint: CGPoint = .zero
         /// Once a pan chooses exposure vs morph, stick with it until lift.
         private var panMode: PanMode = .undecided
+        private var compareActive = false
 
         private enum PanMode {
             case undecided
@@ -86,13 +99,15 @@ struct FilteredCameraPreview: UIViewRepresentable {
             onPinch: ((CGFloat) -> Void)?,
             onMorphTouch: ((CGPoint, CGPoint, Bool) -> Void)?,
             exposureDragEnabled: Bool,
-            onExposureDrag: ((CGFloat, Bool) -> Void)?
+            onExposureDrag: ((CGFloat, Bool) -> Void)?,
+            onCompareHold: ((Bool) -> Void)?
         ) {
             self.onTap = onTap
             self.onPinch = onPinch
             self.onMorphTouch = onMorphTouch
             self.exposureDragEnabled = exposureDragEnabled
             self.onExposureDrag = onExposureDrag
+            self.onCompareHold = onCompareHold
         }
 
         func gestureRecognizer(
@@ -111,6 +126,21 @@ struct FilteredCameraPreview: UIViewRepresentable {
                 y: location.y / view.bounds.height
             )
             onTap?(point)
+        }
+
+        @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+            switch gesture.state {
+            case .began:
+                compareActive = true
+                onCompareHold?(true)
+            case .ended, .cancelled, .failed:
+                if compareActive {
+                    compareActive = false
+                    onCompareHold?(false)
+                }
+            default:
+                break
+            }
         }
 
         @objc func handlePinch(_ gesture: UIPinchGestureRecognizer) {
@@ -224,6 +254,7 @@ class FilteredPreviewView: UIView {
 
         super.init(frame: frame)
         setupViews()
+        setupHardwareShutterEvents()
     }
 
     required init?(coder: NSCoder) {
@@ -237,6 +268,28 @@ class FilteredPreviewView: UIView {
 
         super.init(coder: coder)
         setupViews()
+        setupHardwareShutterEvents()
+    }
+
+    /// Camera Control / volume hardware shutter events (iOS 17.2+).
+    private var captureEventInteraction: AnyObject?
+
+    private func setupHardwareShutterEvents() {
+        if #available(iOS 17.2, *) {
+            let interaction = AVCaptureEventInteraction(
+                primary: { event in
+                    guard event.phase == .ended else { return }
+                    NotificationCenter.default.post(name: .shutterHardwareShutter, object: nil)
+                },
+                secondary: { event in
+                    guard event.phase == .ended else { return }
+                    NotificationCenter.default.post(name: .shutterHardwareShutter, object: nil)
+                }
+            )
+            interaction.isEnabled = true
+            addInteraction(interaction)
+            captureEventInteraction = interaction
+        }
     }
 
     private func setupViews() {
