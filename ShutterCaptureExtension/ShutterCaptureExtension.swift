@@ -1,8 +1,6 @@
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
 import LockedCameraCapture
-import AVFoundation
 import AppIntents
 
 @main
