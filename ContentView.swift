@@ -371,22 +371,27 @@ struct ContentView: View {
 
                     Spacer().frame(height: viewfinderToControlsSpacing)
 
-                    // BOTTOM CONTROLS — full-width strip (incl. home-indicator padding)
-                    // is the swipe target so collapse/expand isn't a tiny hit slot.
+                    // BOTTOM CONTROLS — deck swipe lives on grabber / compact row /
+                    // home-indicator pad only, so ISO·shutter·lens ScrollViews own pans.
                     VStack(spacing: 0) {
-                        // Grabber cue — always visible so the deck reads as pullable
+                        // Grabber + top reach — always a collapse/expand target
                         Capsule()
                             .fill(Color.white.opacity(bottomCollapsed ? 0.32 : 0.16))
                             .frame(width: bottomCollapsed ? 48 : 36, height: 5)
-                            .padding(.top, 8)
+                            .padding(.top, bottomCollapsed ? 22 : 14)
                             .padding(.bottom, bottomCollapsed ? 10 : 6)
                             .opacity(1.0 - min(abs(bottomDeckDrag) / 140.0, 0.35))
+                            .frame(maxWidth: .infinity)
+                            .contentShape(Rectangle())
+                            .gesture(bottomDeckSwipe)
 
                         ZStack(alignment: .bottom) {
                             if bottomCollapsed {
                                 bottomCompactDeck
                                     .offset(y: bottomDeckDrag * 0.15)
                                     .opacity(1.0 - min(abs(bottomDeckDrag) / 90.0, 0.45))
+                                    .contentShape(Rectangle())
+                                    .gesture(bottomDeckSwipe)
                                     .transition(
                                         .asymmetric(
                                             insertion: .move(edge: .bottom).combined(with: .opacity),
@@ -409,17 +414,18 @@ struct ContentView: View {
                             .interactiveSpring(response: 0.38, dampingFraction: 0.86, blendDuration: 0.12),
                             value: bottomCollapsed
                         )
+
+                        // Home-indicator pad under the deck — easy pull target
+                        Color.clear
+                            .frame(height: max(safeBottom * 0.85, 16))
+                            .frame(maxWidth: .infinity)
+                            .contentShape(Rectangle())
+                            .gesture(bottomDeckSwipe)
                     }
                     .frame(maxWidth: .infinity)
-                    // Tall hit band: gap above deck + home-indicator padding under it
-                    .padding(.top, bottomCollapsed ? 22 : 14)
-                    .padding(.bottom, max(safeBottom * 0.85, 16))
-                    .contentShape(Rectangle())
                     .background {
                         ControlsGrain()
                     }
-                    // Whole bottom strip responds — scrubbers keep horizontal ownership
-                    .simultaneousGesture(bottomDeckSwipe)
                 }
                 .padding(.top, safeTop)
 
@@ -1095,310 +1101,183 @@ struct TickerValue: View {
     }
 }
 
-// MARK: - ISO Scrubber Horizontal (Hybrid: Old Layout + Ticker Animation)
+// MARK: - Native snap scrubber (UIScrollView physics + viewAligned)
+/// Discrete value picker built on iOS scroll targets — not a hand-rolled DragGesture.
+struct NativeSnapScrubber<Value: Hashable>: View {
+    let label: String
+    let values: [Value]
+    @Binding var selection: Value
+    var itemWidth: CGFloat = 60
+    var title: (Value) -> String
+    var onChanged: (Value) -> Void
+
+    @State private var scrollID: Value?
+    @State private var isScrolling = false
+
+    var body: some View {
+        GeometryReader { geo in
+            let sideInset = max((geo.size.width - itemWidth) / 2, 0)
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(Color.black)
+                RoundedRectangle(cornerRadius: 5)
+                    .fill(Color(hex: "242424"))
+                    .padding(2)
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
+                    .padding(2)
+
+                // Native UIScrollView snap strip — values center under the hairline
+                ScrollView(.horizontal) {
+                    HStack(spacing: 0) {
+                        ForEach(values, id: \.self) { value in
+                            let selected = value == selection
+                            Text(title(value))
+                                .font(DS.mono(selected ? 13 : 11, weight: selected ? .bold : .medium))
+                                .foregroundColor(selected ? .white : DS.textSecondary)
+                                .opacity(selected ? 1 : 0.42)
+                                .scaleEffect(selected ? 1.06 : 1)
+                                .frame(width: itemWidth, height: max(geo.size.height - 6, 28))
+                                .id(value)
+                        }
+                    }
+                    .scrollTargetLayout()
+                }
+                .scrollTargetBehavior(.viewAligned)
+                .scrollPosition(id: $scrollID)
+                .scrollIndicators(.hidden)
+                .safeAreaPadding(.horizontal, sideInset)
+                .mask(
+                    LinearGradient(
+                        colors: [.clear, .black, .black, .clear],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                )
+
+                // Leading label + center hairline (chrome overlays scroll)
+                HStack {
+                    Text(label)
+                        .font(DS.mono(9, weight: .semibold))
+                        .foregroundColor(isScrolling ? DS.accent : DS.textSecondary)
+                        .padding(.leading, 8)
+                    Spacer(minLength: 0)
+                }
+                .allowsHitTesting(false)
+
+                VStack(spacing: 0) {
+                    Spacer(minLength: 0)
+                    RoundedRectangle(cornerRadius: 1)
+                        .fill(isScrolling
+                              ? Color(red: 1.0, green: 0.85, blue: 0.35)
+                              : Color.white.opacity(0.75))
+                        .frame(width: isScrolling ? 2.5 : 2, height: isScrolling ? 14 : 10)
+                        .padding(.bottom, 4)
+                }
+                .allowsHitTesting(false)
+            }
+        }
+        .onAppear {
+            scrollID = selection
+        }
+        .onChange(of: selection) { _, newValue in
+            if scrollID != newValue {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    scrollID = newValue
+                }
+            }
+        }
+        .onChange(of: scrollID) { _, newValue in
+            guard let newValue, newValue != selection else { return }
+            isScrolling = true
+            selection = newValue
+            onChanged(newValue)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                isScrolling = false
+            }
+        }
+        .sensoryFeedback(.selection, trigger: selection)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(label)
+        .accessibilityValue(title(selection))
+        .accessibilityAdjustableAction { direction in
+            guard let idx = values.firstIndex(of: selection) else { return }
+            switch direction {
+            case .increment:
+                if idx + 1 < values.count {
+                    selection = values[idx + 1]
+                    scrollID = selection
+                    onChanged(selection)
+                }
+            case .decrement:
+                if idx > 0 {
+                    selection = values[idx - 1]
+                    scrollID = selection
+                    onChanged(selection)
+                }
+            @unknown default:
+                break
+            }
+        }
+    }
+}
+
+// MARK: - ISO Scrubber Horizontal (native snap scroll)
 struct ISOScrubberHorizontal: View {
     @Binding var iso: Int
     let onChanged: (Int) -> Void
 
     private let isoValues = [100, 200, 400, 800, 1600, 3200, 6400]
-    @State private var dragOffset: CGFloat = 0
-    @State private var isDragging = false
-    @State private var startIndex: Int = 0
-    @State private var tickerOffset: CGFloat = 0
-
-    private var currentIndex: Int {
-        isoValues.firstIndex(of: iso) ?? 3
-    }
-
-    private var prevISO: String {
-        currentIndex > 0 ? "\(isoValues[currentIndex - 1])" : ""
-    }
-
-    private var nextISO: String {
-        currentIndex < isoValues.count - 1 ? "\(isoValues[currentIndex + 1])" : ""
-    }
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                // Outer dark frame
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color.black)
-
-                // Inner frame
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color(hex: "242424"))
-                    .padding(2)
-
-                // Inner stroke
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
-                    .padding(2)
-
-                // Tick marks at bottom with yellow center indicator
-                Canvas { ctx, size in
-                    let tickCount = 16
-                    let usableWidth = size.width - 24
-                    let spacing = usableWidth / CGFloat(tickCount - 1)
-                    let offset = dragOffset * 0.08
-                    let centerX = size.width / 2
-
-                    for i in 0..<tickCount {
-                        let x = 12 + CGFloat(i) * spacing + offset
-                        guard x >= 6 && x <= size.width - 6 else { continue }
-                        let isMajor = i % 4 == 0
-                        let h: CGFloat = isMajor ? 5 : 3
-                        let rect = CGRect(x: x - 0.5, y: size.height - h - 4, width: 1, height: h)
-                        ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.25 : 0.1)))
-                    }
-
-                    // Center indicator (white at rest, yellow when active)
-                    let indicatorHeight: CGFloat = isDragging ? 14 : 10
-                    let indicatorWidth: CGFloat = isDragging ? 2.5 : 2
-                    let indicatorRect = CGRect(
-                        x: centerX - indicatorWidth / 2,
-                        y: size.height - indicatorHeight - 2,
-                        width: indicatorWidth,
-                        height: indicatorHeight
-                    )
-                    let indicatorColor = isDragging ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white.opacity(0.7)
-                    ctx.fill(Path(indicatorRect), with: .color(indicatorColor))
-                }
-
-                // Content: prev | ticker center | next
-                HStack(spacing: 0) {
-                    // Prev value (static)
-                    Text(prevISO)
-                        .font(DS.mono(9, weight: .medium))
-                        .foregroundColor(DS.textSecondary)
-                        .frame(width: 32, alignment: .center)
-                        .opacity(isDragging ? 0.7 : 0.4)
-
-                    Spacer()
-
-                    // Center: Label + Ticker Value
-                    HStack(spacing: 2) {
-                        Text("ISO")
-                            .font(DS.mono(9, weight: .medium))
-                            .foregroundColor(isDragging ? DS.accent : DS.textSecondary)
-
-                        TickerValue(
-                            values: isoValues.map { "\($0)" },
-                            currentIndex: currentIndex,
-                            tickerOffset: tickerOffset,
-                            isDragging: isDragging,
-                            itemWidth: 55
-                        )
-                        .frame(width: 55)
-                    }
-
-                    Spacer()
-
-                    // Next value (static)
-                    Text(nextISO)
-                        .font(DS.mono(9, weight: .medium))
-                        .foregroundColor(DS.textSecondary)
-                        .frame(width: 32, alignment: .center)
-                        .opacity(isDragging ? 0.7 : 0.4)
-                }
-                .padding(.horizontal, 6)
-                .padding(.bottom, 8)
-            }
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        if !isDragging {
-                            isDragging = true
-                            startIndex = currentIndex
-                        }
-                        dragOffset = value.translation.width
-                        // Horizontal ticker offset for film roll feel
-                        tickerOffset = value.translation.width * 0.15
-
-                        let stepWidth: CGFloat = 35
-                        let steps = Int(-value.translation.width / stepWidth)
-                        let newIndex = max(0, min(isoValues.count - 1, startIndex + steps))
-                        if newIndex != currentIndex {
-                            Haptics.light()
-                            let newISO = isoValues[newIndex]
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                                iso = newISO
-                            }
-                            onChanged(newISO)
-                        }
-                    }
-                    .onEnded { _ in
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) {
-                            isDragging = false
-                            dragOffset = 0
-                            tickerOffset = 0
-                        }
-                    }
-            )
-        }
+        NativeSnapScrubber(
+            label: "ISO",
+            values: isoValues,
+            selection: Binding(
+                get: {
+                    if isoValues.contains(iso) { return iso }
+                    // Snap orphan values to nearest stop
+                    return isoValues.min(by: { abs($0 - iso) < abs($1 - iso) }) ?? 800
+                },
+                set: { iso = $0 }
+            ),
+            itemWidth: 56,
+            title: { "\($0)" },
+            onChanged: onChanged
+        )
     }
 }
 
-// MARK: - Lens Ring Control (WB-style with ticks)
+// MARK: - Lens Ring Control (native snap scroll)
 struct LensRingControl: View {
     @Binding var focalLength: Int
+    /// Retained for call-site compatibility (exposure sync lives in the parent).
     @Binding var isoValue: Int
     let onFocalLengthChanged: (Int) -> Void
     let onISOChanged: (Int) -> Void
 
     private let focalLengths = [13, 24, 48, 120]
-    private let isoValues = [100, 200, 400, 800, 1600, 3200]
-
-    @State private var tickOffset: CGFloat = 0
-    @State private var accumulatedDrag: CGFloat = 0
-    @State private var isDragging = false
-
-    private var currentIndex: Int {
-        focalLengths.firstIndex(of: focalLength) ?? 0
-    }
-
-    private var prevFocalLength: String {
-        currentIndex > 0 ? "\(focalLengths[currentIndex - 1])" : ""
-    }
-
-    private var nextFocalLength: String {
-        currentIndex < focalLengths.count - 1 ? "\(focalLengths[currentIndex + 1])" : ""
-    }
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                // Outer dark frame
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color.black)
-
-                // Inner frame
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color(hex: "242424"))
-                    .padding(2)
-
-                // Inner stroke
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
-                    .padding(2)
-
-                // Tick marks at bottom with yellow center indicator
-                Canvas { ctx, size in
-                    let tickCount = 20
-                    let usableWidth = size.width - 24
-                    let spacing = usableWidth / CGFloat(tickCount - 1)
-                    let offset = tickOffset * 0.08
-                    let centerX = size.width / 2
-
-                    for i in 0..<tickCount {
-                        let x = 12 + CGFloat(i) * spacing + offset
-                        guard x >= 6 && x <= size.width - 6 else { continue }
-                        let isMajor = i % 4 == 0
-                        let h: CGFloat = isMajor ? 5 : 3
-                        let rect = CGRect(x: x - 0.5, y: size.height - h - 4, width: 1, height: h)
-                        ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.25 : 0.1)))
-                    }
-
-                    // Center indicator (white at rest, yellow when active)
-                    let indicatorHeight: CGFloat = isDragging ? 14 : 10
-                    let indicatorWidth: CGFloat = isDragging ? 2.5 : 2
-                    let indicatorRect = CGRect(
-                        x: centerX - indicatorWidth / 2,
-                        y: size.height - indicatorHeight - 2,
-                        width: indicatorWidth,
-                        height: indicatorHeight
-                    )
-                    let indicatorColor = isDragging ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white.opacity(0.7)
-                    ctx.fill(Path(indicatorRect), with: .color(indicatorColor))
-                }
-
-                // Content with prev/next values (yellow when active)
-                HStack(spacing: 0) {
-                    Text(prevFocalLength)
-                        .font(DS.mono(9, weight: .medium))
-                        .foregroundColor(DS.textSecondary)
-                        .frame(width: 28, alignment: .center)
-
-                    Spacer()
-
-                    // Animated focal length with TickerValue
-                    HStack(spacing: 0) {
-                        TickerValue(
-                            values: focalLengths.map { "\($0)" },
-                            currentIndex: currentIndex,
-                            tickerOffset: tickOffset,
-                            isDragging: isDragging,
-                            itemWidth: 40
-                        )
-                        Text("MM")
-                            .font(DS.mono(9, weight: .medium))
-                            .foregroundColor(isDragging ? DS.accent : .white)
-                    }
-
-                    Spacer()
-
-                    Text(nextFocalLength)
-                        .font(DS.mono(9, weight: .medium))
-                        .foregroundColor(DS.textSecondary)
-                        .frame(width: 28, alignment: .center)
-                }
-                .padding(.horizontal, 6)
-                .padding(.bottom, 6)
+        NativeSnapScrubber(
+            label: "MM",
+            values: focalLengths,
+            selection: Binding(
+                get: {
+                    if focalLengths.contains(focalLength) { return focalLength }
+                    return focalLengths.min(by: { abs($0 - focalLength) < abs($1 - focalLength) }) ?? 24
+                },
+                set: { focalLength = $0 }
+            ),
+            itemWidth: 52,
+            title: { "\($0)" },
+            onChanged: { fl in
+                onFocalLengthChanged(fl)
+                // Parent already re-pushes ISO after lens swap; keep callback wired.
+                onISOChanged(isoValue)
             }
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        if !isDragging { isDragging = true }
-                        tickOffset = value.translation.width
-
-                        let stepWidth: CGFloat = 45
-                        let steps = Int((value.translation.width - accumulatedDrag) / stepWidth)
-
-                        if steps != 0 {
-                            accumulatedDrag += CGFloat(steps) * stepWidth
-
-                            if steps < 0 {
-                                for _ in 0..<abs(steps) {
-                                    if currentIndex < focalLengths.count - 1 {
-                                        Haptics.light()
-                                        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                                            focalLength = focalLengths[currentIndex + 1]
-                                        }
-                                        onFocalLengthChanged(focalLength)
-                                    }
-                                }
-                            } else {
-                                for _ in 0..<steps {
-                                    if currentIndex > 0 {
-                                        Haptics.light()
-                                        withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                                            focalLength = focalLengths[currentIndex - 1]
-                                        }
-                                        onFocalLengthChanged(focalLength)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    .onEnded { _ in
-                        isDragging = false
-                        accumulatedDrag = 0
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
-                            tickOffset = 0
-                        }
-                    }
-            )
-            .onTapGesture {
-                Haptics.click()
-                let newIndex = (currentIndex + 1) % focalLengths.count
-                withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                    focalLength = focalLengths[newIndex]
-                }
-                onFocalLengthChanged(focalLength)
-            }
-        }
+        )
     }
 }
 
@@ -3153,145 +3032,26 @@ struct FStopScrubber: View {
     }
 }
 
-// MARK: - Shutter Speed Scrubber (Hybrid: Old Layout + Ticker Animation)
+// MARK: - Shutter Speed Scrubber (native snap scroll)
 struct ShutterScrubber: View {
     @Binding var shutterSpeed: Int
     let onChanged: (Int) -> Void
 
     private let speeds = ["4\"", "2\"", "1\"", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60", "1/125", "1/250", "1/500", "1/1000", "1/2000", "1/4000"]
-    @State private var dragOffset: CGFloat = 0
-    @State private var isDragging = false
-    @State private var startIndex: Int = 0
-    @State private var tickerOffset: CGFloat = 0
-
-    private var prevSpeed: String {
-        shutterSpeed > 0 ? speeds[shutterSpeed - 1] : ""
-    }
-
-    private var nextSpeed: String {
-        shutterSpeed < speeds.count - 1 ? speeds[shutterSpeed + 1] : ""
-    }
+    private var indices: [Int] { Array(speeds.indices) }
 
     var body: some View {
-        GeometryReader { geo in
-            ZStack {
-                // Outer dark frame
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color.black)
-
-                // Inner frame
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color(hex: "242424"))
-                    .padding(2)
-
-                // Inner stroke
-                RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
-                    .padding(2)
-
-                // Tick marks at bottom with yellow center indicator
-                Canvas { ctx, size in
-                    let tickCount = 16
-                    let usableWidth = size.width - 24
-                    let spacing = usableWidth / CGFloat(tickCount - 1)
-                    let offset = dragOffset * 0.08
-                    let centerX = size.width / 2
-
-                    for i in 0..<tickCount {
-                        let x = 12 + CGFloat(i) * spacing + offset
-                        guard x >= 6 && x <= size.width - 6 else { continue }
-                        let isMajor = i % 4 == 0
-                        let h: CGFloat = isMajor ? 5 : 3
-                        let rect = CGRect(x: x - 0.5, y: size.height - h - 4, width: 1, height: h)
-                        ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.25 : 0.1)))
-                    }
-
-                    // Center indicator (white at rest, yellow when active)
-                    let indicatorHeight: CGFloat = isDragging ? 14 : 10
-                    let indicatorWidth: CGFloat = isDragging ? 2.5 : 2
-                    let indicatorRect = CGRect(
-                        x: centerX - indicatorWidth / 2,
-                        y: size.height - indicatorHeight - 2,
-                        width: indicatorWidth,
-                        height: indicatorHeight
-                    )
-                    let indicatorColor = isDragging ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white.opacity(0.7)
-                    ctx.fill(Path(indicatorRect), with: .color(indicatorColor))
-                }
-
-                // Content: prev | ticker center | next
-                HStack(spacing: 0) {
-                    // Prev value (static)
-                    Text(prevSpeed)
-                        .font(DS.mono(8, weight: .medium))
-                        .foregroundColor(DS.textSecondary)
-                        .frame(width: 36, alignment: .center)
-                        .lineLimit(1)
-                        .opacity(isDragging ? 0.7 : 0.4)
-
-                    Spacer()
-
-                    // Center: Label + Ticker Value
-                    HStack(spacing: 4) {
-                        Text("S")
-                            .font(DS.mono(9, weight: .medium))
-                            .foregroundColor(isDragging ? DS.accent : DS.textSecondary)
-
-                        TickerValue(
-                            values: speeds,
-                            currentIndex: shutterSpeed,
-                            tickerOffset: tickerOffset,
-                            isDragging: isDragging,
-                            itemWidth: 55
-                        )
-                        .frame(width: 55)
-                    }
-
-                    Spacer()
-
-                    // Next value (static)
-                    Text(nextSpeed)
-                        .font(DS.mono(8, weight: .medium))
-                        .foregroundColor(DS.textSecondary)
-                        .frame(width: 36, alignment: .center)
-                        .lineLimit(1)
-                        .opacity(isDragging ? 0.7 : 0.4)
-                }
-                .padding(.horizontal, 6)
-                .padding(.bottom, 8)
-            }
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture()
-                    .onChanged { value in
-                        if !isDragging {
-                            isDragging = true
-                            startIndex = shutterSpeed
-                        }
-                        dragOffset = value.translation.width
-                        // Horizontal ticker offset for film roll feel
-                        tickerOffset = value.translation.width * 0.15
-
-                        let stepWidth: CGFloat = 30
-                        let steps = Int(-value.translation.width / stepWidth)
-                        let newIndex = max(0, min(speeds.count - 1, startIndex + steps))
-                        if newIndex != shutterSpeed {
-                            Haptics.light()
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
-                                shutterSpeed = newIndex
-                            }
-                            onChanged(newIndex)
-                        }
-                    }
-                    .onEnded { _ in
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) {
-                            isDragging = false
-                            dragOffset = 0
-                            tickerOffset = 0
-                        }
-                    }
-            )
-        }
+        NativeSnapScrubber(
+            label: "S",
+            values: indices,
+            selection: Binding(
+                get: { min(max(shutterSpeed, 0), speeds.count - 1) },
+                set: { shutterSpeed = $0 }
+            ),
+            itemWidth: 58,
+            title: { speeds[$0] },
+            onChanged: onChanged
+        )
     }
 }
 

@@ -1352,14 +1352,13 @@ struct CullSessionView: View {
         }
     }
 
-    @ViewBuilder
     private func interactiveCullLeaf(
         shot: ShotMetadata,
         size: CGSize,
         peel: CGFloat,
         forward: Bool
     ) -> some View {
-        let leaf = cullFrameImage(shot: shot, size: size, animatedMark: true)
+        cullFrameImage(shot: shot, size: size, animatedMark: true)
             .contentShape(Rectangle())
             .offset(y: isAdvancing ? 0 : dragOffset.height)
             .rotation3DEffect(
@@ -1388,13 +1387,13 @@ struct CullSessionView: View {
                 y: 4
             )
             .gesture(cullDrag(in: size))
+            .simultaneousGesture(
+                loupeGesture(
+                    in: size,
+                    fallback: store.image(for: shot) ?? store.thumbnail(for: shot) ?? UIImage()
+                )
+            )
             .onTapGesture(count: 2) { performUndo() }
-
-        if let fallback = store.image(for: shot) ?? store.thumbnail(for: shot) {
-            leaf.simultaneousGesture(loupeGesture(in: size, fallback: fallback))
-        } else {
-            leaf
-        }
     }
 
     private func cullFrameImage(shot: ShotMetadata, size: CGSize, animatedMark: Bool) -> some View {
@@ -1630,7 +1629,13 @@ struct CullSessionView: View {
 
         // Resume from interactive peel when the finger already started the curl
         if fromPeel > 0.02 {
-            turnProgress = fromPeel
+            var seed = Transaction()
+            seed.disablesAnimations = true
+            withTransaction(seed) { turnProgress = fromPeel }
+        } else {
+            var seed = Transaction()
+            seed.disablesAnimations = true
+            withTransaction(seed) { turnProgress = 0 }
         }
 
         withAnimation(CullMotion.pageTurn) {
