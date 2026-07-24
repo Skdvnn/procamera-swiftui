@@ -622,48 +622,46 @@ struct CompactFocusScrubber: View {
     let isAutoFocus: Bool
     let onChanged: (Float) -> Void
 
-    /// Discrete focus stops matching the FocusDial major marks (+ near / far).
+    /// Discrete focus stops matching the FocusDial major marks.
     private let stops: [Int] = Array(0...6)
     private let stopValues: [Float] = [0.0, 0.17, 0.33, 0.5, 0.67, 0.83, 1.0]
     private let stopLabels = [".4m", ".7m", "1m", "3m", "5m", "10m", "∞"]
 
-    private var selection: Binding<Int> {
-        Binding(
-            get: {
-                let idx = stopValues.enumerated().min(by: {
-                    abs($0.element - focusPosition) < abs($1.element - focusPosition)
-                })?.offset ?? 3
-                return idx
-            },
-            set: { newIdx in
-                let clamped = min(max(newIdx, 0), stopValues.count - 1)
-                focusPosition = stopValues[clamped]
-            }
-        )
+    /// Stable index — avoids Binding get/set snap ping-pong with ScrollView.
+    @State private var index: Int = 3
+
+    private func nearestIndex(to value: Float) -> Int {
+        stopValues.enumerated().min(by: {
+            abs($0.element - value) < abs($1.element - value)
+        })?.offset ?? 3
     }
 
     var body: some View {
         NativeSnapScrubber(
             label: "FOCUS",
             values: stops,
-            selection: selection,
+            selection: $index,
             sideLabelWidth: 28,
             tickCount: 14,
             title: { idx in
                 let safe = min(max(idx, 0), stopLabels.count - 1)
-                if isAutoFocus {
-                    let current = stopValues.enumerated().min(by: {
-                        abs($0.element - focusPosition) < abs($1.element - focusPosition)
-                    })?.offset ?? 3
-                    if safe == current { return "AF" }
-                }
+                if isAutoFocus && safe == index { return "AF" }
                 return stopLabels[safe]
             },
             onChanged: { idx in
-                let value = stopValues[min(max(idx, 0), stopValues.count - 1)]
+                let safe = min(max(idx, 0), stopValues.count - 1)
+                let value = stopValues[safe]
+                if focusPosition != value {
+                    focusPosition = value
+                }
                 onChanged(value)
             }
         )
+        .onAppear { index = nearestIndex(to: focusPosition) }
+        .onChange(of: focusPosition) { _, newValue in
+            let nearest = nearestIndex(to: newValue)
+            if nearest != index { index = nearest }
+        }
     }
 }
 
@@ -675,25 +673,19 @@ struct CompactEVScrubber: View {
     private let stops: [Int] = Array(0...8)
     private let stopValues: [Float] = [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]
 
-    private var selection: Binding<Int> {
-        Binding(
-            get: {
-                stopValues.enumerated().min(by: {
-                    abs($0.element - exposureValue) < abs($1.element - exposureValue)
-                })?.offset ?? 4
-            },
-            set: { newIdx in
-                let clamped = min(max(newIdx, 0), stopValues.count - 1)
-                exposureValue = stopValues[clamped]
-            }
-        )
+    @State private var index: Int = 4
+
+    private func nearestIndex(to value: Float) -> Int {
+        stopValues.enumerated().min(by: {
+            abs($0.element - value) < abs($1.element - value)
+        })?.offset ?? 4
     }
 
     var body: some View {
         NativeSnapScrubber(
             label: "EV",
             values: stops,
-            selection: selection,
+            selection: $index,
             sideLabelWidth: 28,
             tickCount: 14,
             title: { idx in
@@ -701,10 +693,19 @@ struct CompactEVScrubber: View {
                 return String(format: "%+.1f", v)
             },
             onChanged: { idx in
-                let value = stopValues[min(max(idx, 0), stopValues.count - 1)]
+                let safe = min(max(idx, 0), stopValues.count - 1)
+                let value = stopValues[safe]
+                if exposureValue != value {
+                    exposureValue = value
+                }
                 onChanged(value)
             }
         )
+        .onAppear { index = nearestIndex(to: exposureValue) }
+        .onChange(of: exposureValue) { _, newValue in
+            let nearest = nearestIndex(to: newValue)
+            if nearest != index { index = nearest }
+        }
     }
 }
 

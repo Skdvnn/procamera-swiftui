@@ -10,25 +10,34 @@ private struct VFHaptics {
 
 // MARK: - Film Grain Overlay
 struct FilmGrainOverlay: View {
-    @State private var noiseOffset: CGFloat = 0
-
     var body: some View {
-        GeometryReader { geo in
-            Canvas { context, size in
-                // Create noise pattern
-                for _ in 0..<Int(size.width * size.height * 0.01) {
-                    let x = CGFloat.random(in: 0...size.width)
-                    let y = CGFloat.random(in: 0...size.height)
-                    let opacity = CGFloat.random(in: 0.02...0.08)
-
-                    context.fill(
-                        Path(ellipseIn: CGRect(x: x, y: y, width: 1.5, height: 1.5)),
-                        with: .color(.white.opacity(opacity))
-                    )
-                }
+        // Seeded static grain — random() every redraw was thrashing the view tree
+        Canvas { context, size in
+            var rng = SeededGenerator(seed: 0xC0FFEE)
+            let count = Int(size.width * size.height * 0.006)
+            for _ in 0..<count {
+                let x = CGFloat.random(in: 0...size.width, using: &rng)
+                let y = CGFloat.random(in: 0...size.height, using: &rng)
+                let opacity = CGFloat.random(in: 0.02...0.07, using: &rng)
+                context.fill(
+                    Path(ellipseIn: CGRect(x: x, y: y, width: 1.5, height: 1.5)),
+                    with: .color(.white.opacity(opacity))
+                )
             }
         }
         .allowsHitTesting(false)
+    }
+}
+
+private struct SeededGenerator: RandomNumberGenerator {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed == 0 ? 0xdeadbeef : seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9e3779b97f4a7c15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xbf58476d1ce4e5b9
+        z = (z ^ (z >> 27)) &* 0x94d049bb133111eb
+        return z ^ (z >> 31)
     }
 }
 
@@ -40,15 +49,9 @@ struct ViewfinderOverlay: View {
     @Binding var lensFX: LensFXMode
     @State private var showFilmMenu = false
     @State private var showFXMenu = false
-    @State private var showSettingsMenu = false
-    @AppStorage("camera.shutterStyle") private var shutterStyleRaw: String = ShutterButtonStyle.classic.rawValue
-
-    private var shutterStyle: ShutterButtonStyle {
-        ShutterButtonStyle(rawValue: shutterStyleRaw) ?? .classic
-    }
 
     var body: some View {
-        // Clear root so empty viewfinder passes taps to focus/EV; only chrome hits.
+        // Decorative layer never steals focus/EV; chrome is corner overlays only.
         ZStack {
             GeometryReader { geo in
                 ZStack {
@@ -72,32 +75,16 @@ struct ViewfinderOverlay: View {
                 }
             }
             .allowsHitTesting(false)
-
         }
         .overlay(alignment: .topLeading) {
-            VStack(spacing: 8) {
-                chromeButton {
-                    showSettingsMenu = false
-                    showFilmMenu = false
-                    showFXMenu = false
-                    aspectRatio = aspectRatio.next
-                } label: {
-                    Text(aspectRatio.label)
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.9))
-                }
-
-                chromeButton {
-                    showFilmMenu = false
-                    showFXMenu = false
-                    showSettingsMenu.toggle()
-                } label: {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(showSettingsMenu || shutterStyle == .metal
-                                         ? Color(red: 1.0, green: 0.85, blue: 0.35)
-                                         : .white.opacity(0.8))
-                }
+            chromeButton {
+                showFilmMenu = false
+                showFXMenu = false
+                aspectRatio = aspectRatio.next
+            } label: {
+                Text(aspectRatio.label)
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.9))
             }
             .padding(16)
         }
@@ -105,7 +92,6 @@ struct ViewfinderOverlay: View {
             VStack(spacing: 8) {
                 chromeButton {
                     showFXMenu = false
-                    showSettingsMenu = false
                     showFilmMenu.toggle()
                 } label: {
                     Image(systemName: "film")
@@ -117,7 +103,6 @@ struct ViewfinderOverlay: View {
 
                 chromeButton {
                     showFilmMenu = false
-                    showSettingsMenu = false
                     showFXMenu.toggle()
                 } label: {
                     Image(systemName: "water.waves")
@@ -130,13 +115,12 @@ struct ViewfinderOverlay: View {
             .padding(16)
         }
         .overlay {
-            if showFilmMenu || showFXMenu || showSettingsMenu {
+            if showFilmMenu || showFXMenu {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
                         showFilmMenu = false
                         showFXMenu = false
-                        showSettingsMenu = false
                     }
             }
         }
@@ -160,16 +144,6 @@ struct ViewfinderOverlay: View {
                 .padding(.top, 140)
             }
         }
-        .overlay(alignment: .topLeading) {
-            if showSettingsMenu {
-                CameraSettingsPicker(
-                    shutterStyleRaw: $shutterStyleRaw,
-                    isPresented: $showSettingsMenu
-                )
-                .padding(.leading, 16)
-                .padding(.top, 100)
-            }
-        }
     }
 
     private func chromeButton<Label: View>(
@@ -188,94 +162,6 @@ struct ViewfinderOverlay: View {
             }
         }
         .buttonStyle(.plain)
-    }
-}
-
-// MARK: - Camera settings (shutter material, etc.)
-struct CameraSettingsPicker: View {
-    @Binding var shutterStyleRaw: String
-    @Binding var isPresented: Bool
-
-    private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
-    @State private var animateIn = false
-
-    private var selected: ShutterButtonStyle {
-        ShutterButtonStyle(rawValue: shutterStyleRaw) ?? .classic
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Text("SHUTTER")
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.5))
-                Spacer()
-                Text("LOOK")
-                    .font(.system(size: 8, weight: .regular, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.28))
-            }
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
-            .padding(.bottom, 6)
-
-            Rectangle()
-                .fill(Color(hex: "2a2a2a"))
-                .frame(height: 1)
-                .padding(.horizontal, 8)
-
-            VStack(spacing: 0) {
-                ForEach(ShutterButtonStyle.allCases) { style in
-                    Button(action: {
-                        VFHaptics.click()
-                        shutterStyleRaw = style.rawValue
-                        dismissWithAnimation()
-                    }) {
-                        HStack(spacing: 8) {
-                            Text(selected == style ? ">" : " ")
-                                .font(.system(size: 12, weight: .bold, design: .monospaced))
-                                .foregroundColor(accent)
-                                .frame(width: 12)
-
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(style.label)
-                                    .font(.system(size: 11, weight: selected == style ? .semibold : .regular, design: .monospaced))
-                                    .foregroundColor(selected == style ? .white : .white.opacity(0.6))
-                                Text(style.detail)
-                                    .font(.system(size: 8, weight: .regular, design: .monospaced))
-                                    .foregroundColor(.white.opacity(0.3))
-                            }
-
-                            Spacer()
-                        }
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(selected == style ? Color.white.opacity(0.05) : Color.clear)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-
-            Spacer().frame(height: 6)
-        }
-        .background(dsPickerChrome())
-        .frame(width: 168)
-        .scaleEffect(animateIn ? 1.0 : 0.8)
-        .opacity(animateIn ? 1.0 : 0)
-        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: animateIn)
-        .onAppear {
-            withAnimation {
-                animateIn = true
-            }
-        }
-    }
-
-    private func dismissWithAnimation() {
-        withAnimation(.easeOut(duration: 0.15)) {
-            animateIn = false
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            isPresented = false
-        }
     }
 }
 

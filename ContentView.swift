@@ -209,7 +209,6 @@ struct ContentView: View {
     @State private var bottomCollapsed = false
     /// Live vertical drag on the bottom deck (positive = pulling down / collapsing).
     @State private var bottomDeckDrag: CGFloat = 0
-    @AppStorage("camera.shutterStyle") private var shutterStyleRaw: String = ShutterButtonStyle.classic.rawValue
     @StateObject private var gallery = GalleryStore()
     @State private var showPhotoBook = false
 
@@ -224,10 +223,6 @@ struct ContentView: View {
         static let fadeHeight: CGFloat = 48
         /// Bottom pad for the glass bar when drawn *on top of* the fade (above deck).
         static var histogramBottomPad: CGFloat { deckHeight + 6 }
-    }
-
-    private var shutterStyle: ShutterButtonStyle {
-        ShutterButtonStyle(rawValue: shutterStyleRaw) ?? .classic
     }
 
     private var deckCollapseSpring: Animation {
@@ -740,7 +735,7 @@ struct ContentView: View {
 
             Spacer()
 
-            ShutterButton(isCapturing: isCapturing, style: shutterStyle) {
+            ShutterButton(isCapturing: isCapturing) {
                 Haptics.heavy()
                 handleCapture()
             }
@@ -876,7 +871,7 @@ struct ContentView: View {
 
                 Spacer()
 
-                ShutterButton(isCapturing: isCapturing, style: shutterStyle) {
+                ShutterButton(isCapturing: isCapturing) {
                     Haptics.heavy()
                     handleCapture()
                 }
@@ -953,7 +948,7 @@ struct ContentView: View {
         } else {
             // Normal capture with flash effect
             isCapturing = true
-            withAnimation(.easeInOut(duration: 0.1)) { showFlash = true }
+            showFlash = true
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { showFlash = false }
             camera.capturePhoto(
                 filmFilter: shutterFilm,
@@ -1185,33 +1180,43 @@ struct ResponsiveHistogram: View {
 // MARK: - Controls Grain (DSLR vulcanite texture - more visible)
 struct ControlsGrain: View {
     var body: some View {
-        TimelineView(.animation(minimumInterval: 0.2)) { _ in
-            Canvas { context, size in
-                // Denser grain for DSLR feel
-                for _ in 0..<Int(size.width * size.height * 0.008) {
-                    let x = CGFloat.random(in: 0...size.width)
-                    let y = CGFloat.random(in: 0...size.height)
-                    let opacity = CGFloat.random(in: 0.04...0.12)
-                    let dotSize = CGFloat.random(in: 0.8...1.5)
-                    context.fill(
-                        Path(ellipseIn: CGRect(x: x, y: y, width: dotSize, height: dotSize)),
-                        with: .color(.white.opacity(opacity))
-                    )
-                }
-                // Add some darker grain too for depth
-                for _ in 0..<Int(size.width * size.height * 0.002) {
-                    let x = CGFloat.random(in: 0...size.width)
-                    let y = CGFloat.random(in: 0...size.height)
-                    let opacity = CGFloat.random(in: 0.08...0.15)
-                    context.fill(
-                        Path(ellipseIn: CGRect(x: x, y: y, width: 1, height: 1)),
-                        with: .color(.black.opacity(opacity))
-                    )
-                }
+        // Static seeded grain — animated TimelineView redraws were freezing the UI
+        Canvas { context, size in
+            var rng = GrainRNG(seed: 0xBEEF)
+            for _ in 0..<Int(size.width * size.height * 0.008) {
+                let x = CGFloat.random(in: 0...size.width, using: &rng)
+                let y = CGFloat.random(in: 0...size.height, using: &rng)
+                let opacity = CGFloat.random(in: 0.04...0.12, using: &rng)
+                let dotSize = CGFloat.random(in: 0.8...1.5, using: &rng)
+                context.fill(
+                    Path(ellipseIn: CGRect(x: x, y: y, width: dotSize, height: dotSize)),
+                    with: .color(.white.opacity(opacity))
+                )
+            }
+            for _ in 0..<Int(size.width * size.height * 0.002) {
+                let x = CGFloat.random(in: 0...size.width, using: &rng)
+                let y = CGFloat.random(in: 0...size.height, using: &rng)
+                let opacity = CGFloat.random(in: 0.08...0.15, using: &rng)
+                context.fill(
+                    Path(ellipseIn: CGRect(x: x, y: y, width: 1, height: 1)),
+                    with: .color(.black.opacity(opacity))
+                )
             }
         }
         .allowsHitTesting(false)
         .blendMode(.overlay)
+    }
+}
+
+private struct GrainRNG: RandomNumberGenerator {
+    private var state: UInt64
+    init(seed: UInt64) { state = seed == 0 ? 1 : seed }
+    mutating func next() -> UInt64 {
+        state &+= 0x9e3779b97f4a7c15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xbf58476d1ce4e5b9
+        z = (z ^ (z >> 27)) &* 0x94d049bb133111eb
+        return z ^ (z >> 31)
     }
 }
 
@@ -1284,33 +1289,7 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                     .stroke(Color(hex: "444444"), lineWidth: 0.5)
                     .padding(2)
 
-                // Liquid-glass active pill — opacity only (no transition/scale animator stack)
-                Capsule()
-                    .fill(.ultraThinMaterial)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .overlay {
-                        Capsule()
-                            .stroke(
-                                LinearGradient(
-                                    colors: [
-                                        DS.accent.opacity(0.55),
-                                        Color.white.opacity(0.2),
-                                        DS.accent.opacity(0.25)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 0.8
-                            )
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                    }
-                    .shadow(color: DS.accent.opacity(isScrolling ? 0.18 : 0), radius: 6, y: 0)
-                    .opacity(isScrolling ? 1 : 0)
-                    .allowsHitTesting(false)
-
-                // Tick marks — yellow majors (match top meters)
+                // Tick marks — yellow majors when active
                 Canvas { ctx, size in
                     let usableWidth = size.width - 24
                     let spacing = usableWidth / CGFloat(max(tickCount - 1, 1))
@@ -1323,10 +1302,10 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                         let isMajor = i % 4 == 0
                         let h: CGFloat = isMajor ? 5 : 3
                         let rect = CGRect(x: x - 0.5, y: size.height - h - 4, width: 1, height: h)
-                        ctx.fill(
-                            Path(rect),
-                            with: .color(yellow.opacity(isMajor ? (isScrolling ? 0.7 : 0.4) : 0.18))
-                        )
+                        let color: Color = isMajor
+                            ? yellow.opacity(isScrolling ? 0.75 : 0.4)
+                            : Color.white.opacity(0.12)
+                        ctx.fill(Path(rect), with: .color(color))
                     }
 
                     let indicatorHeight: CGFloat = isScrolling ? 14 : 10
@@ -1339,7 +1318,7 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                     )
                     ctx.fill(
                         Path(indicatorRect),
-                        with: .color(isScrolling ? yellow : yellow.opacity(0.75))
+                        with: .color(isScrolling ? yellow : Color.white.opacity(0.7))
                     )
                 }
                 .allowsHitTesting(false)
@@ -1366,7 +1345,6 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                         Text(title(selection))
                             .font(.system(size: 12, weight: .bold, design: .monospaced))
                             .foregroundColor(isScrolling ? DS.accent : .white)
-                            .scaleEffect(isScrolling ? 1.08 : 1.0)
                             .contentTransition(.numericText())
 
                         if let suffix {
@@ -1411,19 +1389,22 @@ struct NativeSnapScrubber<Value: Hashable>: View {
         .onAppear {
             scrollID = selection
             // Ignore scrollPosition settle noise before first layout finishes
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
                 scrubberReady = true
             }
         }
         .onChange(of: selection) { _, newValue in
-            if scrollID != newValue { scrollID = newValue }
+            // External updates only — never animate scrollID assignment
+            guard scrubberReady, scrollID != newValue else { return }
+            scrollID = newValue
         }
         .onChange(of: scrollID) { _, newValue in
             guard scrubberReady, let newValue, newValue != selection else { return }
+            // Apply without nested withAnimation (freezes / MetadataCache blowups)
             isScrolling = true
             selection = newValue
             onChanged(newValue)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
                 isScrolling = false
             }
         }
@@ -1459,23 +1440,31 @@ struct ISOScrubberHorizontal: View {
     let onChanged: (Int) -> Void
 
     private let isoValues = [100, 200, 400, 800, 1600, 3200, 6400]
+    @State private var selection: Int = 800
 
     var body: some View {
         NativeSnapScrubber(
             label: "ISO",
             values: isoValues,
-            selection: Binding(
-                get: {
-                    if isoValues.contains(iso) { return iso }
-                    return isoValues.min(by: { abs($0 - iso) < abs($1 - iso) }) ?? 800
-                },
-                set: { iso = $0 }
-            ),
+            selection: $selection,
             sideLabelWidth: 32,
             tickCount: 16,
             title: { "\($0)" },
-            onChanged: onChanged
+            onChanged: { value in
+                if iso != value { iso = value }
+                onChanged(value)
+            }
         )
+        .onAppear { selection = nearest(iso, in: isoValues) }
+        .onChange(of: iso) { _, newValue in
+            let n = nearest(newValue, in: isoValues)
+            if selection != n { selection = n }
+        }
+    }
+
+    private func nearest(_ value: Int, in values: [Int]) -> Int {
+        if values.contains(value) { return value }
+        return values.min(by: { abs($0 - value) < abs($1 - value) }) ?? value
     }
 }
 
@@ -1487,27 +1476,33 @@ struct LensRingControl: View {
     let onISOChanged: (Int) -> Void
 
     private let focalLengths = [13, 24, 48, 120]
+    @State private var selection: Int = 24
 
     var body: some View {
         NativeSnapScrubber(
             label: "LENS",
             values: focalLengths,
-            selection: Binding(
-                get: {
-                    if focalLengths.contains(focalLength) { return focalLength }
-                    return focalLengths.min(by: { abs($0 - focalLength) < abs($1 - focalLength) }) ?? 24
-                },
-                set: { focalLength = $0 }
-            ),
+            selection: $selection,
             suffix: "MM",
             sideLabelWidth: 28,
             tickCount: 20,
             title: { "\($0)" },
             onChanged: { fl in
+                if focalLength != fl { focalLength = fl }
                 onFocalLengthChanged(fl)
                 onISOChanged(isoValue)
             }
         )
+        .onAppear { selection = nearest(focalLength, in: focalLengths) }
+        .onChange(of: focalLength) { _, newValue in
+            let n = nearest(newValue, in: focalLengths)
+            if selection != n { selection = n }
+        }
+    }
+
+    private func nearest(_ value: Int, in values: [Int]) -> Int {
+        if values.contains(value) { return value }
+        return values.min(by: { abs($0 - value) < abs($1 - value) }) ?? value
     }
 }
 
@@ -1778,369 +1773,180 @@ struct Triangle: Shape {
     }
 }
 
-// MARK: - Shutter style (persisted camera setting)
-enum ShutterButtonStyle: String, CaseIterable, Identifiable {
-    case classic
-    case metal
-
-    var id: String { rawValue }
-
-    var label: String {
-        switch self {
-        case .classic: return "CLASSIC"
-        case .metal: return "METAL"
-        }
-    }
-
-    var detail: String {
-        switch self {
-        case .classic: return "BLACK GLASS"
-        case .metal: return "MACHINED"
-        }
-    }
-}
-
-// MARK: - Shutter Button (classic vulcanite glass default; metal as setting)
+// MARK: - Shutter Button (machined steel — bevel + brush)
+/// Shader roughness args are CONSTANT — never animate stitchable Metal params
+/// (animating them caused EXC_BAD_ACCESS / MetadataCache stack overflow on press & capture).
 struct ShutterButton: View {
     let isCapturing: Bool
-    var style: ShutterButtonStyle = .classic
     let action: () -> Void
 
     @State private var isPressed = false
 
     var body: some View {
         Button(action: action) {
-            Group {
-                switch style {
-                case .classic:
-                    classicShutter
-                case .metal:
-                    metalShutter
-                }
-            }
-        }
-        .buttonStyle(PlainButtonStyle())
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in
-                    if !isPressed {
-                        // No withAnimation around shader trees — avoids MetadataCache stack overflow
-                        isPressed = true
-                        let impact = UIImpactFeedbackGenerator(style: .heavy)
-                        impact.impactOccurred(intensity: 0.8)
-                    }
-                }
-                .onEnded { _ in
-                    isPressed = false
-                    let impact = UIImpactFeedbackGenerator(style: .rigid)
-                    impact.impactOccurred(intensity: 0.6)
-                }
-        )
-        .disabled(isCapturing)
-    }
-
-    /// Black Nikon / vulcanite + liquid glass — press deepens glass, no thin-out scale.
-    /// Shader args stay constant (never animated) to avoid stitchable animator crashes.
-    private var classicShutter: some View {
-        ZStack {
-            // Knurled black collar + static vulcanite grain
-            Circle()
-                .fill(
-                    AngularGradient(
-                        colors: [
-                            Color(red: 0.18, green: 0.18, blue: 0.19),
-                            Color(red: 0.06, green: 0.06, blue: 0.07),
-                            Color(red: 0.16, green: 0.16, blue: 0.17),
-                            Color(red: 0.04, green: 0.04, blue: 0.05),
-                            Color(red: 0.17, green: 0.17, blue: 0.18),
-                            Color(red: 0.07, green: 0.07, blue: 0.08),
-                            Color(red: 0.18, green: 0.18, blue: 0.19)
-                        ],
-                        center: .center
-                    )
-                )
-                .frame(width: 76, height: 76)
-                .overlay {
-                    Circle()
-                        .fill(Color(white: 0.08))
-                        .colorEffect(
-                            ShaderLibrary.vulcaniteTexture(
-                                .float(28),
-                                .float(1.0)
-                            )
-                        )
-                        .clipShape(Circle())
-                        .allowsHitTesting(false)
-                }
-                .overlay {
-                    Circle()
-                        .stroke(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.38),
-                                    Color.white.opacity(0.06),
-                                    Color.black.opacity(0.85)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1.2
-                        )
-                }
-
-            // Liquid glass bezel — material ring (mask, not animated stroke Material)
-            Circle()
-                .fill(.ultraThinMaterial)
-                .frame(width: 74, height: 74)
-                .mask {
-                    Circle().stroke(lineWidth: 8)
-                }
-                .overlay {
-                    Circle()
-                        .stroke(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(isPressed ? 0.65 : 0.45),
-                                    Color.white.opacity(0.12),
-                                    Color.white.opacity(isPressed ? 0.35 : 0.2)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1.4
-                        )
-                }
-                .opacity(isPressed ? 0.95 : 0.85)
-                .shadow(color: Color.white.opacity(isPressed ? 0.22 : 0.1), radius: isPressed ? 8 : 4)
-
-            // Recess
-            Circle()
-                .stroke(Color.black.opacity(isPressed ? 0.92 : 0.7), lineWidth: isPressed ? 2.2 : 1.5)
-                .frame(width: 62, height: 62)
-
-            // Face: vulcanite + glass sheet on top
             ZStack {
+                // Knurled collar
                 Circle()
-                    .fill(Color(white: 0.07))
-                    .frame(width: 56, height: 56)
-                    .colorEffect(
-                        ShaderLibrary.vulcaniteTexture(
-                            .float(36),
-                            .float(1.05)
+                    .fill(
+                        AngularGradient(
+                            colors: [
+                                Color(red: 0.50, green: 0.52, blue: 0.56),
+                                Color(red: 0.20, green: 0.21, blue: 0.24),
+                                Color(red: 0.44, green: 0.46, blue: 0.50),
+                                Color(red: 0.16, green: 0.17, blue: 0.20),
+                                Color(red: 0.48, green: 0.50, blue: 0.54),
+                                Color(red: 0.22, green: 0.23, blue: 0.26),
+                                Color(red: 0.50, green: 0.52, blue: 0.56)
+                            ],
+                            center: .center
                         )
                     )
-                    .clipShape(Circle())
-                    .brightness(isPressed ? -0.05 : 0)
-
-                // Liquid glass face plate
-                Circle()
-                    .fill(.ultraThinMaterial)
-                    .frame(width: 56, height: 56)
-                    .opacity(isPressed ? 0.42 : 0.28)
+                    .frame(width: 76, height: 76)
                     .overlay {
                         Circle()
-                            .fill(
-                                LinearGradient(
-                                    colors: [
-                                        Color.white.opacity(isPressed ? 0.32 : 0.18),
-                                        Color.clear,
-                                        Color.black.opacity(isPressed ? 0.35 : 0.2)
-                                    ],
-                                    startPoint: UnitPoint(x: 0.25, y: 0.1),
-                                    endPoint: UnitPoint(x: 0.85, y: 0.9)
+                            .fill(Color(red: 0.33, green: 0.35, blue: 0.39))
+                            .colorEffect(
+                                ShaderLibrary.metallicSurface(
+                                    .float2(76, 76),
+                                    .float(1.0),
+                                    .float2(0.26, 0.14)
                                 )
                             )
-                    }
-                    .overlay {
-                        Ellipse()
-                            .fill(
-                                RadialGradient(
-                                    colors: [
-                                        Color.white.opacity(isPressed ? 0.4 : 0.22),
-                                        Color.clear
-                                    ],
-                                    center: UnitPoint(x: 0.35, y: 0.28),
-                                    startRadius: 0,
-                                    endRadius: 16
-                                )
-                            )
-                            .frame(width: 32, height: 18)
-                            .offset(x: -3, y: -6)
-                            .blendMode(.plusLighter)
+                            .clipShape(Circle())
+                            .allowsHitTesting(false)
+                            .brightness(isPressed ? -0.06 : 0)
                     }
                     .overlay {
                         Circle()
                             .stroke(
                                 LinearGradient(
                                     colors: [
-                                        Color.white.opacity(isPressed ? 0.5 : 0.3),
-                                        Color.clear,
-                                        Color.black.opacity(0.45)
+                                        Color.white.opacity(isPressed ? 0.35 : 0.55),
+                                        Color.white.opacity(0.08),
+                                        Color.black.opacity(0.7)
                                     ],
                                     startPoint: .topLeading,
                                     endPoint: .bottomTrailing
                                 ),
-                                lineWidth: 1
+                                lineWidth: 1.35
                             )
                     }
+                    .overlay {
+                        Circle()
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        Color.black.opacity(0.45),
+                                        Color.clear,
+                                        Color.white.opacity(0.12)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1.0
+                            )
+                            .padding(2.5)
+                    }
 
-                if isCapturing {
-                    Circle()
-                        .fill(Color.white.opacity(0.1))
-                        .frame(width: 56, height: 56)
-                }
-            }
-            .shadow(color: Color.black.opacity(isPressed ? 0.55 : 0.4), radius: isPressed ? 1 : 3, y: isPressed ? 0.5 : 1.5)
-        }
-        .shadow(color: Color.black.opacity(isPressed ? 0.5 : 0.65), radius: isPressed ? 3 : 6, y: isPressed ? 1 : 2.5)
-    }
+                Circle()
+                    .stroke(Color.black.opacity(isPressed ? 0.85 : 0.55), lineWidth: isPressed ? 2.6 : 1.75)
+                    .frame(width: 66, height: 66)
+                    .shadow(color: Color.black.opacity(0.35), radius: 1, y: 0.5)
 
-    /// Machined steel — kept as a camera setting.
-    private var metalShutter: some View {
-        ZStack {
-            Circle()
-                .fill(
-                    AngularGradient(
-                        colors: [
-                            Color(red: 0.50, green: 0.52, blue: 0.56),
-                            Color(red: 0.20, green: 0.21, blue: 0.24),
-                            Color(red: 0.44, green: 0.46, blue: 0.50),
-                            Color(red: 0.16, green: 0.17, blue: 0.20),
-                            Color(red: 0.48, green: 0.50, blue: 0.54),
-                            Color(red: 0.22, green: 0.23, blue: 0.26),
-                            Color(red: 0.50, green: 0.52, blue: 0.56)
-                        ],
-                        center: .center
-                    )
-                )
-                .frame(width: 76, height: 76)
-                .overlay {
+                ZStack {
                     Circle()
-                        .fill(Color(red: 0.33, green: 0.35, blue: 0.39))
+                        .fill(Color(red: 0.30, green: 0.32, blue: 0.36))
+                        .frame(width: 60, height: 60)
                         .colorEffect(
                             ShaderLibrary.metallicSurface(
-                                .float2(76, 76),
-                                .float(1.0),
-                                .float2(0.26, 0.14)
+                                .float2(60, 60),
+                                .float(0.95),
+                                .float2(0.28, 0.20)
                             )
                         )
                         .clipShape(Circle())
-                        .allowsHitTesting(false)
-                        .brightness(isPressed ? -0.04 : 0)
-                }
-                .overlay {
+                        .brightness(isPressed ? -0.05 : 0)
+
                     Circle()
-                        .stroke(
+                        .fill(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(isPressed ? 0.35 : 0.55),
-                                    Color.white.opacity(0.08),
-                                    Color.black.opacity(0.7)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1.35
-                        )
-                }
-                .overlay {
-                    Circle()
-                        .stroke(
-                            LinearGradient(
-                                colors: [
-                                    Color.black.opacity(0.45),
+                                    Color.white.opacity(isPressed ? 0.14 : 0.26),
                                     Color.clear,
-                                    Color.white.opacity(0.12)
+                                    Color.black.opacity(0.22)
+                                ],
+                                startPoint: UnitPoint(x: 0.22, y: 0.12),
+                                endPoint: UnitPoint(x: 0.85, y: 0.92)
+                            )
+                        )
+                        .frame(width: 60, height: 60)
+                        .blendMode(.softLight)
+
+                    Ellipse()
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    Color.white.opacity(isPressed ? 0.08 : 0.16),
+                                    Color.clear
+                                ],
+                                center: UnitPoint(x: 0.35, y: 0.28),
+                                startRadius: 0,
+                                endRadius: 18
+                            )
+                        )
+                        .frame(width: 36, height: 22)
+                        .offset(x: -4, y: -8)
+                        .blendMode(.plusLighter)
+                        .opacity(0.55)
+
+                    ForEach(0..<4, id: \.self) { i in
+                        Circle()
+                            .stroke(Color.white.opacity(0.05), lineWidth: 0.55)
+                            .frame(width: CGFloat(50 - i * 9), height: CGFloat(50 - i * 9))
+                    }
+
+                    Circle()
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(isPressed ? 0.16 : 0.32),
+                                    Color.clear,
+                                    Color.black.opacity(0.45)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
-                            lineWidth: 1.0
+                            lineWidth: 1
                         )
-                        .padding(2.5)
+                        .frame(width: 58, height: 58)
+
+                    if isCapturing {
+                        Circle()
+                            .fill(Color.white.opacity(0.12))
+                            .frame(width: 60, height: 60)
+                    }
                 }
-
-            Circle()
-                .stroke(Color.black.opacity(isPressed ? 0.85 : 0.55), lineWidth: isPressed ? 2.6 : 1.75)
-                .frame(width: 66, height: 66)
-                .shadow(color: Color.black.opacity(0.35), radius: 1, y: 0.5)
-
-            ZStack {
-                Circle()
-                    .fill(Color(red: 0.30, green: 0.32, blue: 0.36))
-                    .frame(width: 60, height: 60)
-                    .colorEffect(
-                        ShaderLibrary.metallicSurface(
-                            .float2(60, 60),
-                            .float(0.95),
-                            .float2(0.28, 0.20)
-                        )
-                    )
-                    .clipShape(Circle())
-                    .brightness(isPressed ? -0.05 : 0)
-
-                Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(isPressed ? 0.14 : 0.26),
-                                Color.clear,
-                                Color.black.opacity(0.22)
-                            ],
-                            startPoint: UnitPoint(x: 0.22, y: 0.12),
-                            endPoint: UnitPoint(x: 0.85, y: 0.92)
-                        )
-                    )
-                    .frame(width: 60, height: 60)
-                    .blendMode(.softLight)
-
-                Ellipse()
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                Color.white.opacity(isPressed ? 0.08 : 0.16),
-                                Color.clear
-                            ],
-                            center: UnitPoint(x: 0.35, y: 0.28),
-                            startRadius: 0,
-                            endRadius: 18
-                        )
-                    )
-                    .frame(width: 36, height: 22)
-                    .offset(x: -4, y: -8)
-                    .blendMode(.plusLighter)
-                    .opacity(0.55)
-
-                ForEach(0..<4, id: \.self) { i in
-                    Circle()
-                        .stroke(Color.white.opacity(0.05), lineWidth: 0.55)
-                        .frame(width: CGFloat(50 - i * 9), height: CGFloat(50 - i * 9))
-                }
-
-                Circle()
-                    .stroke(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(isPressed ? 0.16 : 0.32),
-                                Color.clear,
-                                Color.black.opacity(0.45)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1
-                    )
-                    .frame(width: 58, height: 58)
-
-                if isCapturing {
-                    Circle()
-                        .fill(Color.white.opacity(0.12))
-                        .frame(width: 60, height: 60)
-                }
+                // Press settle without scaling the Metal shader layer
+                .opacity(isPressed ? 0.92 : 1.0)
+                .shadow(color: Color.black.opacity(isPressed ? 0.3 : 0.5), radius: isPressed ? 0.5 : 2.5, y: isPressed ? 0 : 1.5)
             }
-            .shadow(color: Color.black.opacity(isPressed ? 0.3 : 0.5), radius: isPressed ? 0.5 : 2.5, y: isPressed ? 0 : 1.5)
+            .shadow(color: Color.black.opacity(isPressed ? 0.35 : 0.55), radius: isPressed ? 2 : 5, y: isPressed ? 1 : 2.5)
         }
-        .shadow(color: Color.black.opacity(isPressed ? 0.35 : 0.55), radius: isPressed ? 2 : 5, y: isPressed ? 1 : 2.5)
+        .buttonStyle(PlainButtonStyle())
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    if !isPressed {
+                        isPressed = true
+                        UIImpactFeedbackGenerator(style: .heavy).impactOccurred(intensity: 0.8)
+                    }
+                }
+                .onEnded { _ in
+                    isPressed = false
+                    UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.6)
+                }
+        )
+        .disabled(isCapturing)
     }
 }
 
@@ -3489,20 +3295,26 @@ struct ShutterScrubber: View {
 
     private let speeds = ["4\"", "2\"", "1\"", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60", "1/125", "1/250", "1/500", "1/1000", "1/2000", "1/4000"]
     private var indices: [Int] { Array(speeds.indices) }
+    @State private var selection: Int = 9
 
     var body: some View {
         NativeSnapScrubber(
             label: "S",
             values: indices,
-            selection: Binding(
-                get: { min(max(shutterSpeed, 0), speeds.count - 1) },
-                set: { shutterSpeed = $0 }
-            ),
+            selection: $selection,
             sideLabelWidth: 36,
             tickCount: 16,
             title: { speeds[$0] },
-            onChanged: onChanged
+            onChanged: { idx in
+                if shutterSpeed != idx { shutterSpeed = idx }
+                onChanged(idx)
+            }
         )
+        .onAppear { selection = min(max(shutterSpeed, 0), speeds.count - 1) }
+        .onChange(of: shutterSpeed) { _, newValue in
+            let clamped = min(max(newValue, 0), speeds.count - 1)
+            if selection != clamped { selection = clamped }
+        }
     }
 }
 
