@@ -40,15 +40,17 @@ struct ViewfinderOverlay: View {
     @Binding var lensFX: LensFXMode
     @State private var showFilmMenu = false
     @State private var showFXMenu = false
+    @State private var showSettingsMenu = false
+    @AppStorage("camera.shutterStyle") private var shutterStyleRaw: String = ShutterButtonStyle.classic.rawValue
+
+    private var shutterStyle: ShutterButtonStyle {
+        ShutterButtonStyle(rawValue: shutterStyleRaw) ?? .classic
+    }
 
     var body: some View {
-        GeometryReader { geo in
-            let width = geo.size.width
-            let height = geo.size.height
-            let inset: CGFloat = 16
-
-            ZStack {
-                // Decorative layer — never steal focus/morph gestures
+        // Clear root so empty viewfinder passes taps to focus/EV; only chrome hits.
+        ZStack {
+            GeometryReader { geo in
                 ZStack {
                     FilmGrainOverlay()
                         .opacity(0.3)
@@ -58,7 +60,7 @@ struct ViewfinderOverlay: View {
                     }
 
                     CenterFocusBrackets()
-                        .position(x: width/2, y: height/2)
+                        .position(x: geo.size.width / 2, y: geo.size.height / 2)
 
                     if showGrid {
                         GridLines()
@@ -68,86 +70,211 @@ struct ViewfinderOverlay: View {
                         AspectRatioMask(mode: aspectRatio, size: geo.size)
                     }
                 }
-                .allowsHitTesting(false)
+            }
+            .allowsHitTesting(false)
 
-                // Top left - Aspect ratio button (DSLR-style)
-                Button(action: {
-                    VFHaptics.click()
-                    aspectRatio = aspectRatio.next
-                }) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.black.opacity(0.4))
-                            .frame(width: 32, height: 32)
-                        Text(aspectRatio.label)
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.9))
-                    }
-                }
-                .position(x: inset + 20, y: inset + 20)
-
-                // Top right - Film stocks (color grades)
-                Button(action: {
-                    VFHaptics.click()
-                    showFXMenu = false
-                    showFilmMenu.toggle()
-                }) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.black.opacity(0.4))
-                            .frame(width: 32, height: 32)
-                        Image(systemName: "film")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(filmFilter == .none ? .white.opacity(0.8) : Color(red: 1.0, green: 0.85, blue: 0.35))
-                    }
-                }
-                .position(x: width - inset - 20, y: inset + 20)
-
-                // Below film — morphic / shader Lens FX
-                Button(action: {
-                    VFHaptics.click()
+        }
+        .overlay(alignment: .topLeading) {
+            VStack(spacing: 8) {
+                chromeButton {
+                    showSettingsMenu = false
                     showFilmMenu = false
-                    showFXMenu.toggle()
-                }) {
-                    ZStack {
-                        Circle()
-                            .fill(Color.black.opacity(0.4))
-                            .frame(width: 32, height: 32)
-                        Image(systemName: "water.waves")
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(lensFX == .none ? .white.opacity(0.8) : Color(red: 0.55, green: 0.88, blue: 0.95))
-                    }
-                }
-                .position(x: width - inset - 20, y: inset + 60)
-
-                if showFilmMenu {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            showFilmMenu = false
-                        }
-
-                    LeicaFilmPicker(
-                        selectedFilter: $filmFilter,
-                        isPresented: $showFilmMenu
-                    )
-                    .position(x: width - 110, y: inset + 140)
+                    showFXMenu = false
+                    aspectRatio = aspectRatio.next
+                } label: {
+                    Text(aspectRatio.label)
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.9))
                 }
 
-                if showFXMenu {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            showFXMenu = false
-                        }
-
-                    LensFXPicker(
-                        selectedFX: $lensFX,
-                        isPresented: $showFXMenu
-                    )
-                    .position(x: width - 110, y: inset + 190)
+                chromeButton {
+                    showFilmMenu = false
+                    showFXMenu = false
+                    showSettingsMenu.toggle()
+                } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(showSettingsMenu || shutterStyle == .metal
+                                         ? Color(red: 1.0, green: 0.85, blue: 0.35)
+                                         : .white.opacity(0.8))
                 }
             }
+            .padding(16)
+        }
+        .overlay(alignment: .topTrailing) {
+            VStack(spacing: 8) {
+                chromeButton {
+                    showFXMenu = false
+                    showSettingsMenu = false
+                    showFilmMenu.toggle()
+                } label: {
+                    Image(systemName: "film")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(filmFilter == .none
+                                         ? .white.opacity(0.8)
+                                         : Color(red: 1.0, green: 0.85, blue: 0.35))
+                }
+
+                chromeButton {
+                    showFilmMenu = false
+                    showSettingsMenu = false
+                    showFXMenu.toggle()
+                } label: {
+                    Image(systemName: "water.waves")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(lensFX == .none
+                                         ? .white.opacity(0.8)
+                                         : Color(red: 0.55, green: 0.88, blue: 0.95))
+                }
+            }
+            .padding(16)
+        }
+        .overlay {
+            if showFilmMenu || showFXMenu || showSettingsMenu {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        showFilmMenu = false
+                        showFXMenu = false
+                        showSettingsMenu = false
+                    }
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if showFilmMenu {
+                LeicaFilmPicker(
+                    selectedFilter: $filmFilter,
+                    isPresented: $showFilmMenu
+                )
+                .padding(.trailing, 16)
+                .padding(.top, 100)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if showFXMenu {
+                LensFXPicker(
+                    selectedFX: $lensFX,
+                    isPresented: $showFXMenu
+                )
+                .padding(.trailing, 16)
+                .padding(.top, 140)
+            }
+        }
+        .overlay(alignment: .topLeading) {
+            if showSettingsMenu {
+                CameraSettingsPicker(
+                    shutterStyleRaw: $shutterStyleRaw,
+                    isPresented: $showSettingsMenu
+                )
+                .padding(.leading, 16)
+                .padding(.top, 100)
+            }
+        }
+    }
+
+    private func chromeButton<Label: View>(
+        action: @escaping () -> Void,
+        @ViewBuilder label: () -> Label
+    ) -> some View {
+        Button(action: {
+            VFHaptics.click()
+            action()
+        }) {
+            ZStack {
+                Circle()
+                    .fill(Color.black.opacity(0.4))
+                    .frame(width: 32, height: 32)
+                label()
+            }
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Camera settings (shutter material, etc.)
+struct CameraSettingsPicker: View {
+    @Binding var shutterStyleRaw: String
+    @Binding var isPresented: Bool
+
+    private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
+    @State private var animateIn = false
+
+    private var selected: ShutterButtonStyle {
+        ShutterButtonStyle(rawValue: shutterStyleRaw) ?? .classic
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("SHUTTER")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.5))
+                Spacer()
+                Text("LOOK")
+                    .font(.system(size: 8, weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.28))
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+
+            Rectangle()
+                .fill(Color(hex: "2a2a2a"))
+                .frame(height: 1)
+                .padding(.horizontal, 8)
+
+            VStack(spacing: 0) {
+                ForEach(ShutterButtonStyle.allCases) { style in
+                    Button(action: {
+                        VFHaptics.click()
+                        shutterStyleRaw = style.rawValue
+                        dismissWithAnimation()
+                    }) {
+                        HStack(spacing: 8) {
+                            Text(selected == style ? ">" : " ")
+                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                .foregroundColor(accent)
+                                .frame(width: 12)
+
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(style.label)
+                                    .font(.system(size: 11, weight: selected == style ? .semibold : .regular, design: .monospaced))
+                                    .foregroundColor(selected == style ? .white : .white.opacity(0.6))
+                                Text(style.detail)
+                                    .font(.system(size: 8, weight: .regular, design: .monospaced))
+                                    .foregroundColor(.white.opacity(0.3))
+                            }
+
+                            Spacer()
+                        }
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 10)
+                        .background(selected == style ? Color.white.opacity(0.05) : Color.clear)
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+
+            Spacer().frame(height: 6)
+        }
+        .background(dsPickerChrome())
+        .frame(width: 168)
+        .scaleEffect(animateIn ? 1.0 : 0.8)
+        .opacity(animateIn ? 1.0 : 0)
+        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: animateIn)
+        .onAppear {
+            withAnimation {
+                animateIn = true
+            }
+        }
+    }
+
+    private func dismissWithAnimation() {
+        withAnimation(.easeOut(duration: 0.15)) {
+            animateIn = false
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+            isPresented = false
         }
     }
 }

@@ -624,6 +624,8 @@ struct CompactMeter: View {
     let value: CGFloat  // 0...1 needle position
     let display: String
 
+    private let accentYellow = Color(red: 1.0, green: 0.85, blue: 0.35)
+
     var body: some View {
         VStack(spacing: 5) {
             HStack {
@@ -641,21 +643,39 @@ struct CompactMeter: View {
                 let clamped = min(max(value, 0), 1)
 
                 ZStack(alignment: .leading) {
-                    // Tick marks — denser when the meter stretches full width
+                    // Tick marks — yellow majors / softer minors + end caps
                     Canvas { ctx, size in
-                        let tickCount = max(9, Int(size.width / 14))
+                        let tickCount = max(11, Int(size.width / 12))
                         for i in 0..<tickCount {
                             let x = CGFloat(i) / CGFloat(tickCount - 1) * (size.width - 1)
+                            let isEnd = i == 0 || i == tickCount - 1
                             let isMajor = i % 2 == 0
-                            let rect = CGRect(x: x, y: isMajor ? 2 : 4,
-                                              width: 1, height: isMajor ? 8 : 4)
-                            ctx.fill(Path(rect), with: .color(.white.opacity(isMajor ? 0.3 : 0.15)))
+                            let h: CGFloat = isEnd ? 10 : (isMajor ? 8 : 4)
+                            let y: CGFloat = isEnd ? 1 : (isMajor ? 2 : 4)
+                            let w: CGFloat = isEnd ? 1.5 : 1
+                            let rect = CGRect(x: x - (w - 1) / 2, y: y, width: w, height: h)
+                            let color: Color = {
+                                if isEnd { return accentYellow.opacity(0.85) }
+                                if isMajor { return accentYellow.opacity(0.55) }
+                                return accentYellow.opacity(0.22)
+                            }()
+                            ctx.fill(Path(rect), with: .color(color))
                         }
                     }
 
-                    // Track line
+                    // Track line with subtle yellow wash
                     Rectangle()
-                        .fill(Color.white.opacity(0.12))
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    accentYellow.opacity(0.18),
+                                    Color.white.opacity(0.1),
+                                    accentYellow.opacity(0.18)
+                                ],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
                         .frame(height: 1)
                         .offset(y: 0)
 
@@ -663,6 +683,7 @@ struct CompactMeter: View {
                     Capsule()
                         .fill(Color(red: 1.0, green: 0.62, blue: 0.3))
                         .frame(width: 2, height: 12)
+                        .shadow(color: Color(red: 1.0, green: 0.62, blue: 0.3).opacity(0.35), radius: 1.5, y: 0)
                         .offset(x: clamped * (width - 2))
                         .animation(.spring(response: 0.3, dampingFraction: 0.8), value: clamped)
                 }
