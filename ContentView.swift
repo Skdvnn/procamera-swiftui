@@ -240,7 +240,7 @@ struct ContentView: View {
             let safeBottom = geo.safeAreaInsets.bottom
 
             // Layout measurements — top collapse keeps FOCUS/EV strip as the hero
-            let topPanelHeight: CGFloat = topCollapsed ? 56 : 110
+            let topPanelHeight: CGFloat = topCollapsed ? 52 : 110
             let gaugeToViewfinderSpacing: CGFloat = topCollapsed ? 4 : 5
             let viewfinderToControlsSpacing: CGFloat = 5
 
@@ -1888,10 +1888,13 @@ struct ShutterButton: View {
                         )
                 }
 
-            // Liquid glass bezel — thick material ring that reads on black
+            // Liquid glass bezel — material ring (mask, not animated stroke Material)
             Circle()
-                .stroke(.ultraThinMaterial, lineWidth: 7)
-                .frame(width: 69, height: 69)
+                .fill(.ultraThinMaterial)
+                .frame(width: 74, height: 74)
+                .mask {
+                    Circle().stroke(lineWidth: 8)
+                }
                 .overlay {
                     Circle()
                         .stroke(
@@ -1906,8 +1909,8 @@ struct ShutterButton: View {
                             ),
                             lineWidth: 1.4
                         )
-                        .frame(width: 76, height: 76)
                 }
+                .opacity(isPressed ? 0.95 : 0.85)
                 .shadow(color: Color.white.opacity(isPressed ? 0.22 : 0.1), radius: isPressed ? 8 : 4)
 
             // Recess
