@@ -621,27 +621,31 @@ struct ContentView: View {
                 ViewfinderOverlay(showGrid: showGrid, aspectRatio: $aspectRatio, filmFilter: $filmFilter, lensFX: $lensFX)
                     .zIndex(20)
 
-                // Inner inset shadows
+                // Inner inset shadows — never steal focus / film / FX hits
                 VStack(spacing: 0) {
                     LinearGradient(colors: [Color.black.opacity(0.6), Color.clear], startPoint: .top, endPoint: .bottom)
                         .frame(height: 12)
                     Spacer()
                 }
+                .allowsHitTesting(false)
                 HStack(spacing: 0) {
                     LinearGradient(colors: [Color.black.opacity(0.5), Color.clear], startPoint: .leading, endPoint: .trailing)
                         .frame(width: 10)
                     Spacer()
                 }
+                .allowsHitTesting(false)
                 VStack(spacing: 0) {
                     Spacer()
                     LinearGradient(colors: [Color.clear, Color.white.opacity(0.03)], startPoint: .top, endPoint: .bottom)
                         .frame(height: 6)
                 }
+                .allowsHitTesting(false)
                 HStack(spacing: 0) {
                     Spacer()
                     LinearGradient(colors: [Color.clear, Color.white.opacity(0.02)], startPoint: .leading, endPoint: .trailing)
                         .frame(width: 4)
                 }
+                .allowsHitTesting(false)
             }
             .clipShape(RoundedRectangle(cornerRadius: bottomCollapsed ? 8 : 6))
             .padding(bottomCollapsed ? 1 : 2)
@@ -1260,6 +1264,10 @@ struct NativeSnapScrubber<Value: Hashable>: View {
     @State private var isScrolling = false
     /// Blocks scrollID↔selection sync until ScrollView finishes first layout (avoids launch animator stack overflow).
     @State private var scrubberReady = false
+    /// True while we push an external selection into scrollPosition (must not echo back into onChanged).
+    @State private var applyingExternal = false
+    /// Cancels stacked isScrolling=false asyncAfters during rapid snaps.
+    @State private var scrollGeneration = 0
 
     private var currentIndex: Int {
         values.firstIndex(of: selection) ?? 0
@@ -1387,25 +1395,34 @@ struct NativeSnapScrubber<Value: Hashable>: View {
             }
         }
         .onAppear {
+            applyingExternal = true
             scrollID = selection
-            // Ignore scrollPosition settle noise before first layout finishes
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+                applyingExternal = false
                 scrubberReady = true
             }
         }
         .onChange(of: selection) { _, newValue in
-            // External updates only — never animate scrollID assignment
+            // External updates only — push into scrollPosition without echoing onChanged
             guard scrubberReady, scrollID != newValue else { return }
+            applyingExternal = true
             scrollID = newValue
+            DispatchQueue.main.async {
+                applyingExternal = false
+            }
         }
         .onChange(of: scrollID) { _, newValue in
-            guard scrubberReady, let newValue, newValue != selection else { return }
+            guard scrubberReady, !applyingExternal, let newValue, newValue != selection else { return }
             // Apply without nested withAnimation (freezes / MetadataCache blowups)
+            scrollGeneration += 1
+            let gen = scrollGeneration
             isScrolling = true
             selection = newValue
             onChanged(newValue)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                isScrolling = false
+                if gen == scrollGeneration {
+                    isScrolling = false
+                }
             }
         }
         .sensoryFeedback(.selection, trigger: selection)
@@ -1413,19 +1430,19 @@ struct NativeSnapScrubber<Value: Hashable>: View {
         .accessibilityLabel(label)
         .accessibilityValue(title(selection) + (suffix.map { " \($0)" } ?? ""))
         .accessibilityAdjustableAction { direction in
-            guard let idx = values.firstIndex(of: selection) else { return }
+            guard scrubberReady, let idx = values.firstIndex(of: selection) else { return }
             switch direction {
             case .increment:
                 if idx + 1 < values.count {
-                    selection = values[idx + 1]
-                    scrollID = selection
-                    onChanged(selection)
+                    let next = values[idx + 1]
+                    selection = next
+                    onChanged(next)
                 }
             case .decrement:
                 if idx > 0 {
-                    selection = values[idx - 1]
-                    scrollID = selection
-                    onChanged(selection)
+                    let prev = values[idx - 1]
+                    selection = prev
+                    onChanged(prev)
                 }
             @unknown default:
                 break

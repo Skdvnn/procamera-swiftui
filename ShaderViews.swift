@@ -296,28 +296,23 @@ extension View {
     }
 }
 
-// MARK: - Metal Shutter Button Surface
+// MARK: - Metal Shutter Button Surface (unused helper — do not animate shader args)
 struct MetalShutterSurface: View {
     let size: CGFloat
     let isPressed: Bool
 
-    @State private var pressAmount: CGFloat = 0
-
     var body: some View {
+        // Shader float stays CONSTANT — never wire isPressed into stitchable args.
         Rectangle()
             .fill(Color.white)
             .frame(width: size, height: size)
             .colorEffect(
                 ShaderLibrary.shutterButtonMetal(
                     .float2(size, size),
-                    .float(pressAmount)
+                    .float(0.0)
                 )
             )
-            .onChange(of: isPressed) { _, newValue in
-                withAnimation(.spring(response: 0.15, dampingFraction: 0.6)) {
-                    pressAmount = newValue ? 1.0 : 0.0
-                }
-            }
+            .brightness(isPressed ? -0.04 : 0)
     }
 }
 

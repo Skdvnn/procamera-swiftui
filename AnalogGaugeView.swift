@@ -629,6 +629,9 @@ struct CompactFocusScrubber: View {
 
     /// Stable index — avoids Binding get/set snap ping-pong with ScrollView.
     @State private var index: Int = 3
+    /// Ignore pinch/AF streaming updates briefly after a local scrub (prevents scroll thrash).
+    @State private var suppressExternalUntil: TimeInterval = 0
+    @State private var pendingExternal: DispatchWorkItem?
 
     private func nearestIndex(to value: Float) -> Int {
         stopValues.enumerated().min(by: {
@@ -649,6 +652,7 @@ struct CompactFocusScrubber: View {
                 return stopLabels[safe]
             },
             onChanged: { idx in
+                suppressExternalUntil = Date().timeIntervalSince1970 + 0.35
                 let safe = min(max(idx, 0), stopValues.count - 1)
                 let value = stopValues[safe]
                 if focusPosition != value {
@@ -659,8 +663,15 @@ struct CompactFocusScrubber: View {
         )
         .onAppear { index = nearestIndex(to: focusPosition) }
         .onChange(of: focusPosition) { _, newValue in
-            let nearest = nearestIndex(to: newValue)
-            if nearest != index { index = nearest }
+            // Debounce continuous AF/pinch updates so scrollPosition isn't spammed
+            pendingExternal?.cancel()
+            let work = DispatchWorkItem {
+                guard Date().timeIntervalSince1970 >= suppressExternalUntil else { return }
+                let nearest = nearestIndex(to: newValue)
+                if nearest != index { index = nearest }
+            }
+            pendingExternal = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
         }
     }
 }
@@ -674,6 +685,8 @@ struct CompactEVScrubber: View {
     private let stopValues: [Float] = [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]
 
     @State private var index: Int = 4
+    @State private var suppressExternalUntil: TimeInterval = 0
+    @State private var pendingExternal: DispatchWorkItem?
 
     private func nearestIndex(to value: Float) -> Int {
         stopValues.enumerated().min(by: {
@@ -693,6 +706,7 @@ struct CompactEVScrubber: View {
                 return String(format: "%+.1f", v)
             },
             onChanged: { idx in
+                suppressExternalUntil = Date().timeIntervalSince1970 + 0.35
                 let safe = min(max(idx, 0), stopValues.count - 1)
                 let value = stopValues[safe]
                 if exposureValue != value {
@@ -703,8 +717,15 @@ struct CompactEVScrubber: View {
         )
         .onAppear { index = nearestIndex(to: exposureValue) }
         .onChange(of: exposureValue) { _, newValue in
-            let nearest = nearestIndex(to: newValue)
-            if nearest != index { index = nearest }
+            // Debounce viewfinder EV-drag streaming into scrollPosition
+            pendingExternal?.cancel()
+            let work = DispatchWorkItem {
+                guard Date().timeIntervalSince1970 >= suppressExternalUntil else { return }
+                let nearest = nearestIndex(to: newValue)
+                if nearest != index { index = nearest }
+            }
+            pendingExternal = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
         }
     }
 }
