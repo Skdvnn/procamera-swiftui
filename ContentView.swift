@@ -213,7 +213,9 @@ struct ContentView: View {
     /// Live vertical drag on the bottom deck (positive = pulling down / collapsing).
     @State private var bottomDeckDrag: CGFloat = 0
     @StateObject private var gallery = GalleryStore()
+    @StateObject private var volumeShutter = VolumeShutterObserver()
     @State private var showPhotoBook = false
+    @State private var showingCleanCompare = false
 
     private let shutterSpeeds = ["4\"", "2\"", "1\"", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60", "1/125", "1/250", "1/500", "1/1000", "1/2000", "1/4000"]
     private let isoValues = [100, 200, 400, 800, 1600, 3200]
@@ -366,6 +368,10 @@ struct ContentView: View {
                             onFlipCamera: {
                                 Haptics.click()
                                 camera.switchCamera()
+                            },
+                            onSaveLook: {
+                                LookRecipeStore.shared.saveCurrent(film: filmFilter, lensFX: lensFX)
+                                Haptics.medium()
                             }
                         )
                         .padding(.horizontal, bottomCollapsed ? 6 : DS.pageMargin)
@@ -434,6 +440,20 @@ struct ContentView: View {
                 lastCapturedImage = img
             }
             apertureValue = camera.lensAperture
+            volumeShutter.onShutter = {
+                handleCapture()
+            }
+            // Attach offscreen volume view to key window when available.
+            DispatchQueue.main.async {
+                let host = UIApplication.shared.connectedScenes
+                    .compactMap { $0 as? UIWindowScene }
+                    .flatMap(\.windows)
+                    .first { $0.isKeyWindow }
+                volumeShutter.start(in: host)
+            }
+        }
+        .onDisappear {
+            volumeShutter.stop()
         }
         .onChange(of: focusPeaking) { _, on in
             camera.focusPeakingEnabled = on
@@ -661,7 +681,12 @@ struct ContentView: View {
                         },
                         onMorphTouch: handleMorphTouch,
                         exposureDragEnabled: showFocusPoint || isDraggingExposure,
-                        onExposureDrag: handleExposureDrag
+                        onExposureDrag: handleExposureDrag,
+                        onCompareHold: { holding in
+                            showingCleanCompare = holding
+                            camera.previewLooksBypassed = holding
+                            if holding { Haptics.light() }
+                        }
                     )
                     .frame(width: vfGeo.size.width, height: vfGeo.size.height)
 
@@ -682,7 +707,22 @@ struct ContentView: View {
                 }
 
                 if camera.isLongExposureCapturing {
-                    LongExposureProgressOverlay(progress: camera.longExposureProgress)
+                    LongExposureProgressOverlay(
+                        progress: camera.longExposureProgress,
+                        pathLabel: camera.longExposurePathLabel
+                    )
+                }
+
+                if showingCleanCompare {
+                    Text("CLEAN")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Capsule().fill(Color.black.opacity(0.55)))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .padding(.top, 56)
+                        .allowsHitTesting(false)
                 }
 
                 // Histogram inside frame only when expanded — sits above the deck
@@ -1113,6 +1153,7 @@ struct ViewfinderVignette: View {
 // MARK: - Long Exposure Progress (viewfinder ring during computational LE)
 struct LongExposureProgressOverlay: View {
     let progress: Float
+    var pathLabel: String = ""
 
     var body: some View {
         ZStack {
@@ -1135,10 +1176,17 @@ struct LongExposureProgressOverlay: View {
                         .foregroundColor(.white)
                 }
 
-                Text("LONG EXPOSURE")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .tracking(1.5)
-                    .foregroundColor(.white.opacity(0.7))
+                VStack(spacing: 4) {
+                    Text("LONG EXPOSURE")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .tracking(1.5)
+                        .foregroundColor(.white.opacity(0.7))
+                    if !pathLabel.isEmpty {
+                        Text(pathLabel == "HW" ? "HARDWARE" : "STACKED")
+                            .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.45))
+                    }
+                }
             }
         }
         .allowsHitTesting(false)

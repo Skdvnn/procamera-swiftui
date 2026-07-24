@@ -49,8 +49,11 @@ struct ViewfinderOverlay: View {
     @Binding var lensFX: LensFXMode
     @Binding var focusPeaking: Bool
     var onFlipCamera: (() -> Void)? = nil
+    var onSaveLook: (() -> Void)? = nil
+    @ObservedObject var lookStore: LookRecipeStore = .shared
     @State private var showFilmMenu = false
     @State private var showFXMenu = false
+    @State private var showRecipeMenu = false
 
     var body: some View {
         // Decorative layer never steals focus/EV; chrome is corner overlays only.
@@ -83,6 +86,7 @@ struct ViewfinderOverlay: View {
                 chromeButton {
                     showFilmMenu = false
                     showFXMenu = false
+                    showRecipeMenu = false
                     aspectRatio = aspectRatio.next
                 } label: {
                     Text(aspectRatio.label)
@@ -122,6 +126,7 @@ struct ViewfinderOverlay: View {
                     t.disablesAnimations = true
                     withTransaction(t) {
                         showFXMenu = false
+                        showRecipeMenu = false
                         showFilmMenu.toggle()
                     }
                 } label: {
@@ -137,6 +142,7 @@ struct ViewfinderOverlay: View {
                     t.disablesAnimations = true
                     withTransaction(t) {
                         showFilmMenu = false
+                        showRecipeMenu = false
                         showFXMenu.toggle()
                     }
                 } label: {
@@ -146,11 +152,27 @@ struct ViewfinderOverlay: View {
                                          ? Color(red: 0.55, green: 0.88, blue: 0.95)
                                          : .white.opacity(0.8))
                 }
+
+                chromeButton {
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) {
+                        showFilmMenu = false
+                        showFXMenu = false
+                        showRecipeMenu.toggle()
+                    }
+                } label: {
+                    Image(systemName: "bookmark.fill")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(showRecipeMenu || !lookStore.recipes.isEmpty
+                                         ? Color(red: 1.0, green: 0.75, blue: 0.45)
+                                         : .white.opacity(0.8))
+                }
             }
             .padding(16)
         }
         .overlay {
-            if showFilmMenu || showFXMenu {
+            if showFilmMenu || showFXMenu || showRecipeMenu {
                 Color.clear
                     .contentShape(Rectangle())
                     .onTapGesture {
@@ -159,6 +181,7 @@ struct ViewfinderOverlay: View {
                         withTransaction(t) {
                             showFilmMenu = false
                             showFXMenu = false
+                            showRecipeMenu = false
                         }
                     }
             }
@@ -167,7 +190,8 @@ struct ViewfinderOverlay: View {
             if showFilmMenu {
                 LeicaFilmPicker(
                     selectedFilter: $filmFilter,
-                    isPresented: $showFilmMenu
+                    isPresented: $showFilmMenu,
+                    onSaveLook: { onSaveLook?() }
                 )
                 .padding(.trailing, 16)
                 .padding(.top, 100)
@@ -181,6 +205,19 @@ struct ViewfinderOverlay: View {
                 )
                 .padding(.trailing, 16)
                 .padding(.top, 140)
+            }
+        }
+        .overlay(alignment: .topTrailing) {
+            if showRecipeMenu {
+                LookRecipePicker(
+                    store: lookStore,
+                    filmFilter: $filmFilter,
+                    lensFX: $lensFX,
+                    isPresented: $showRecipeMenu,
+                    onSaveCurrent: { onSaveLook?() }
+                )
+                .padding(.trailing, 16)
+                .padding(.top, 180)
             }
         }
     }
@@ -532,6 +569,7 @@ struct InfoBar: View {
 struct LeicaFilmPicker: View {
     @Binding var selectedFilter: FilmFilterMode
     @Binding var isPresented: Bool
+    var onSaveLook: (() -> Void)? = nil
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
 
@@ -544,9 +582,21 @@ struct LeicaFilmPicker: View {
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundColor(.white.opacity(0.5))
                 Spacer()
-                Text("STOCK")
-                    .font(.system(size: 8, weight: .regular, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.28))
+                if selectedFilter != .none || onSaveLook != nil {
+                    Button {
+                        VFHaptics.click()
+                        onSaveLook?()
+                    } label: {
+                        Text("SAVE LOOK")
+                            .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                            .foregroundColor(accent.opacity(0.9))
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Text("STOCK")
+                        .font(.system(size: 8, weight: .regular, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.28))
+                }
             }
             .padding(.horizontal, 12)
             .padding(.top, 10)
@@ -764,6 +814,103 @@ struct LensFXPicker: View {
             .background(selectedFX == fx ? Color.white.opacity(0.05) : Color.clear)
         }
         .buttonStyle(.plain)
+    }
+}
+
+// MARK: - Look recipe picker (saved film + FX combos)
+struct LookRecipePicker: View {
+    @ObservedObject var store: LookRecipeStore
+    @Binding var filmFilter: FilmFilterMode
+    @Binding var lensFX: LensFXMode
+    @Binding var isPresented: Bool
+    var onSaveCurrent: (() -> Void)? = nil
+
+    private let accent = Color(red: 1.0, green: 0.75, blue: 0.45)
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("LOOKS")
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.5))
+                Spacer()
+                Button {
+                    VFHaptics.click()
+                    onSaveCurrent?()
+                } label: {
+                    Text("SAVE")
+                        .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                        .foregroundColor(accent)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.horizontal, 12)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+
+            Rectangle()
+                .fill(Color(hex: "2a2a2a"))
+                .frame(height: 1)
+                .padding(.horizontal, 8)
+
+            if store.recipes.isEmpty {
+                Text("Save film + FX combos\nfor one-tap recall.")
+                    .font(.system(size: 10, weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.4))
+                    .multilineTextAlignment(.center)
+                    .padding(16)
+            } else {
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 0) {
+                        ForEach(store.recipes) { recipe in
+                            Button {
+                                VFHaptics.click()
+                                var t = Transaction()
+                                t.disablesAnimations = true
+                                withTransaction(t) { isPresented = false }
+                                let film = recipe.film
+                                let fx = recipe.lensFX
+                                DispatchQueue.main.async {
+                                    filmFilter = film
+                                    lensFX = fx
+                                }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(recipe.name.uppercased())
+                                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                                            .foregroundColor(.white)
+                                            .lineLimit(1)
+                                        Text(recipe.subtitle.uppercased())
+                                            .font(.system(size: 8, weight: .regular, design: .monospaced))
+                                            .foregroundColor(.white.opacity(0.35))
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                    Button {
+                                        VFHaptics.click()
+                                        store.delete(recipe.id)
+                                    } label: {
+                                        Image(systemName: "xmark")
+                                            .font(.system(size: 9, weight: .bold))
+                                            .foregroundColor(.white.opacity(0.35))
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+                .frame(maxHeight: 220)
+            }
+
+            Spacer().frame(height: 6)
+        }
+        .background(dsPickerChrome())
+        .frame(width: 200)
     }
 }
 

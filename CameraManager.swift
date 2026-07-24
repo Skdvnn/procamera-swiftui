@@ -50,6 +50,15 @@ class CameraManager: NSObject, ObservableObject {
     }
     @Published var isLongExposureCapturing: Bool = false
     @Published var longExposureProgress: Float = 0.0
+    /// "HW" single-shot hardware duration vs "STACK" computational average.
+    @Published var longExposurePathLabel: String = ""
+    /// Hold-to-compare: temporarily show clean preview (no film/FX bake).
+    @Published var previewLooksBypassed: Bool = false {
+        didSet {
+            syncPipelineSelection()
+            refreshLivePreviewState()
+        }
+    }
     @Published var captureFormat: CaptureFormatType = .heic
 
     // Live preview filtering
@@ -69,6 +78,7 @@ class CameraManager: NSObject, ObservableObject {
     private var pipelineLensFX: LensFXMode = .none
     private var pipelinePeaking = false
     private var pipelineZebra = false
+    private var pipelineBypassLooks = false
 
     // Remember the user's manual exposure so lens/format switches can re-apply it
     private var manualShutterIndex: Int?
@@ -300,13 +310,14 @@ class CameraManager: NSObject, ObservableObject {
         pipelineLensFX = selectedLensFX
         pipelinePeaking = focusPeakingEnabled
         pipelineZebra = zebraEnabled
+        pipelineBypassLooks = previewLooksBypassed
         pipelineLock.unlock()
     }
 
-    private func currentPipelineSelection() -> (FilmFilter, LensFXMode, Bool, Bool) {
+    private func currentPipelineSelection() -> (FilmFilter, LensFXMode, Bool, Bool, Bool) {
         pipelineLock.lock()
         defer { pipelineLock.unlock() }
-        return (pipelineFilmFilter, pipelineLensFX, pipelinePeaking, pipelineZebra)
+        return (pipelineFilmFilter, pipelineLensFX, pipelinePeaking, pipelineZebra, pipelineBypassLooks)
     }
 
     /// Re-apply stored manual ISO/shutter after a lens or format change.
@@ -417,9 +428,11 @@ class CameraManager: NSObject, ObservableObject {
 
         // If hardware can handle it directly, use single capture
         if durationSeconds <= maxHardwareDuration {
+            DispatchQueue.main.async { self.longExposurePathLabel = "HW" }
             captureSingleLongExposure(duration: durationSeconds, completion: completion)
         } else {
             // Use computational long exposure (frame averaging)
+            DispatchQueue.main.async { self.longExposurePathLabel = "STACK" }
             captureComputationalLongExposure(targetDuration: durationSeconds, completion: completion)
         }
     }
@@ -455,6 +468,7 @@ class CameraManager: NSObject, ObservableObject {
                             self.resetToAutoExposure()
                             self.isLongExposureCapturing = false
                             self.longExposureProgress = 0.0
+                            self.longExposurePathLabel = ""
                             completion(image)
                         }
                     }
@@ -1368,8 +1382,9 @@ class CameraManager: NSObject, ObservableObject {
     // stale filtered output, so toggling never appears stuck
     private func refreshLivePreviewState() {
         lastPreviewFrameTime = 0
-        if selectedFilmFilter == .none && selectedLensFX == .none
-            && !focusPeakingEnabled && !zebraEnabled {
+        if previewLooksBypassed
+            || (selectedFilmFilter == .none && selectedLensFX == .none
+                && !focusPeakingEnabled && !zebraEnabled) {
             filteredPreviewImage = nil
         }
     }
@@ -1650,7 +1665,14 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
 
         // Handle live preview processing (film filter and/or lens FX, not during long exposure)
-        let (filmFilter, lensFX, peaking, zebra) = currentPipelineSelection()
+        let (filmFilter, lensFX, peaking, zebra, bypass) = currentPipelineSelection()
+        if bypass {
+            DispatchQueue.main.async {
+                if self.filteredPreviewImage != nil {
+                    self.filteredPreviewImage = nil
+                }
+            }
+        } else {
         let wantsLiveProcessing = filmFilter != .none || lensFX != .none || peaking || zebra
         if wantsLiveProcessing && !isLongExposureCapturing && !isBakingStill {
 
@@ -1683,6 +1705,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                     self.filteredPreviewImage = nil
                 }
             }
+        }
         }
 
         // Handle long exposure frame capture (wall-clock stop + running average)
@@ -1775,6 +1798,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             DispatchQueue.main.async {
                 completion?(finalImage)
                 self.longExposureProgress = 0.0
+                self.longExposurePathLabel = ""
             }
         }
     }
