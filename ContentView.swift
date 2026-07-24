@@ -222,9 +222,9 @@ struct ContentView: View {
             let safeTop = geo.safeAreaInsets.top
             let safeBottom = geo.safeAreaInsets.bottom
 
-            // Layout measurements
-            let topPanelHeight: CGFloat = topCollapsed ? 64 : 110
-            let gaugeToViewfinderSpacing: CGFloat = 5
+            // Layout measurements — top collapse keeps FOCUS/EV strip as the hero
+            let topPanelHeight: CGFloat = topCollapsed ? 56 : 110
+            let gaugeToViewfinderSpacing: CGFloat = topCollapsed ? 4 : 5
             let viewfinderToControlsSpacing: CGFloat = 5
 
             ZStack(alignment: .top) {
@@ -232,7 +232,7 @@ struct ContentView: View {
                 LeicaVulcaniteTexture(scale: 20, intensity: 0.8).ignoresSafeArea()
 
                 VStack(spacing: 0) {
-                    // TOP: Analog Display Panel (with shutter speed connected)
+                    // TOP: Analog Display Panel — FOCUS/EV when compact
                     AnalogDisplayPanel(
                         focusPosition: $focusPosition,
                         exposureValue: $exposureValue,
@@ -276,174 +276,62 @@ struct ContentView: View {
                     .frame(height: topPanelHeight)
                     .padding(.horizontal, DS.pageMargin)
                     // Swipe up to minimize the dial deck, down to restore.
-                    // Dials claim drags starting on them, so this only catches
-                    // swipes that begin in the gaps or center display.
                     .gesture(deckSwipe(collapseOnSwipeUp: true) { topCollapsed = $0 })
 
                     Spacer().frame(height: gaugeToViewfinderSpacing)
 
-                    // VIEWFINDER - DSLR-style inset look with black outer frame
-                    ZStack {
-                        // Outer black frame (matches other controls)
-                        RoundedRectangle(cornerRadius: 8)
-                            .fill(Color.black)
+                    // VIEWFINDER — when bottom is collapsed, feed runs under the shutter
+                    // with a bottom gradient + compact controls overlaid.
+                    ZStack(alignment: .bottom) {
+                        viewfinderFrame()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .layoutPriority(1)
+                            .padding(.horizontal, bottomCollapsed ? 6 : DS.pageMargin)
 
-                        // Camera preview content (uses filtered preview when filter selected)
-                        ZStack {
-                            GeometryReader { vfGeo in
-                                FilteredCameraPreview(
-                                    session: camera.session,
-                                    filteredImage: camera.filteredPreviewImage,
-                                    onTap: { point in
-                                        handleFocusTap(point, in: vfGeo.size)
-                                    },
-                                    onPinch: { scale in
-                                        guard !isLocked else { return }
-                                        Haptics.light()
-                                        let newZoom = zoomValue * scale
-                                        zoomValue = min(max(newZoom, 0.5), 10.0)
-                                        camera.setZoom(zoomValue)
-                                        if !isManualFocusEnabled {
-                                            focusPosition = Float(zoomValue - 1) / 4.0
-                                        }
-                                    },
-                                    onMorphTouch: handleMorphTouch,
-                                    exposureDragEnabled: showFocusPoint || isDraggingExposure,
-                                    onExposureDrag: handleExposureDrag
+                        if bottomCollapsed {
+                            collapsedBottomOverlay(safeBottom: safeBottom)
+                                .transition(
+                                    .asymmetric(
+                                        insertion: .move(edge: .bottom).combined(with: .opacity),
+                                        removal: .opacity.combined(with: .offset(y: 18))
+                                    )
                                 )
-                                .frame(width: vfGeo.size.width, height: vfGeo.size.height)
-
-                                if showFocusPoint || isDraggingExposure {
-                                    FocusExposureReticle(exposureBias: exposureValue)
-                                        .position(focusPoint)
-                                        .allowsHitTesting(false)
-                                }
-                            }
-
-                            ViewfinderOverlay(showGrid: showGrid, aspectRatio: $aspectRatio, filmFilter: $filmFilter, lensFX: $lensFX)
-                            ViewfinderVignette()
-
-                            if timerCountdown > 0 {
-                                Text("\(timerCountdown)")
-                                    .font(.system(size: 80, weight: .thin, design: .monospaced))
-                                    .foregroundColor(.white.opacity(0.9))
-                            }
-
-                            if camera.isLongExposureCapturing {
-                                LongExposureProgressOverlay(progress: camera.longExposureProgress)
-                            }
-
-                            VStack {
-                                Spacer()
-                                // Instagram-style bottom overlay — also a deck pull target
-                                // so swipe-up/down isn't stuck to the tiny grabber.
-                                RefractiveGlassInfoBar(
-                                    iso: isoValue,
-                                    shutterSpeed: shutterSpeeds[shutterSpeedIndex],
-                                    histogram: camera.histogramBins,
-                                    aperture: apertureValue,
-                                    photoCount: photoCount,
-                                    exposureValue: exposureValue,
-                                    captureFormat: captureFormat
-                                )
-                                .padding(.horizontal, 8)
-                                .padding(.bottom, 8)
-                                .contentShape(Rectangle())
-                                .simultaneousGesture(bottomDeckSwipe)
-                            }
-                            // Invisible pull band over the glass bar (no visible handle)
-                            .overlay(alignment: .bottom) {
-                                Color.clear
-                                    .frame(height: 56)
-                                    .frame(maxWidth: .infinity)
-                                    .contentShape(Rectangle())
-                                    .simultaneousGesture(bottomDeckSwipe)
-                            }
-
-                            // Inner shadow overlay (deeper inset effect like DSLR viewfinder)
-                            VStack(spacing: 0) {
-                                LinearGradient(colors: [Color.black.opacity(0.6), Color.clear], startPoint: .top, endPoint: .bottom)
-                                    .frame(height: 12)
-                                Spacer()
-                            }
-                            HStack(spacing: 0) {
-                                LinearGradient(colors: [Color.black.opacity(0.5), Color.clear], startPoint: .leading, endPoint: .trailing)
-                                    .frame(width: 10)
-                                Spacer()
-                            }
-                            // Bottom and right subtle highlight (light hitting from top-left)
-                            VStack(spacing: 0) {
-                                Spacer()
-                                LinearGradient(colors: [Color.clear, Color.white.opacity(0.03)], startPoint: .top, endPoint: .bottom)
-                                    .frame(height: 6)
-                            }
-                            HStack(spacing: 0) {
-                                Spacer()
-                                LinearGradient(colors: [Color.clear, Color.white.opacity(0.02)], startPoint: .leading, endPoint: .trailing)
-                                    .frame(width: 4)
-                            }
                         }
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .padding(2)
-
-                        // Inner stroke
-                        RoundedRectangle(cornerRadius: 6)
-                            .stroke(Color(hex: "333333"), lineWidth: 0.5)
-                            .padding(2)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .layoutPriority(1)
-                    .padding(.horizontal, DS.pageMargin)
 
-                    Spacer().frame(height: viewfinderToControlsSpacing)
+                    if !bottomCollapsed {
+                        Spacer().frame(height: viewfinderToControlsSpacing)
 
-                    // BOTTOM CONTROLS — hidden pull (no grabber). Glass bar + shutter
-                    // row + home pad own vertical swipe; scrubbers own horizontal.
-                    VStack(spacing: 0) {
-                        ZStack(alignment: .bottom) {
-                            if bottomCollapsed {
-                                bottomCompactDeck
-                                    .offset(y: bottomDeckDrag * 0.15)
-                                    .opacity(1.0 - min(abs(bottomDeckDrag) / 90.0, 0.45))
-                                    .contentShape(Rectangle())
-                                    .gesture(bottomDeckSwipe)
-                                    .transition(
-                                        .asymmetric(
-                                            insertion: .move(edge: .bottom).combined(with: .opacity),
-                                            removal: .opacity.combined(with: .scale(scale: 0.96, anchor: .bottom))
-                                        )
-                                    )
-                            } else {
-                                bottomExpandedDeck
-                                    .offset(y: bottomDeckDrag * 0.55)
-                                    .opacity(1.0 - min(bottomDeckDrag / 110.0, 0.55))
-                                    .transition(
-                                        .asymmetric(
-                                            insertion: .opacity.combined(with: .offset(y: 10)),
-                                            removal: .opacity.combined(with: .offset(y: 22))
-                                        )
-                                    )
-                            }
+                        // Expanded deck — opaque grain slab (scrubbers live here)
+                        VStack(spacing: 0) {
+                            bottomExpandedDeck
+                                .offset(y: bottomDeckDrag * 0.55)
+                                .opacity(1.0 - min(bottomDeckDrag / 110.0, 0.55))
+
+                            Color.clear
+                                .frame(height: max(safeBottom * 0.55, 8))
+                                .frame(maxWidth: .infinity)
+                                .contentShape(Rectangle())
+                                .gesture(bottomDeckSwipe)
                         }
-                        .animation(
-                            .interactiveSpring(response: 0.38, dampingFraction: 0.86, blendDuration: 0.12),
-                            value: bottomCollapsed
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 4)
+                        .background { ControlsGrain() }
+                        .transition(
+                            .asymmetric(
+                                insertion: .opacity.combined(with: .offset(y: 10)),
+                                removal: .opacity.combined(with: .offset(y: 22))
+                            )
                         )
-
-                        // Home-indicator pad — invisible pull target
-                        Color.clear
-                            .frame(height: max(safeBottom * 0.55, 8))
-                            .frame(maxWidth: .infinity)
-                            .contentShape(Rectangle())
-                            .gesture(bottomDeckSwipe)
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 4)
-                    .background {
-                        ControlsGrain()
                     }
                 }
                 .padding(.top, safeTop)
+                .animation(
+                    .interactiveSpring(response: 0.38, dampingFraction: 0.86, blendDuration: 0.12),
+                    value: bottomCollapsed
+                )
 
                 if showFlash {
                     Color.white.ignoresSafeArea()
@@ -609,6 +497,161 @@ struct ContentView: View {
                     }
                 }
             }
+    }
+
+    // MARK: - Viewfinder chrome
+
+    @ViewBuilder
+    private func viewfinderFrame() -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: bottomCollapsed ? 10 : 8)
+                .fill(Color.black)
+
+            ZStack {
+                GeometryReader { vfGeo in
+                    FilteredCameraPreview(
+                        session: camera.session,
+                        filteredImage: camera.filteredPreviewImage,
+                        onTap: { point in
+                            handleFocusTap(point, in: vfGeo.size)
+                        },
+                        onPinch: { scale in
+                            guard !isLocked else { return }
+                            Haptics.light()
+                            let newZoom = zoomValue * scale
+                            zoomValue = min(max(newZoom, 0.5), 10.0)
+                            camera.setZoom(zoomValue)
+                            if !isManualFocusEnabled {
+                                focusPosition = Float(zoomValue - 1) / 4.0
+                            }
+                        },
+                        onMorphTouch: handleMorphTouch,
+                        exposureDragEnabled: showFocusPoint || isDraggingExposure,
+                        onExposureDrag: handleExposureDrag
+                    )
+                    .frame(width: vfGeo.size.width, height: vfGeo.size.height)
+
+                    if showFocusPoint || isDraggingExposure {
+                        FocusExposureReticle(exposureBias: exposureValue)
+                            .position(focusPoint)
+                            .allowsHitTesting(false)
+                    }
+                }
+
+                ViewfinderOverlay(showGrid: showGrid, aspectRatio: $aspectRatio, filmFilter: $filmFilter, lensFX: $lensFX)
+                ViewfinderVignette()
+
+                if timerCountdown > 0 {
+                    Text("\(timerCountdown)")
+                        .font(.system(size: 80, weight: .thin, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.9))
+                }
+
+                if camera.isLongExposureCapturing {
+                    LongExposureProgressOverlay(progress: camera.longExposureProgress)
+                }
+
+                // Histogram bar — lifts above the overlaid shutter when collapsed
+                VStack {
+                    Spacer()
+                    RefractiveGlassInfoBar(
+                        iso: isoValue,
+                        shutterSpeed: shutterSpeeds[shutterSpeedIndex],
+                        histogram: camera.histogramBins,
+                        aperture: apertureValue,
+                        photoCount: photoCount,
+                        exposureValue: exposureValue,
+                        captureFormat: captureFormat
+                    )
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, bottomCollapsed ? 118 : 8)
+                    .contentShape(Rectangle())
+                    .simultaneousGesture(bottomDeckSwipe)
+                }
+
+                if !bottomCollapsed {
+                    Color.clear
+                        .frame(height: 56)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                        .contentShape(Rectangle())
+                        .simultaneousGesture(bottomDeckSwipe)
+                }
+
+                // Inner inset shadows
+                VStack(spacing: 0) {
+                    LinearGradient(colors: [Color.black.opacity(0.6), Color.clear], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 12)
+                    Spacer()
+                }
+                HStack(spacing: 0) {
+                    LinearGradient(colors: [Color.black.opacity(0.5), Color.clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: 10)
+                    Spacer()
+                }
+                VStack(spacing: 0) {
+                    Spacer()
+                    LinearGradient(colors: [Color.clear, Color.white.opacity(0.03)], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 6)
+                }
+                HStack(spacing: 0) {
+                    Spacer()
+                    LinearGradient(colors: [Color.clear, Color.white.opacity(0.02)], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: 4)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: bottomCollapsed ? 8 : 6))
+            .padding(bottomCollapsed ? 1 : 2)
+
+            RoundedRectangle(cornerRadius: bottomCollapsed ? 8 : 6)
+                .stroke(Color(hex: "333333"), lineWidth: 0.5)
+                .padding(bottomCollapsed ? 1 : 2)
+        }
+    }
+
+    /// Compact shutter row floating on a bottom gradient — feed shows through underneath.
+    private func collapsedBottomOverlay(safeBottom: CGFloat) -> some View {
+        VStack(spacing: 0) {
+            Spacer(minLength: 0)
+
+            // Fade the live frame into the controls (camera stays underneath)
+            LinearGradient(
+                colors: [
+                    Color.clear,
+                    Color.black.opacity(0.35),
+                    Color.black.opacity(0.72),
+                    Color.black.opacity(0.88)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 140)
+            .allowsHitTesting(false)
+
+            bottomCompactDeck
+                .offset(y: bottomDeckDrag * 0.12)
+                .opacity(1.0 - min(abs(bottomDeckDrag) / 90.0, 0.45))
+                .contentShape(Rectangle())
+                .gesture(bottomDeckSwipe)
+                .background(
+                    LinearGradient(
+                        colors: [
+                            Color.black.opacity(0.0),
+                            Color.black.opacity(0.55)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .padding(.top, -24)
+                    .allowsHitTesting(false)
+                )
+
+            Color.clear
+                .frame(height: max(safeBottom * 0.55, 8))
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
+                .gesture(bottomDeckSwipe)
+        }
+        .frame(maxWidth: .infinity)
     }
 
     /// Bottom deck: swipe down collapses, swipe up expands.
@@ -1660,7 +1703,7 @@ struct Triangle: Shape {
     }
 }
 
-// MARK: - Shutter Button (machined brushed steel)
+// MARK: - Shutter Button (machined steel — bevel + brush balance)
 struct ShutterButton: View {
     let isCapturing: Bool
     let action: () -> Void
@@ -1670,18 +1713,18 @@ struct ShutterButton: View {
     var body: some View {
         Button(action: action) {
             ZStack {
-                // Knurled collar — cool steel lathe bands
+                // Knurled collar — lathe bands with clearer bevel contrast
                 Circle()
                     .fill(
                         AngularGradient(
                             colors: [
+                                Color(red: 0.50, green: 0.52, blue: 0.56),
+                                Color(red: 0.20, green: 0.21, blue: 0.24),
+                                Color(red: 0.44, green: 0.46, blue: 0.50),
+                                Color(red: 0.16, green: 0.17, blue: 0.20),
                                 Color(red: 0.48, green: 0.50, blue: 0.54),
                                 Color(red: 0.22, green: 0.23, blue: 0.26),
-                                Color(red: 0.42, green: 0.44, blue: 0.48),
-                                Color(red: 0.18, green: 0.19, blue: 0.22),
-                                Color(red: 0.46, green: 0.48, blue: 0.52),
-                                Color(red: 0.24, green: 0.25, blue: 0.28),
-                                Color(red: 0.48, green: 0.50, blue: 0.54)
+                                Color(red: 0.50, green: 0.52, blue: 0.56)
                             ],
                             center: .center
                         )
@@ -1689,83 +1732,118 @@ struct ShutterButton: View {
                     .frame(width: 76, height: 76)
                     .overlay {
                         Circle()
-                            .fill(Color(red: 0.34, green: 0.36, blue: 0.40))
+                            .fill(Color(red: 0.33, green: 0.35, blue: 0.39))
                             .colorEffect(
                                 ShaderLibrary.metallicSurface(
                                     .float2(76, 76),
-                                    .float(isPressed ? 0.65 : 1.0),
-                                    .float2(0.28, 0.16)
+                                    .float(isPressed ? 0.7 : 1.05),
+                                    .float2(0.26, 0.14)
                                 )
                             )
                             .clipShape(Circle())
                             .allowsHitTesting(false)
                     }
+                    // Outer bevel highlight / shadow mix
+                    .overlay {
+                        Circle()
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        Color.white.opacity(isPressed ? 0.35 : 0.55),
+                                        Color.white.opacity(0.08),
+                                        Color.black.opacity(0.7)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1.35
+                            )
+                    }
+                    .overlay {
+                        // Inner bevel step
+                        Circle()
+                            .stroke(
+                                LinearGradient(
+                                    colors: [
+                                        Color.black.opacity(0.45),
+                                        Color.clear,
+                                        Color.white.opacity(0.12)
+                                    ],
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: 1.0
+                            )
+                            .padding(2.5)
+                    }
 
-                // Bevel rim
+                // Recess between collar and face
                 Circle()
-                    .stroke(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(isPressed ? 0.28 : 0.42),
-                                Color(red: 0.55, green: 0.58, blue: 0.62).opacity(0.25),
-                                Color.black.opacity(0.65)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 1.2
-                    )
-                    .frame(width: 76, height: 76)
-
-                // Recess ring
-                Circle()
-                    .stroke(Color.black.opacity(isPressed ? 0.8 : 0.5), lineWidth: isPressed ? 2.5 : 1.6)
+                    .stroke(Color.black.opacity(isPressed ? 0.85 : 0.55), lineWidth: isPressed ? 2.6 : 1.75)
                     .frame(width: 66, height: 66)
+                    .shadow(color: Color.black.opacity(0.35), radius: 1, y: 0.5)
 
-                // Raised face — brush grain + cool metal sheen
+                // Raised face
                 ZStack {
                     Circle()
-                        .fill(Color(red: 0.32, green: 0.34, blue: 0.38))
+                        .fill(Color(red: 0.30, green: 0.32, blue: 0.36))
                         .frame(width: 60, height: 60)
                         .colorEffect(
                             ShaderLibrary.metallicSurface(
                                 .float2(60, 60),
-                                .float(isPressed ? 0.5 : 0.9),
-                                .float2(0.30, 0.22)
+                                .float(isPressed ? 0.55 : 0.95),
+                                .float2(0.28, 0.20)
                             )
                         )
                         .clipShape(Circle())
 
-                    // Soft metallic catch (multiply-safe, not screen chrome)
+                    // Bevel wash across the face
                     Circle()
                         .fill(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(isPressed ? 0.10 : 0.20),
+                                    Color.white.opacity(isPressed ? 0.14 : 0.26),
                                     Color.clear,
-                                    Color.black.opacity(0.18)
+                                    Color.black.opacity(0.22)
                                 ],
-                                startPoint: UnitPoint(x: 0.25, y: 0.15),
-                                endPoint: UnitPoint(x: 0.8, y: 0.9)
+                                startPoint: UnitPoint(x: 0.22, y: 0.12),
+                                endPoint: UnitPoint(x: 0.85, y: 0.92)
                             )
                         )
                         .frame(width: 60, height: 60)
                         .blendMode(.softLight)
 
-                    // Inner lathe rings
-                    ForEach(0..<5, id: \.self) { i in
+                    // Tight specular crest (mixed, not plastic screen)
+                    Ellipse()
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    Color.white.opacity(isPressed ? 0.08 : 0.16),
+                                    Color.clear
+                                ],
+                                center: UnitPoint(x: 0.35, y: 0.28),
+                                startRadius: 0,
+                                endRadius: 18
+                            )
+                        )
+                        .frame(width: 36, height: 22)
+                        .offset(x: -4, y: -8)
+                        .blendMode(.plusLighter)
+                        .opacity(0.55)
+
+                    ForEach(0..<4, id: \.self) { i in
                         Circle()
-                            .stroke(Color.white.opacity(0.045), lineWidth: 0.55)
-                            .frame(width: CGFloat(52 - i * 8), height: CGFloat(52 - i * 8))
+                            .stroke(Color.white.opacity(0.05), lineWidth: 0.55)
+                            .frame(width: CGFloat(50 - i * 9), height: CGFloat(50 - i * 9))
                     }
 
                     Circle()
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(isPressed ? 0.14 : 0.28),
+                                    Color.white.opacity(isPressed ? 0.16 : 0.32),
                                     Color.clear,
-                                    Color.black.opacity(0.4)
+                                    Color.black.opacity(0.45)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -1781,13 +1859,11 @@ struct ShutterButton: View {
                     }
                 }
                 .scaleEffect(isPressed ? 0.95 : 1.0)
-                .shadow(
-                    color: Color.black.opacity(isPressed ? 0.25 : 0.55),
-                    radius: isPressed ? 0.5 : 3.5,
-                    y: isPressed ? 0 : 2
-                )
+                // Contact shadow under the raised face
+                .shadow(color: Color.black.opacity(isPressed ? 0.3 : 0.5), radius: isPressed ? 0.5 : 2.5, y: isPressed ? 0 : 1.5)
             }
-            .shadow(color: Color.black.opacity(0.5), radius: isPressed ? 2 : 7, y: isPressed ? 1 : 3)
+            // Drop that mixes into the bottom gradient when collapsed
+            .shadow(color: Color.black.opacity(isPressed ? 0.35 : 0.55), radius: isPressed ? 2 : 5, y: isPressed ? 1 : 2.5)
             .animation(.spring(response: 0.12, dampingFraction: 0.65), value: isPressed)
         }
         .buttonStyle(PlainButtonStyle())

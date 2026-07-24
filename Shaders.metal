@@ -133,30 +133,30 @@ float noise(float2 st) {
 ) {
     float2 uv = position / size;
 
-    // Dense horizontal brush + coarser lathe bands (the “steel” read)
-    float brushed = noise(float2(uv.x * 360.0, uv.y * 11.0)) * roughness;
-    float brushed2 = noise(float2(uv.x * 140.0, uv.y * 4.5)) * roughness * 0.7;
-    float micro = (noise(uv * 560.0) - 0.5) * roughness * 0.28;
+    // Dense horizontal brush + coarser lathe — bevel texture, not flat fill
+    float brushed = noise(float2(uv.x * 340.0, uv.y * 12.0)) * roughness;
+    float brushed2 = noise(float2(uv.x * 130.0, uv.y * 5.0)) * roughness * 0.72;
+    float micro = (noise(uv * 520.0) - 0.5) * roughness * 0.30;
 
     // Anisotropic specular streak (brushed metal, not mirror chrome)
     float2 lightDir = normalize(lightPos - uv);
-    float ndl = max(dot(lightDir, float2(0.15, 0.98)), 0.0);
-    float soft = pow(ndl, 8.0) * 0.28;
-    float streak = pow(ndl, 28.0) * 0.22;
+    float ndl = max(dot(lightDir, float2(0.18, 0.98)), 0.0);
+    float soft = pow(ndl, 7.5) * 0.30;
+    float streak = pow(ndl, 26.0) * 0.24;
     float specular = soft + streak;
 
-    // Cool rim — machined edge, kept modest
+    // Cool rim — machined edge for bevel read
     float edge = length(uv - float2(0.5, 0.5)) * 2.0;
-    float fresnel = pow(smoothstep(0.58, 1.0, edge), 1.5) * 0.18;
+    float fresnel = pow(smoothstep(0.56, 1.0, edge), 1.45) * 0.20;
 
     half3 result = color.rgb;
     // Cool steel cast
     result = mix(result, half3(result.r * 0.90, result.g * 0.94, result.b * 1.06), half(0.32));
-    result += half3((brushed * 0.20 + brushed2 * 0.13 + micro) * 1.15);
-    result += half3(specular * 0.42) * half3(0.88, 0.93, 1.0);
+    result += half3((brushed * 0.19 + brushed2 * 0.14 + micro) * 1.12);
+    result += half3(specular * 0.40) * half3(0.88, 0.93, 1.0);
     result += half3(fresnel) * half3(0.78, 0.84, 0.95);
-    // Raised contact shadow
-    result *= half(1.0 - smoothstep(0.52, 1.05, uv.y) * 0.20);
+    // Raised contact shadow — mixes with UI drop shadow
+    result *= half(1.0 - smoothstep(0.50, 1.05, uv.y) * 0.22);
 
     return half4(clamp(result, 0.0h, 1.0h), color.a);
 }

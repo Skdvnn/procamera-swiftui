@@ -578,7 +578,7 @@ struct AnalogDisplayPanel: View {
                     .frame(maxWidth: .infinity)
                 }
                 .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.vertical, 6)
             } else {
                 // Content - centered vertically
                 HStack(spacing: 0) {
