@@ -27,9 +27,9 @@
 	<key>NSCameraUsageDescription</key>
 	<string>ProCamera needs access to your camera for photo capture</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>ProCamera needs permission to save photos to your library</string>
+	<string>ShutterCraft saves your shots to Photos so keepers can be shared as an album.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>ProCamera needs photo library access to save photos</string>
+	<string>ShutterCraft needs Photos access to save shots, delete rejects after a cull, and export keepers as an album.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

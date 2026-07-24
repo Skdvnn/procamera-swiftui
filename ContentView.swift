@@ -574,7 +574,7 @@ struct ContentView: View {
             }
         }
         .fullScreenCover(isPresented: $showPhotoBook) {
-            LibraryView(store: gallery)
+            CullLibraryView(store: gallery)
         }
     }
 
@@ -592,6 +592,10 @@ struct ContentView: View {
             focalLength: focalLength
         )
         gallery.add(image: img, metadata: metadata)
+        // Dual-write to Photos; stash localIdentifier so cull can delete both sides.
+        camera.saveToPhotoLibrary(img) { assetID in
+            gallery.setPhotosAssetIdentifier(assetID, for: metadata.id)
+        }
     }
 
     private func syncFilmFilter(_ filter: FilmFilterMode) {
@@ -721,7 +725,6 @@ struct ContentView: View {
                     lastCapturedImage = img
                     photoCount += 1
                     recordShot(img)
-                    camera.saveToPhotoLibrary(img) { _ in }
                 }
             }
         } else {
@@ -738,10 +741,9 @@ struct ContentView: View {
                 if let img = img {
                     lastCapturedImage = img
                     photoCount += 1
+                    // Dual-writes sandbox + Photos (processed preview; RAW DNG
+                    // is handled separately inside CameraManager).
                     recordShot(img)
-                    // RAW mode already writes the DNG from CameraManager; still
-                    // save the processed preview so Photos has a viewable sibling.
-                    camera.saveToPhotoLibrary(img) { _ in }
                 }
             }
         }

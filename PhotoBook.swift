@@ -14,6 +14,8 @@ struct ShotMetadata: Codable, Identifiable, Equatable {
     let filmFilter: String
     let lensFX: String
     let focalLength: Int
+    /// Link to the dual-written Photos asset (nil for pre-cull-era shots).
+    var photosAssetLocalIdentifier: String? = nil
 
     // Stable per-shot tilt so prints look hand-placed, consistent across launches
     // (UUID hashValue is randomized per process, so derive from the string)
@@ -57,7 +59,10 @@ final class GalleryStore: ObservableObject {
     // MARK: Shots
 
     func add(image: UIImage, metadata: ShotMetadata) {
-        // Write files off the main thread, then publish
+        // Publish metadata immediately so Photos ID linking can't race the disk write.
+        shots.append(metadata)
+        saveIndex()
+
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self = self else { return }
 
@@ -68,12 +73,18 @@ final class GalleryStore: ObservableObject {
                let thumbData = thumb.jpegData(compressionQuality: 0.8) {
                 try? thumbData.write(to: self.thumbURL(for: metadata.id))
             }
-
+            // Nudge UI once thumbs land
             DispatchQueue.main.async {
-                self.shots.append(metadata)
-                self.saveIndex()
+                self.objectWillChange.send()
             }
         }
+    }
+
+    /// Attach the Photos library localIdentifier after dual-write completes.
+    func setPhotosAssetIdentifier(_ identifier: String?, for shotID: UUID) {
+        guard let i = shots.firstIndex(where: { $0.id == shotID }) else { return }
+        shots[i].photosAssetLocalIdentifier = identifier
+        saveIndex()
     }
 
     func delete(_ shot: ShotMetadata) {
