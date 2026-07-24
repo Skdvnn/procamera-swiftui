@@ -29,7 +29,7 @@ struct CaptureWithShutterIntent: AppIntent {
 
 struct OpenDarkroomIntent: AppIntent {
     static var title: LocalizedStringResource = "Open Darkroom"
-    static var description = IntentDescription("Open ShutterCraft Darkroom to cull shots.")
+    static var description = IntentDescription("Open Shutter Darkroom to cull shots.")
     static var openAppWhenRun: Bool = true
 
     @MainActor

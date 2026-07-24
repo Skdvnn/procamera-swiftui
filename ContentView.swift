@@ -152,7 +152,7 @@ extension Color {
 let vulcaniteBlack = DS.pageBg
 
 // MARK: - Capture Format
-enum CaptureFormat: CaseIterable {
+enum CaptureFormat: String, CaseIterable, Hashable {
     case heic, jpeg, raw
 
     var label: String {
@@ -178,6 +178,10 @@ struct ContentView: View {
     @AppStorage("cam.focusPeaking") private var focusPeaking = false
     @AppStorage("cam.zebra") private var zebraEnabled = false
     @AppStorage("cam.showLevel") private var showLevel = true
+    @AppStorage("cam.shootMode") private var shootModeRaw: String = ShootMode.street.rawValue
+    @AppStorage("cam.defaultFilm") private var defaultFilmRaw: Int = FilmFilterMode.none.rawValue
+    @AppStorage("cam.captureFormat") private var captureFormatRaw: String = CaptureFormat.heic.rawValue
+    @State private var showSettings = false
     @State private var timerSeconds = 0
     @State private var timerCountdown = 0
     @State private var photoCount = 0
@@ -216,6 +220,20 @@ struct ContentView: View {
     @StateObject private var volumeShutter = VolumeShutterObserver()
     @State private var showPhotoBook = false
     @State private var showingCleanCompare = false
+
+    private var shootModeBinding: Binding<ShootMode> {
+        Binding(
+            get: { ShootMode(rawValue: shootModeRaw) ?? .street },
+            set: { shootModeRaw = $0.rawValue }
+        )
+    }
+
+    private var defaultFilmBinding: Binding<FilmFilterMode> {
+        Binding(
+            get: { FilmFilterMode(rawValue: defaultFilmRaw) ?? .none },
+            set: { defaultFilmRaw = $0.rawValue }
+        )
+    }
 
     private let shutterSpeeds = ["4\"", "2\"", "1\"", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60", "1/125", "1/250", "1/500", "1/1000", "1/2000", "1/4000"]
     private let isoValues = [100, 200, 400, 800, 1600, 3200]
@@ -440,6 +458,18 @@ struct ContentView: View {
                 lastCapturedImage = img
             }
             apertureValue = camera.lensAperture
+            if let fmt = CaptureFormat(rawValue: captureFormatRaw) {
+                captureFormat = fmt
+                switch fmt {
+                case .heic: camera.captureFormat = .heic
+                case .jpeg: camera.captureFormat = .jpeg
+                case .raw: camera.captureFormat = .raw
+                }
+            }
+            let film = FilmFilterMode(rawValue: defaultFilmRaw) ?? .none
+            if filmFilter == .none, film != .none {
+                filmFilter = film
+            }
             volumeShutter.onShutter = {
                 handleCapture()
             }
@@ -499,6 +529,22 @@ struct ContentView: View {
         .fullScreenCover(isPresented: $showPhotoBook) {
             CullLibraryView(store: gallery)
         }
+        .sheet(isPresented: $showSettings) {
+            ShutterSettingsSheet(
+                shootMode: shootModeBinding,
+                showGrid: $showGrid,
+                focusPeaking: $focusPeaking,
+                zebraEnabled: $zebraEnabled,
+                showLevel: $showLevel,
+                captureFormat: $captureFormat,
+                defaultFilm: defaultFilmBinding,
+                onApplyMode: { applyShootMode($0) },
+                onDismiss: {
+                    captureFormatRaw = captureFormat.rawValue
+                    showSettings = false
+                }
+            )
+        }
     }
 
     // Bind a captured frame into the Field Book with the live shot settings
@@ -522,20 +568,11 @@ struct ContentView: View {
     }
 
     private func syncFilmFilter(_ filter: FilmFilterMode) {
-        camera.selectedFilmFilter = cameraFilmFilter(from: filter)
+        camera.selectedFilmFilter = filter
     }
 
-    private func cameraFilmFilter(from filter: FilmFilterMode) -> CameraManager.FilmFilter {
-        switch filter {
-        case .none: return .none
-        case .portra400: return .portra400
-        case .kodakGold: return .kodakGold
-        case .ektar100: return .ektar100
-        case .trix400: return .trix400
-        case .velvia50: return .velvia50
-        case .cinestill800: return .cinestill800
-        case .instant: return .instant
-        }
+    private func cameraFilmFilter(from filter: FilmFilterMode) -> FilmFilterMode {
+        filter
     }
 
     /// Push viewfinder controls into CameraManager immediately before shutter
@@ -543,6 +580,55 @@ struct ContentView: View {
     private func syncCaptureControlsToCamera() {
         syncFilmFilter(filmFilter)
         camera.selectedLensFX = lensFX
+    }
+
+    private func applyShootMode(_ mode: ShootMode) {
+        shootModeRaw = mode.rawValue
+        switch mode {
+        case .street:
+            showGrid = true
+            focusPeaking = false
+            zebraEnabled = false
+            shutterSpeedIndex = 10 // 1/250
+            isoValue = 400
+            camera.setShutterSpeed(index: 10)
+            camera.setISO(400)
+            camera.returnToAuto()
+            isLocked = false
+        case .night:
+            showGrid = false
+            focusPeaking = true
+            zebraEnabled = true
+            shutterSpeedIndex = 2 // 1"
+            isoValue = 1600
+            camera.setShutterSpeed(index: 2)
+            camera.setISO(1600)
+        case .studio:
+            showGrid = true
+            focusPeaking = true
+            zebraEnabled = true
+            shutterSpeedIndex = 9 // 1/125
+            isoValue = 200
+            camera.setShutterSpeed(index: 9)
+            camera.setISO(200)
+            camera.setAEAFLocked(true)
+            isLocked = true
+        case .film:
+            showGrid = true
+            focusPeaking = false
+            zebraEnabled = false
+            let film = FilmFilterMode(rawValue: defaultFilmRaw) ?? .portra400
+            filmFilter = film == .none ? .portra400 : film
+            lensFX = .none
+            shutterSpeedIndex = 8 // 1/60
+            isoValue = 400
+            camera.setShutterSpeed(index: 8)
+            camera.setISO(400)
+            camera.returnToAuto()
+            isLocked = false
+        }
+        syncCaptureContextToSystem()
+        Haptics.medium()
     }
 
     private func toggleAEAFLock() {
@@ -1057,7 +1143,14 @@ struct ContentView: View {
 
                 Spacer()
 
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
+                    VStack(spacing: 8) {
+                        ModeIcon(icon: "gearshape", isActive: showSettings)
+                        ModeButton(isActive: showSettings) {
+                            Haptics.click()
+                            showSettings = true
+                        }
+                    }
                     VStack(spacing: 8) {
                         ModeIcon(icon: "camera.macro", isActive: macroEnabled)
                         ModeButton(isActive: macroEnabled) {
@@ -1085,15 +1178,8 @@ struct ContentView: View {
                             showGrid.toggle()
                         }
                     }
-                    VStack(spacing: 8) {
-                        ModeIcon(icon: "waveform.path.ecg", isActive: zebraEnabled)
-                        ModeButton(isActive: zebraEnabled) {
-                            Haptics.click()
-                            zebraEnabled.toggle()
-                        }
-                    }
                 }
-                .frame(width: 112, height: 48)
+                .frame(width: 120, height: 48)
             }
             .padding(.horizontal, DS.pageMargin)
             .contentShape(Rectangle())

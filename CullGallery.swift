@@ -531,7 +531,7 @@ struct CullLibraryView: View {
             .accessibilityLabel("Close")
 
             VStack(alignment: .leading, spacing: 3) {
-                Text("SHUTTERCRAFT")
+                Text("SHUTTER")
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .tracking(3.5)
                     .foregroundColor(CullPalette.amber.opacity(0.75))
@@ -727,6 +727,12 @@ struct SessionContactSheet: View {
                         tally(progress.unmarked, "OPEN", Color.white.opacity(0.45))
                     }
                     .padding(.top, 4)
+
+                    if let coord = session.mapCoordinate {
+                        SessionMapChip(coordinate: coord)
+                            .padding(.top, 8)
+                            .padding(.trailing, 8)
+                    }
                 }
 
                 Spacer(minLength: 8)
@@ -961,6 +967,7 @@ struct CullSessionView: View {
     @State private var dragOffset: CGSize = .zero
     @State private var showFinish = false
     @State private var isFinishing = false
+    @State private var shareProofURL: URL?
     @State private var finishMessage: String?
     @State private var flashMark: FrameMarkState?
     @State private var loupeTouch: CGPoint?
@@ -1062,11 +1069,21 @@ struct CullSessionView: View {
                 sessionTitle: session.title,
                 onDeleteAndExport: { finish(deleteRejects: true) },
                 onMarkOnly: { finish(deleteRejects: false) },
+                onExportProof: { exportProofPDF() },
                 onCancel: { showFinish = false }
             )
-            .presentationDetents([.medium])
+            .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
             .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: Binding(
+            get: { shareProofURL != nil },
+            set: { if !$0 { shareProofURL = nil } }
+        )) {
+            if let url = shareProofURL {
+                ShareSheet(items: [url])
+                    .preferredColorScheme(.dark)
+            }
         }
         .overlay {
             if isFinishing {
@@ -1700,6 +1717,15 @@ struct CullSessionView: View {
             }
         }
     }
+
+    private func exportProofPDF() {
+        let keepers = shots.filter { marks.state(for: $0.id) == .keep }
+        let frames = keepers.isEmpty ? shots : keepers
+        showFinish = false
+        if let url = ProofPDFExporter.makePDF(title: session.title, shots: frames, store: store) {
+            shareProofURL = url
+        }
+    }
 }
 
 // MARK: - Finish sheet (darkroom, not system alert)
@@ -1710,6 +1736,7 @@ struct FinishSessionSheet: View {
     let sessionTitle: String
     let onDeleteAndExport: () -> Void
     let onMarkOnly: () -> Void
+    var onExportProof: (() -> Void)? = nil
     let onCancel: () -> Void
 
     var body: some View {
@@ -1717,7 +1744,7 @@ struct FinishSessionSheet: View {
             DarkroomGround(intensity: 0.85)
 
             VStack(alignment: .leading, spacing: 0) {
-                Text("SHUTTERCRAFT")
+                Text("SHUTTER")
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .tracking(3)
                     .foregroundColor(CullPalette.amber.opacity(0.7))
@@ -1766,6 +1793,29 @@ struct FinishSessionSheet: View {
                             RoundedRectangle(cornerRadius: 2)
                                 .stroke(CullPalette.amber.opacity(0.5), lineWidth: 0.8)
                         )
+                    }
+
+                    if let onExportProof {
+                        Button(action: onExportProof) {
+                            HStack {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text("EXPORT PROOF PDF")
+                                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                        .tracking(0.8)
+                                    Text("Contact sheet of keepers (or all frames)")
+                                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                        .foregroundColor(.white.opacity(0.45))
+                                }
+                                Spacer()
+                            }
+                            .foregroundColor(.white.opacity(0.9))
+                            .padding(14)
+                            .background(Color.white.opacity(0.06))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 2)
+                                    .stroke(CullPalette.hairline.opacity(0.6), lineWidth: 0.6)
+                            )
+                        }
                     }
 
                     Button(action: onMarkOnly) {

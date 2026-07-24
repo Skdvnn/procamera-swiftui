@@ -39,6 +39,9 @@
 		A1000035CCCCCCC000000001 /* ShutterCaptureContext.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000028GGGGGGGG00000002 /* ShutterCaptureContext.swift */; };
 		A1000036EEEEEEEE00000001 /* ShutterWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A1000036EEEEEEEE00000002 /* ShutterWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A1000037EEEEEEEE00000001 /* ShutterCaptureExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A1000037EEEEEEEE00000002 /* ShutterCaptureExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+
+		A100002ASSSSSSSS00000001 /* ShutterSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100002ASSSSSSSS00000002 /* ShutterSettings.swift */; };
+		A100002BPPPPPPPP00000001 /* ProofExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100002BPPPPPPPP00000002 /* ProofExport.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -76,6 +79,9 @@
 		A1000033CCCCCCC000000004 /* ShutterCaptureExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = ShutterCaptureExtension.entitlements; sourceTree = "<group>"; };
 		A1000036EEEEEEEE00000002 /* ShutterWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShutterWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		A1000037EEEEEEEE00000002 /* ShutterCaptureExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShutterCaptureExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+
+		A100002ASSSSSSSS00000002 /* ShutterSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShutterSettings.swift; sourceTree = "<group>"; };
+		A100002BPPPPPPPP00000002 /* ProofExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProofExport.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 
@@ -169,6 +175,8 @@
 				A1000027GGGGGGGG00000002 /* ShutterDeepLink.swift */,
 				A1000028GGGGGGGG00000002 /* ShutterCaptureContext.swift */,
 				A1000029GGGGGGGG00000002 /* ShutterAppIntents.swift */,
+				A100002ASSSSSSSS00000002 /* ShutterSettings.swift */,
+				A100002BPPPPPPPP00000002 /* ProofExport.swift */,
 				A10000W0WWWWWWWW00000001 /* ShutterWidgets */,
 				A10000C0CCCCCCC000000001 /* ShutterCaptureExtension */,
 				A1000021BBBBBBBB00000021 /* ProCamera.entitlements */,
@@ -345,6 +353,8 @@
 				A1000027GGGGGGGG00000001 /* ShutterDeepLink.swift in Sources */,
 				A1000028GGGGGGGG00000001 /* ShutterCaptureContext.swift in Sources */,
 				A1000029GGGGGGGG00000001 /* ShutterAppIntents.swift in Sources */,
+				A100002ASSSSSSSS00000001 /* ShutterSettings.swift in Sources */,
+				A100002BPPPPPPPP00000001 /* ProofExport.swift in Sources */,
 				A100000BAAAAAAAA0000000B /* AnalogGaugeView.swift in Sources */,
 				A100000DAAAAAAAA0000000D /* ViewfinderOverlay.swift in Sources */,
 				A100000FAAAAAAAA0000000F /* ControlComponents.swift in Sources */,
@@ -572,8 +582,8 @@
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
-				DISPLAY_NAME = "Shutter cam";
-				INFOPLIST_KEY_CFBundleDisplayName = "Shutter cam";
+				DISPLAY_NAME = "Shutter";
+				INFOPLIST_KEY_CFBundleDisplayName = "Shutter";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

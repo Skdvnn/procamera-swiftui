@@ -113,30 +113,8 @@ class CameraManager: NSObject, ObservableObject {
     private var longExposureLensFX: LensFXMode = .none
     private var longExposureMorphTouch: MorphTouchState?
 
-    // Film filter types (color grades / stocks — not GPU morph shaders)
-    enum FilmFilter: Int, CaseIterable {
-        case none = 0
-        case portra400      // Warm, natural skin tones
-        case ektar100       // Vivid, saturated colors
-        case kodakGold      // Golden warmth, gentle contrast
-        case trix400        // Classic B&W
-        case cinestill800   // Cinematic with halation
-        case velvia50       // Ultra-vivid landscape
-        case instant        // Faded Polaroid / SX-70 look
-
-        var name: String {
-            switch self {
-            case .none: return "None"
-            case .portra400: return "Portra"
-            case .ektar100: return "Ektar"
-            case .kodakGold: return "Gold"
-            case .trix400: return "Tri-X"
-            case .cinestill800: return "Cine"
-            case .velvia50: return "Velvia"
-            case .instant: return "Instant"
-            }
-        }
-    }
+    // Film stocks — same enum as UI (`FilmFilterMode`).
+    typealias FilmFilter = FilmFilterMode
 
     private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
 

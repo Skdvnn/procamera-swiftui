@@ -19,7 +19,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
-	<string>25</string>
+	<string>26</string>
 	<key>CKSharingSupported</key>
 	<true/>
 	<key>CFBundleURLTypes</key>
@@ -68,11 +68,11 @@
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>NSCameraUsageDescription</key>
-	<string>Shutter Cam needs the camera for photos, Lock Screen capture, and Control Center.</string>
+	<string>Shutter needs the camera for photos, Lock Screen capture, and Control Center.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<string>ShutterCraft saves your shots to Photos so keepers can be shared as an album.</string>
+	<string>Shutter saves your shots to Photos so keepers can be shared as an album.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>ShutterCraft needs Photos access to save shots, delete rejects after a cull, and export keepers as an album.</string>
+	<string>Shutter needs Photos access to save shots, delete rejects after a cull, and export keepers as an album.</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

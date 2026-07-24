@@ -1,35 +1,17 @@
 # Overnight pro-pass goals (cursor/overnight-pro-pass-1a29)
 
-Autonomous goal loops — ship what’s reasonable without diluting the Shutter / Darkroom / Field Book spine.
+## Phase 1–3
+See earlier checkboxes (truth, lock, peaking, looks, volume, iOS integration).
 
-## Phase 1 — Truth / lock / monitors / flip (build 23)
-- [x] Stop advertising fake controllable aperture (ƒ readout only when hardware reports it)
-- [x] Info bar shows real aspect ratio (not hard-coded 1:1)
-- [x] Aspect mask crops capture to match framing
-- [x] Remove unused P·A·T mode state
-- [x] RAW: bake graded companion to match preview (DNG stays clean)
-- [x] Visible AE/AF lock (`L` on info bar)
-- [x] One-tap return to auto (`A` on info bar)
-- [x] Focus peaking toggle (viewfinder chrome)
-- [x] Horizon / level indicator
-- [x] Zebra highlight warning (deck mode icon)
-- [x] Front/back camera switch
-- [x] Persist grid / peaking / zebra / level via `@AppStorage`
+## Phase 4 — First-plan leftovers (build 26)
+- [x] Settings sheet (gear) + shoot modes Street / Night / Studio / Film
+- [x] Proof PDF export from Darkroom finish sheet
+- [x] Session map chip when Photos locations exist
+- [x] Unify film enum (`FilmFilterMode` == pipeline filter)
+- [x] Brand UI → **Shutter** (Darkroom, albums, display name)
+- [x] Defuse unused MetalShutterSurface helper
+- [ ] Full dead-control deletion (`RecordButton` / `FStopScrubber` still present but unwired)
+- [ ] Dedicated Bluetooth shutter protocol (volume + Camera Control cover common cases)
 
-## Phase 2 — Looks / compare / shutter / LE honesty (build 24)
-- [x] Saved film+FX look recipes (bookmark menu + SAVE LOOK)
-- [x] Hold-to-compare clean preview (long-press viewfinder)
-- [x] Volume-button shutter
-- [x] Long-exposure path label (HARDWARE vs STACKED)
-
-## Phase 3 — Deep iOS integration (build 25)
-- [x] Shortcuts / App Intents / URL schemes / quick actions
-- [x] Camera Control hardware shutter events
-- [x] Home + Lock Screen widgets + Control Center control
-- [x] Locked Camera Capture extension (iOS 18)
-- See `docs/IOS_INTEGRATION.md`
-
-## Out of scope (still)
-- Video product, more Lens FX, Halide-grade scopes, social feed, fake aperture hardware
-- Becoming the system default Camera app icon (not allowed by iOS)
-- Full proof PDF export / session map (next candidate)
+## Out of scope
+Video, Halide scopes, replacing system Camera icon

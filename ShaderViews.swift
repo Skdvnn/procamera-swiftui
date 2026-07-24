@@ -297,7 +297,7 @@ extension View {
 }
 
 // MARK: - Metal Shutter Button Surface (unused helper — do not animate shader args)
-struct MetalShutterSurface: View {
+struct MetalShutterSurface_UNUSED: View {
     let size: CGFloat
     let isPressed: Bool
 

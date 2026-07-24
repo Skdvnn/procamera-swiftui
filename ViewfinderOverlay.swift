@@ -263,8 +263,16 @@ enum AspectRatioMode: CaseIterable {
 }
 
 // MARK: - Film Filter Mode (classic color grades / film stocks)
-enum FilmFilterMode: CaseIterable {
-    case none, portra400, kodakGold, ektar100, trix400, velvia50, cinestill800, instant
+/// Single source of truth for UI + CameraManager pipeline (Int raw values stable).
+enum FilmFilterMode: Int, CaseIterable, Hashable {
+    case none = 0
+    case portra400 = 1
+    case ektar100 = 2
+    case kodakGold = 3
+    case trix400 = 4
+    case cinestill800 = 5
+    case velvia50 = 6
+    case instant = 7
 
     var name: String {
         switch self {
