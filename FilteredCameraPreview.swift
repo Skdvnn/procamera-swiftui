@@ -133,7 +133,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
                 x: min(1, max(0, location.x / view.bounds.width)),
                 y: min(1, max(0, location.y / view.bounds.height))
             )
-            let translation = gesture.translation(in: view)
+            let translation = gesture.translation(in: view) // CGPoint (x/y), not CGSize
 
             let now = CFAbsoluteTimeGetCurrent()
             var velocity = CGPoint.zero
@@ -145,7 +145,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
                 panMode = .undecided
                 if exposureDragEnabled {
                     panMode = .exposure
-                    onExposureDrag?(translation.height, false)
+                    onExposureDrag?(translation.y, false)
                 } else {
                     panMode = .morph
                     onMorphTouch?(point, .zero, true)
@@ -154,7 +154,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
             case .changed:
                 if panMode == .undecided {
                     // Prefer exposure when focus reticle is up; otherwise morph after a hint of movement
-                    if exposureDragEnabled && abs(translation.height) >= abs(translation.width) {
+                    if exposureDragEnabled && abs(translation.y) >= abs(translation.x) {
                         panMode = .exposure
                     } else {
                         panMode = .morph
@@ -163,7 +163,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
                 }
 
                 if panMode == .exposure {
-                    onExposureDrag?(translation.height, false)
+                    onExposureDrag?(translation.y, false)
                 } else {
                     let dt = max(1.0 / 120.0, now - lastPanTime)
                     velocity = CGPoint(
@@ -179,7 +179,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
 
             case .ended, .cancelled, .failed:
                 if panMode == .exposure {
-                    onExposureDrag?(translation.height, true)
+                    onExposureDrag?(translation.y, true)
                 } else {
                     let uiVel = gesture.velocity(in: view)
                     velocity = CGPoint(
