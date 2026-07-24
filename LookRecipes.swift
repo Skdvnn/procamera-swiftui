@@ -156,7 +156,9 @@ final class VolumeShutterObserver: NSObject, ObservableObject {
             queue: .main
         ) { [weak self] note in
             guard let pad = (note.object as? GCController)?.extendedGamepad else { return }
-            self?.bind(pad)
+            Task { @MainActor in
+                self?.bind(pad)
+            }
         }
         let disconnect = NotificationCenter.default.addObserver(
             forName: .GCControllerDidDisconnect,
@@ -164,7 +166,9 @@ final class VolumeShutterObserver: NSObject, ObservableObject {
             queue: .main
         ) { _ in }
         controllerObservers = [connect, disconnect]
-        GCController.controllers().compactMap(\.extendedGamepad).forEach(bind)
+        for pad in GCController.controllers().compactMap(\.extendedGamepad) {
+            bind(pad)
+        }
     }
 
     private func bind(_ pad: GCExtendedGamepad) {
