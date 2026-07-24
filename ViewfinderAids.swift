@@ -96,7 +96,7 @@ enum ViewfinderMonitor {
         matrix.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
         guard let tint = matrix.outputImage else { return image }
 
-        let soft = CIFilter.maximumCompositing()
+        let soft = CIFilter.sourceOverCompositing()
         soft.inputImage = tint
         soft.backgroundImage = image
         return soft.outputImage?.cropped(to: image.extent) ?? image
