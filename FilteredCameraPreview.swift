@@ -273,22 +273,38 @@ class FilteredPreviewView: UIView {
         currentCIImage = image
 
         if image != nil {
-            // Show Metal view, hide preview layer
             let wasHidden = metalView?.isHidden ?? true
             metalView?.isHidden = false
             previewLayer?.isHidden = true
-            // Defer the first draw until after layout so drawableSize is non-zero
+            // First enable after FX/film toggle: wait for a real drawable.
             if wasHidden {
-                DispatchQueue.main.async { [weak self] in
-                    self?.metalView?.setNeedsDisplay()
-                }
+                setNeedsLayout()
+                layoutIfNeeded()
+                metalView?.setNeedsLayout()
+                metalView?.layoutIfNeeded()
+                scheduleMetalDraw(attemptsLeft: 8)
             } else {
                 metalView?.setNeedsDisplay()
             }
         } else {
-            // Show preview layer, hide Metal view
             metalView?.isHidden = true
             previewLayer?.isHidden = false
+        }
+    }
+
+    /// Retries until MTKView has a non-zero drawable (avoids Metal crash on FX enable).
+    private func scheduleMetalDraw(attemptsLeft: Int) {
+        guard attemptsLeft > 0 else { return }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let metalView = self.metalView, !metalView.isHidden else { return }
+            self.layoutIfNeeded()
+            metalView.layoutIfNeeded()
+            if metalView.drawableSize.width > 1, metalView.drawableSize.height > 1,
+               metalView.bounds.width > 1, metalView.bounds.height > 1 {
+                metalView.setNeedsDisplay()
+            } else {
+                self.scheduleMetalDraw(attemptsLeft: attemptsLeft - 1)
+            }
         }
     }
 }
@@ -309,7 +325,13 @@ extension FilteredPreviewView: MTKViewDelegate {
         // First frame after un-hiding the MTKView often has a 0×0 drawable —
         // rendering into that crashes Metal when Lens FX/film filters turn on.
         let drawableSize = view.drawableSize
-        guard drawableSize.width > 1, drawableSize.height > 1 else { return }
+        guard drawableSize.width > 1, drawableSize.height > 1,
+              view.bounds.width > 1, view.bounds.height > 1 else {
+            return
+        }
+
+        // Texture must match drawable size
+        guard drawable.texture.width > 1, drawable.texture.height > 1 else { return }
 
         // Apply orientation correction for portrait mode
         // Video frames come in landscape orientation, rotate for portrait display

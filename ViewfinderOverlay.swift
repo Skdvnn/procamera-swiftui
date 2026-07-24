@@ -107,9 +107,9 @@ struct ViewfinderOverlay: View {
                 } label: {
                     Image(systemName: "water.waves")
                         .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(lensFX == .none
-                                         ? .white.opacity(0.8)
-                                         : Color(red: 0.55, green: 0.88, blue: 0.95))
+                        .foregroundColor(showFXMenu || lensFX != .none
+                                         ? Color(red: 0.55, green: 0.88, blue: 0.95)
+                                         : .white.opacity(0.8))
                 }
             }
             .padding(16)
@@ -495,12 +495,11 @@ struct LeicaFilmPicker: View {
     @Binding var isPresented: Bool
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
-    @State private var animateIn = false
 
     var body: some View {
-        // DSLR-style inset panel with context menu animation
+        // No withAnimation / scaleEffect — those transactions walk the camera
+        // tree (Metal shutter shaders) and can MetadataCache-crash on device.
         VStack(spacing: 0) {
-            // Header with inset style
             HStack {
                 Text("FILM")
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
@@ -525,7 +524,7 @@ struct LeicaFilmPicker: View {
                         Button(action: {
                             VFHaptics.click()
                             selectedFilter = filter
-                            dismissWithAnimation()
+                            isPresented = false
                         }) {
                             HStack(spacing: 8) {
                                 Text(selectedFilter == filter ? ">" : " ")
@@ -559,23 +558,6 @@ struct LeicaFilmPicker: View {
         }
         .background(dsPickerChrome())
         .frame(width: 180)
-        .scaleEffect(animateIn ? 1.0 : 0.8)
-        .opacity(animateIn ? 1.0 : 0)
-        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: animateIn)
-        .onAppear {
-            withAnimation {
-                animateIn = true
-            }
-        }
-    }
-
-    private func dismissWithAnimation() {
-        withAnimation(.easeOut(duration: 0.15)) {
-            animateIn = false
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            isPresented = false
-        }
     }
 
     private func isoLabel(for filter: FilmFilterMode) -> String {
@@ -633,17 +615,17 @@ struct LensFXPicker: View {
     @Binding var isPresented: Bool
 
     private let accent = Color(red: 0.55, green: 0.88, blue: 0.95)
-    @State private var animateIn = false
 
-    private var warpCases: [LensFXMode] {
-        LensFXMode.pickerCases.filter { $0 == .none || $0.pickerSection == .warp }
+    /// Stable lists — avoid rebuilding ForEach identity every body pass.
+    private static let warpCases: [LensFXMode] = LensFXMode.pickerCases.filter {
+        $0 == .none || $0.pickerSection == .warp
     }
-
-    private var lookCases: [LensFXMode] {
-        LensFXMode.pickerCases.filter { $0 != .none && $0.pickerSection == .look }
+    private static let lookCases: [LensFXMode] = LensFXMode.pickerCases.filter {
+        $0 != .none && $0.pickerSection == .look
     }
 
     var body: some View {
+        // Instant present — no spring/withAnimation (crashes over Metal camera chrome).
         VStack(spacing: 0) {
             HStack {
                 Text("LENS FX")
@@ -666,12 +648,12 @@ struct LensFXPicker: View {
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
                     sectionHeader("WARP")
-                    ForEach(warpCases, id: \.self) { fx in
+                    ForEach(Self.warpCases, id: \.self) { fx in
                         fxRow(fx)
                     }
 
                     sectionHeader("LOOK")
-                    ForEach(lookCases, id: \.self) { fx in
+                    ForEach(Self.lookCases, id: \.self) { fx in
                         fxRow(fx)
                     }
                 }
@@ -682,14 +664,6 @@ struct LensFXPicker: View {
         }
         .background(dsPickerChrome())
         .frame(width: 180)
-        .scaleEffect(animateIn ? 1.0 : 0.8)
-        .opacity(animateIn ? 1.0 : 0)
-        .animation(.spring(response: 0.25, dampingFraction: 0.8), value: animateIn)
-        .onAppear {
-            withAnimation {
-                animateIn = true
-            }
-        }
     }
 
     private func sectionHeader(_ title: String) -> some View {
@@ -697,7 +671,6 @@ struct LensFXPicker: View {
             Text(title)
                 .font(.system(size: 8, weight: .semibold, design: .monospaced))
                 .foregroundColor(.white.opacity(0.32))
-                .tracking(0.8)
             Spacer()
         }
         .padding(.horizontal, 14)
@@ -708,8 +681,13 @@ struct LensFXPicker: View {
     private func fxRow(_ fx: LensFXMode) -> some View {
         Button(action: {
             VFHaptics.click()
-            selectedFX = fx
-            dismissWithAnimation()
+            // Dismiss first, then apply FX on the next turn so the Metal
+            // preview pipeline doesn't enable mid-teardown.
+            isPresented = false
+            let chosen = fx
+            DispatchQueue.main.async {
+                selectedFX = chosen
+            }
         }) {
             HStack(spacing: 8) {
                 Text(selectedFX == fx ? ">" : " ")
@@ -734,15 +712,6 @@ struct LensFXPicker: View {
             .background(selectedFX == fx ? Color.white.opacity(0.05) : Color.clear)
         }
         .buttonStyle(.plain)
-    }
-
-    private func dismissWithAnimation() {
-        withAnimation(.easeOut(duration: 0.15)) {
-            animateIn = false
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-            isPresented = false
-        }
     }
 }
 
