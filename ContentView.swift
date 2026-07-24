@@ -451,9 +451,18 @@ struct ContentView: View {
                     .first { $0.isKeyWindow }
                 volumeShutter.start(in: host)
             }
+            syncCaptureContextToSystem()
         }
         .onDisappear {
             volumeShutter.stop()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .shutterDeepLink)) { note in
+            if let link = note.userInfo?["link"] as? ShutterDeepLink {
+                applyDeepLink(link)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .shutterHardwareShutter)) { _ in
+            handleCapture()
         }
         .onChange(of: focusPeaking) { _, on in
             camera.focusPeakingEnabled = on
@@ -474,6 +483,7 @@ struct ContentView: View {
             withTransaction(t) {
                 syncFilmFilter(newFilter)
             }
+            syncCaptureContextToSystem()
         }
         .onChange(of: lensFX) { _, newFX in
             var t = Transaction()
@@ -484,6 +494,7 @@ struct ContentView: View {
                     LensFXEngine.shared.setTouch(x: 0.5, y: 0.5, force: 0, velX: 0, velY: 0, active: false)
                 }
             }
+            syncCaptureContextToSystem()
         }
         .fullScreenCover(isPresented: $showPhotoBook) {
             CullLibraryView(store: gallery)
@@ -547,6 +558,64 @@ struct ContentView: View {
         isManualFocusEnabled = false
         exposureValue = 0
         camera.returnToAuto()
+    }
+
+    private func applyDeepLink(_ link: ShutterDeepLink) {
+        switch link {
+        case .openCamera:
+            showPhotoBook = false
+        case .capture:
+            showPhotoBook = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                handleCapture()
+            }
+        case .darkroom:
+            showPhotoBook = true
+        case .look(let filmName, let fxName):
+            showPhotoBook = false
+            if let filmName,
+               let film = FilmFilterMode.allCases.first(where: {
+                   $0.name.compare(filmName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+               }) {
+                filmFilter = film
+            }
+            if let fxName,
+               let fx = LensFXMode.allCases.first(where: {
+                   $0.name.compare(fxName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+               }) {
+                lensFX = fx
+            }
+        case .timer(let seconds):
+            timerSeconds = [0, 3, 10].contains(seconds) ? seconds : 3
+        case .peaking(let on):
+            focusPeaking = on
+        case .flip:
+            camera.switchCamera()
+        }
+        syncCaptureContextToSystem()
+    }
+
+    private func syncCaptureContextToSystem() {
+        let ctx = ShutterCaptureContext(
+            useFrontCamera: camera.currentCamera == .front,
+            filmName: filmFilter.name,
+            lensFXName: lensFX.name,
+            timerSeconds: timerSeconds,
+            peaking: focusPeaking
+        )
+        ctx.saveToAppGroup()
+        let lookNames = ([filmFilter.name] + LookRecipeStore.shared.recipes.map(\.film.name))
+            .filter { $0 != "None" }
+        var unique: [String] = []
+        for name in lookNames where !unique.contains(name) {
+            unique.append(name)
+        }
+        ShutterAppGroup.defaults.set(Array(unique.prefix(4)), forKey: "widget.lookNames")
+        if #available(iOS 18.0, *) {
+            Task {
+                try? await ShutterCameraCaptureIntent.updateAppContext(ctx)
+            }
+        }
     }
 
     /// Apply aspect crop then dual-write gallery + Photos.

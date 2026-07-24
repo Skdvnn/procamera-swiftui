@@ -22,6 +22,14 @@ Autonomous goal loops — ship what’s reasonable without diluting the Shutter 
 - [x] Volume-button shutter
 - [x] Long-exposure path label (HARDWARE vs STACKED)
 
+## Phase 3 — Deep iOS integration (build 25)
+- [x] Shortcuts / App Intents / URL schemes / quick actions
+- [x] Camera Control hardware shutter events
+- [x] Home + Lock Screen widgets + Control Center control
+- [x] Locked Camera Capture extension (iOS 18)
+- See `docs/IOS_INTEGRATION.md`
+
 ## Out of scope (still)
 - Video product, more Lens FX, Halide-grade scopes, social feed, fake aperture hardware
+- Becoming the system default Camera app icon (not allowed by iOS)
 - Full proof PDF export / session map (next candidate)

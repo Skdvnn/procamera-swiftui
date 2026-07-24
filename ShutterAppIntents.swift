@@ -1,0 +1,106 @@
+import AppIntents
+import Foundation
+
+// MARK: - Shortcuts / Siri App Intents (main app)
+
+struct OpenShutterCamIntent: AppIntent {
+    static var title: LocalizedStringResource = "Open Shutter Cam"
+    static var description = IntentDescription("Open the Shutter Cam viewfinder.")
+    static var openAppWhenRun: Bool = true
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        ShutterDeepLinkCenter.post(.openCamera)
+        return .result()
+    }
+}
+
+struct CaptureWithShutterIntent: AppIntent {
+    static var title: LocalizedStringResource = "Capture with Shutter Cam"
+    static var description = IntentDescription("Fire the shutter in Shutter Cam.")
+    static var openAppWhenRun: Bool = true
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        ShutterDeepLinkCenter.post(.capture)
+        return .result()
+    }
+}
+
+struct OpenDarkroomIntent: AppIntent {
+    static var title: LocalizedStringResource = "Open Darkroom"
+    static var description = IntentDescription("Open ShutterCraft Darkroom to cull shots.")
+    static var openAppWhenRun: Bool = true
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        ShutterDeepLinkCenter.post(.darkroom)
+        return .result()
+    }
+}
+
+struct ApplyShutterLookIntent: AppIntent {
+    static var title: LocalizedStringResource = "Apply Shutter Look"
+    static var description = IntentDescription("Apply a film stock and optional Lens FX.")
+    static var openAppWhenRun: Bool = true
+
+    @Parameter(title: "Film")
+    var film: String?
+
+    @Parameter(title: "Lens FX")
+    var lensFX: String?
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        ShutterDeepLinkCenter.post(.look(film: film, fx: lensFX))
+        return .result()
+    }
+}
+
+struct SetShutterTimerIntent: AppIntent {
+    static var title: LocalizedStringResource = "Set Shutter Timer"
+    static var description = IntentDescription("Set the self-timer (0, 3, or 10 seconds).")
+    static var openAppWhenRun: Bool = true
+
+    @Parameter(title: "Seconds")
+    var seconds: Int
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        ShutterDeepLinkCenter.post(.timer(seconds: seconds))
+        return .result()
+    }
+}
+
+struct ShutterAppShortcuts: AppShortcutsProvider {
+    static var appShortcuts: [AppShortcut] {
+        AppShortcut(
+            intent: OpenShutterCamIntent(),
+            phrases: [
+                "Open \(.applicationName)",
+                "Open \(.applicationName) camera",
+                "Shoot with \(.applicationName)"
+            ],
+            shortTitle: "Open Camera",
+            systemImageName: "camera.fill"
+        )
+        AppShortcut(
+            intent: CaptureWithShutterIntent(),
+            phrases: [
+                "Take a photo with \(.applicationName)",
+                "Capture with \(.applicationName)"
+            ],
+            shortTitle: "Capture",
+            systemImageName: "camera.shutter.button"
+        )
+        AppShortcut(
+            intent: OpenDarkroomIntent(),
+            phrases: [
+                "Open \(.applicationName) darkroom",
+                "Cull photos in \(.applicationName)"
+            ],
+            shortTitle: "Darkroom",
+            systemImageName: "square.stack.3d.up"
+        )
+    }
+}

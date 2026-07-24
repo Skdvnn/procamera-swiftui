@@ -253,6 +253,7 @@ class FilteredPreviewView: UIView {
 
         super.init(frame: frame)
         setupViews()
+        setupHardwareShutterEvents()
     }
 
     required init?(coder: NSCoder) {
@@ -266,6 +267,28 @@ class FilteredPreviewView: UIView {
 
         super.init(coder: coder)
         setupViews()
+        setupHardwareShutterEvents()
+    }
+
+    /// Camera Control / volume hardware shutter events (iOS 17.2+).
+    private var captureEventInteraction: AnyObject?
+
+    private func setupHardwareShutterEvents() {
+        if #available(iOS 17.2, *) {
+            let interaction = AVCaptureEventInteraction(
+                primary: { event in
+                    guard event.phase == .ended else { return }
+                    NotificationCenter.default.post(name: .shutterHardwareShutter, object: nil)
+                },
+                secondary: { event in
+                    guard event.phase == .ended else { return }
+                    NotificationCenter.default.post(name: .shutterHardwareShutter, object: nil)
+                }
+            )
+            interaction.isEnabled = true
+            addInteraction(interaction)
+            captureEventInteraction = interaction
+        }
     }
 
     private func setupViews() {
