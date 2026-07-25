@@ -414,6 +414,11 @@ struct ContentView: View {
                             onFlipCamera: {
                                 Haptics.click()
                                 camera.switchCamera()
+                                // Flip parks on wide @ 1x — reset ring/pinch state.
+                                focalLength = 24
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                                    zoomValue = camera.zoomFactor
+                                }
                             },
                             onSaveLook: {
                                 LookRecipeStore.shared.saveCurrent(film: filmFilter, lensFX: lensFX)
@@ -595,7 +600,16 @@ struct ContentView: View {
             }
             syncCaptureContextToSystem()
         }
-        .fullScreenCover(isPresented: $showPhotoBook) {
+        .fullScreenCover(isPresented: $showPhotoBook, onDismiss: {
+            // Resync after Darkroom deletes / cull finish.
+            photoCount = gallery.shots.count
+            if let last = gallery.shots.last,
+               let img = gallery.thumbnail(for: last) ?? gallery.image(for: last) {
+                lastCapturedImage = img
+            } else {
+                lastCapturedImage = nil
+            }
+        }) {
             CullLibraryView(store: gallery)
         }
         .sheet(isPresented: $showSettings) {
@@ -814,12 +828,12 @@ struct ContentView: View {
         recordShot(framed)
     }
 
-    private func handleFocusTap(_ point: CGPoint, in size: CGSize) {
+    private func handleFocusTap(_ viewNorm: CGPoint, devicePoint: CGPoint, in size: CGSize) {
         guard !isLocked else { return }
         Haptics.light()
-        camera.setFocus(at: point)
+        camera.setFocus(at: devicePoint)
         isManualFocusEnabled = false
-        focusPoint = CGPoint(x: point.x * size.width, y: point.y * size.height)
+        focusPoint = CGPoint(x: viewNorm.x * size.width, y: viewNorm.y * size.height)
         focusStartEV = exposureValue
         lastExposureHapticStep = Int((exposureValue * 10).rounded())
         isDraggingExposure = false
@@ -828,7 +842,7 @@ struct ContentView: View {
         // Tap also drops a decaying ripple when a morphic FX is active
         if lensFX.isTouchReactive {
             LensFXEngine.shared.setTouch(
-                x: point.x, y: point.y,
+                x: viewNorm.x, y: viewNorm.y,
                 force: 0.85, velX: 0, velY: 0,
                 active: false
             )
@@ -923,8 +937,8 @@ struct ContentView: View {
                     FilteredCameraPreview(
                         session: camera.session,
                         livePreview: camera.livePreview,
-                        onTap: { point in
-                            handleFocusTap(point, in: vfGeo.size)
+                        onTap: { viewNorm, devicePOI in
+                            handleFocusTap(viewNorm, devicePoint: devicePOI, in: vfGeo.size)
                         },
                         onPinch: { scale in
                             guard !isLocked else { return }
@@ -1196,14 +1210,12 @@ struct ContentView: View {
                 isoValue: $isoValue,
                 onFocalLengthChanged: { fl in
                     camera.switchToLens(focalLength: fl)
-                    let zoomMap: [Int: CGFloat] = [13: 0.5, 24: 1.0, 48: 2.0, 120: 5.0]
-                    zoomValue = zoomMap[fl] ?? CGFloat(fl) / 24.0
-                    let iso = isoValue
-                    let shutter = shutterSpeedIndex
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    // Device zoom is often 1.0 on UW/tele — don't invent 0.5/5.0 for pinch.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                        zoomValue = camera.zoomFactor
                         if camera.isManualExposure {
-                            camera.setISO(Float(iso))
-                            camera.setShutterSpeed(index: shutter)
+                            camera.setISO(Float(isoValue))
+                            camera.setShutterSpeed(index: shutterSpeedIndex, iso: Float(isoValue))
                         }
                     }
                 },

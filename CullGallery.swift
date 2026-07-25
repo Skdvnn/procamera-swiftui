@@ -1703,7 +1703,12 @@ struct CullSessionView: View {
                         creationDate: shot.date
                     )?.localIdentifier ?? shot.photosAssetLocalIdentifier
                 }
-                PhotosLibraryService.deleteAssets(localIdentifiers: rejectAssetIDs) { _ in
+                PhotosLibraryService.deleteAssets(localIdentifiers: rejectAssetIDs) { success in
+                    guard success else {
+                        finishMessage = "Photos delete failed — local frames kept."
+                        isFinishing = false
+                        return
+                    }
                     for shot in rejects { store.delete(shot) }
                     marks.clear(shotIDs: rejects.map(\.id) + keepers.map(\.id))
                     isFinishing = false

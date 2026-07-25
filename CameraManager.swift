@@ -130,6 +130,12 @@ class CameraManager: NSObject, ObservableObject {
     private var bakeTimeoutWork: DispatchWorkItem?
     /// Invalidates late HW-LE exposure callbacks after timeout/cancel.
     private var hwLongExposureToken: UUID?
+    /// Remembered WB / macro so lens+flip can reapply.
+    private var lockedWhiteBalanceMode: Int = 0
+    private var macroEnabledFlag = false
+    /// Orientation snapshotted when STACK LE starts (main-thread UIKit).
+    private var longExposureInterfaceOrientation: UIInterfaceOrientation = .portrait
+    private var longExposureWasFront = false
 
     // Film stocks — same enum as UI (`FilmFilterMode`).
     typealias FilmFilter = FilmFilterMode
@@ -268,6 +274,7 @@ class CameraManager: NSObject, ObservableObject {
         if session.canAddOutput(videoOutput) {
             session.addOutput(videoOutput)
             videoDataOutput = videoOutput
+            applyVideoMirroring()
         }
 
         // Select format with longest exposure that still supports custom exposure mode
@@ -520,6 +527,9 @@ class CameraManager: NSObject, ObservableObject {
             : nil
         // Remember manuals so thawing the LE custom exposure doesn't wipe Night/Street.
         exposureSnapshotBeforeLE = (manualShutterIndex, manualISOValue)
+        // Snapshot orientation on the calling thread (main) for STACK upright stills.
+        longExposureInterfaceOrientation = Self.currentInterfaceOrientation()
+        longExposureWasFront = (currentCamera == .front)
 
         // Get device's actual max exposure duration
         let maxHardwareDuration = CMTimeGetSeconds(device.activeFormat.maxExposureDuration)
@@ -658,7 +668,24 @@ class CameraManager: NSObject, ObservableObject {
 
     /// Running-average accumulator already stays in display range — just render it.
     private func normalizeAccumulator() -> UIImage? {
-        guard let accumulator = longExposureAccumulator, longExposureFrameCount > 0 else { return nil }
+        guard var accumulator = longExposureAccumulator, longExposureFrameCount > 0 else { return nil }
+
+        // Video buffers are sensor-native; match Metal preview upright mapping.
+        switch longExposureInterfaceOrientation {
+        case .portrait, .unknown:
+            accumulator = accumulator.oriented(.right)
+        case .portraitUpsideDown:
+            accumulator = accumulator.oriented(.left)
+        case .landscapeLeft:
+            accumulator = accumulator.oriented(.down)
+        case .landscapeRight:
+            break
+        @unknown default:
+            accumulator = accumulator.oriented(.right)
+        }
+        if longExposureWasFront {
+            accumulator = accumulator.oriented(.upMirrored)
+        }
 
         guard let cgImage = ciContext.createCGImage(accumulator, from: accumulator.extent) else {
             return nil
@@ -731,15 +758,52 @@ class CameraManager: NSObject, ObservableObject {
                     DispatchQueue.main.async {
                         self.currentCamera = newPosition
                         self.zoomFactor = 1.0
+                        // Front usually has no flash.
+                        if newPosition == .front {
+                            self.flashMode = .off
+                        }
                     }
-                    // Flip drops custom exposure on the new device — restore manuals.
+                    // Flip drops custom exposure / lock / WB — restore.
                     self.reapplyManualExposure(on: newDevice)
+                    self.reapplyLockWhiteBalanceMacro(on: newDevice)
+                    self.applyVideoMirroring(front: newPosition == .front)
                 }
 
                 self.session.commitConfiguration()
             } catch {
                 print("Error switching camera: \(error)")
             }
+        }
+    }
+
+    /// Re-apply AE/AF lock, WB, and macro after a device swap.
+    private func reapplyLockWhiteBalanceMacro(on device: AVCaptureDevice) {
+        do {
+            try device.lockForConfiguration()
+            if isAEAFLocked {
+                if device.isFocusModeSupported(.locked) { device.focusMode = .locked }
+                if device.isExposureModeSupported(.locked), !isManualExposure {
+                    device.exposureMode = .locked
+                }
+            }
+            if device.isAutoFocusRangeRestrictionSupported {
+                device.autoFocusRangeRestriction = macroEnabledFlag ? .near : .none
+            }
+            device.unlockForConfiguration()
+        } catch {
+            print("Error reapplying lock/macro: \(error)")
+        }
+        // WB needs its own lock cycle (gains API).
+        let mode = lockedWhiteBalanceMode
+        setWhiteBalance(mode: mode)
+    }
+
+    private func applyVideoMirroring(front: Bool? = nil) {
+        let useFront = front ?? (currentCamera == .front)
+        if let conn = videoDataOutput?.connection(with: .video),
+           conn.isVideoMirroringSupported {
+            conn.automaticallyAdjustsVideoMirroring = false
+            conn.isVideoMirrored = useFront
         }
     }
 
@@ -964,6 +1028,7 @@ class CameraManager: NSObject, ObservableObject {
 
     /// Restrict AF to near range when macro is on. Only applies in auto/continuous AF.
     func setMacroEnabled(_ enabled: Bool) {
+        macroEnabledFlag = enabled
         guard let device = videoDeviceInput?.device else { return }
 
         sessionQueue.async {
@@ -1111,14 +1176,17 @@ class CameraManager: NSObject, ObservableObject {
                                                     min(zoomWithinLens, newDevice.activeFormat.videoMaxZoomFactor))
                     newDevice.unlockForConfiguration()
 
-                    // Restore the shutter/ISO the UI is still showing
+                    // Restore the shutter/ISO / lock / WB the UI is still showing
                     self.reapplyManualExposure(on: newDevice)
+                    self.reapplyLockWhiteBalanceMacro(on: newDevice)
+                    self.applyVideoMirroring()
                 }
 
                 self.session.commitConfiguration()
 
+                let appliedZoom = newDevice.videoZoomFactor
                 DispatchQueue.main.async {
-                    self.zoomFactor = zoomWithinLens
+                    self.zoomFactor = appliedZoom
                 }
             } catch {
                 print("Error switching lens: \(error)")
@@ -1127,16 +1195,25 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     func cycleFlash() {
-        switch flashMode {
-        case .off:
-            flashMode = .on
-        case .on:
-            flashMode = .auto
-        case .auto:
-            flashMode = .off
-        @unknown default:
-            flashMode = .off
+        let supported = Set(photoOutput.supportedFlashModes)
+        let order: [AVCaptureDevice.FlashMode] = [.off, .on, .auto]
+        let start = order.firstIndex(of: flashMode) ?? 0
+        for offset in 1...order.count {
+            let next = order[(start + offset) % order.count]
+            if supported.contains(next) {
+                flashMode = next
+                return
+            }
         }
+        flashMode = .off
+    }
+
+    /// Flash mode safe for the current photo output (front often supports only off).
+    private func resolvedFlashMode() -> AVCaptureDevice.FlashMode {
+        let supported = photoOutput.supportedFlashModes
+        if supported.contains(flashMode) { return flashMode }
+        if supported.contains(.off) { return .off }
+        return supported.first ?? .off
     }
 
     // White balance presets
@@ -1161,6 +1238,7 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     func setWhiteBalance(mode: Int) {
+        lockedWhiteBalanceMode = mode
         guard let device = videoDeviceInput?.device else { return }
 
         sessionQueue.async {
@@ -1823,7 +1901,7 @@ class CameraManager: NSObject, ObservableObject {
             }
         }
 
-        settings.flashMode = flashMode
+        settings.flashMode = resolvedFlashMode()
         applyMinimalProcessing(to: &settings)
 
         // Snapshot UIKit orientation on main — never from sessionQueue.

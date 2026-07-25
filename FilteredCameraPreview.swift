@@ -38,7 +38,8 @@ final class LivePreviewBridge {
 struct FilteredCameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
     let livePreview: LivePreviewBridge
-    var onTap: ((CGPoint) -> Void)?
+    /// (viewNormalized 0…1, devicePointOfInterest) — UI reticle uses view; AF uses device.
+    var onTap: ((CGPoint, CGPoint) -> Void)?
     var onPinch: ((CGFloat) -> Void)?
     /// Drag / press on the viewfinder for morphic Lens FX.
     /// point: normalized UIKit (0…1), velocity: normalized deltas, active: finger down.
@@ -104,7 +105,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
     }
 
     class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var onTap: ((CGPoint) -> Void)?
+        var onTap: ((CGPoint, CGPoint) -> Void)?
         var onPinch: ((CGFloat) -> Void)?
         var onMorphTouch: ((CGPoint, CGPoint, Bool) -> Void)?
         var exposureDragEnabled: Bool
@@ -126,7 +127,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
         }
 
         init(
-            onTap: ((CGPoint) -> Void)?,
+            onTap: ((CGPoint, CGPoint) -> Void)?,
             onPinch: ((CGFloat) -> Void)?,
             onMorphTouch: ((CGPoint, CGPoint, Bool) -> Void)?,
             exposureDragEnabled: Bool,
@@ -165,13 +166,21 @@ struct FilteredCameraPreview: UIViewRepresentable {
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
             let location = gesture.location(in: gesture.view)
-            guard let view = gesture.view, view.bounds.width > 0, view.bounds.height > 0 else { return }
+            guard let view = gesture.view as? FilteredPreviewView,
+                  view.bounds.width > 0, view.bounds.height > 0 else { return }
 
-            let point = CGPoint(
+            let viewNorm = CGPoint(
                 x: location.x / view.bounds.width,
                 y: location.y / view.bounds.height
             )
-            onTap?(point)
+            // AVFoundation POI is in device sensor space — not raw view 0…1.
+            let devicePOI: CGPoint
+            if let layer = view.previewLayer {
+                devicePOI = layer.captureDevicePointConverted(fromLayerPoint: location)
+            } else {
+                devicePOI = viewNorm
+            }
+            onTap?(viewNorm, devicePOI)
         }
 
         @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
@@ -276,7 +285,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
 // MARK: - Custom Preview View with Metal rendering
 class FilteredPreviewView: UIView {
     private var metalView: MTKView?
-    private var previewLayer: AVCaptureVideoPreviewLayer?
+    fileprivate(set) var previewLayer: AVCaptureVideoPreviewLayer?
     private let ciContext: CIContext
     private var commandQueue: MTLCommandQueue?
     private var device: MTLDevice?
@@ -367,6 +376,20 @@ class FilteredPreviewView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         previewLayer?.frame = bounds
+        // Keep clean (non-Metal) preview upright in landscape.
+        if let conn = previewLayer?.connection {
+            let angle = CameraManager.videoRotationAngle(for: Self.interfaceOrientation())
+            if conn.isVideoRotationAngleSupported(angle) {
+                conn.videoRotationAngle = angle
+            }
+            let front = (session?.inputs.contains(where: {
+                ($0 as? AVCaptureDeviceInput)?.device.position == .front
+            }) ?? false)
+            if conn.isVideoMirroringSupported {
+                conn.automaticallyAdjustsVideoMirroring = false
+                conn.isVideoMirrored = front
+            }
+        }
         guard let metalView else { return }
         metalView.frame = bounds
         // Explicit drawable size — first FX toggle used to hit a 0×0 layer.
@@ -377,6 +400,14 @@ class FilteredPreviewView: UIView {
                 metalView.drawableSize = size
             }
         }
+    }
+
+    private static func interfaceOrientation() -> UIInterfaceOrientation {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        if let orient = scenes.first(where: { $0.activationState == .foregroundActive })?.interfaceOrientation {
+            return orient
+        }
+        return scenes.first?.interfaceOrientation ?? .portrait
     }
 
     func updateFilteredImage(_ image: CIImage?) {
@@ -423,16 +454,6 @@ class FilteredPreviewView: UIView {
 extension FilteredPreviewView: MTKViewDelegate {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         // Handle size changes if needed
-    }
-
-    /// Prefer the window scene's interface orientation over UIDevice (more reliable
-    /// while rotating, and correct when device orientation is faceUp/unknown).
-    private static func interfaceOrientation() -> UIInterfaceOrientation {
-        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        if let orient = scenes.first(where: { $0.activationState == .foregroundActive })?.interfaceOrientation {
-            return orient
-        }
-        return scenes.first?.interfaceOrientation ?? .portrait
     }
 
     func draw(in view: MTKView) {

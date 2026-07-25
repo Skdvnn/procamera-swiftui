@@ -322,6 +322,18 @@ def test_source_guards() -> None:
     check("no shutter under Darkroom", "guard !showPhotoBook, !showSettings" in content)
     check("zoom syncs clamped factor", "zoomValue = camera.setZoom(requested)" in content)
     check("flash auto icon", "bolt.badge.automatic.fill" in content)
+    check(
+        "tap-to-focus device POI",
+        "captureDevicePointConverted" in preview
+        and "devicePoint:" in content,
+    )
+    check("STACK LE upright", "longExposureInterfaceOrientation" in cam and "oriented(.right)" in cam)
+    check("flip reapplies lock/WB", "reapplyLockWhiteBalanceMacro" in cam)
+    check("video mirroring front", "applyVideoMirroring" in cam)
+    check("flash resolved to supported", "resolvedFlashMode" in cam)
+    check("cull delete requires Photos success", "Photos delete failed" in (ROOT / "CullGallery.swift").read_text())
+    check("darkroom dismiss resyncs count", "onDismiss:" in content and "photoCount = gallery.shots.count" in content)
+    check("preview layer rotation", "videoRotationAngle" in preview)
 
 
 # ── Landscape layout invariants ─────────────────────────────────────────────

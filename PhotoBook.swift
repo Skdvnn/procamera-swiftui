@@ -59,10 +59,7 @@ final class GalleryStore: ObservableObject {
     // MARK: Shots
 
     func add(image: UIImage, metadata: ShotMetadata) {
-        // Publish metadata immediately so Photos ID linking can't race the disk write.
-        shots.append(metadata)
-        saveIndex()
-
+        // Write JPEG/thumb first so Darkroom never opens a blank frame.
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self = self else { return }
 
@@ -73,16 +70,23 @@ final class GalleryStore: ObservableObject {
                let thumbData = thumb.jpegData(compressionQuality: 0.8) {
                 try? thumbData.write(to: self.thumbURL(for: metadata.id))
             }
-            // Nudge UI once thumbs land
             DispatchQueue.main.async {
-                self.objectWillChange.send()
+                self.shots.append(metadata)
+                self.saveIndex()
             }
         }
     }
 
     /// Attach the Photos library localIdentifier after dual-write completes.
-    func setPhotosAssetIdentifier(_ identifier: String?, for shotID: UUID) {
-        guard let i = shots.firstIndex(where: { $0.id == shotID }) else { return }
+    func setPhotosAssetIdentifier(_ identifier: String?, for shotID: UUID, attempt: Int = 0) {
+        guard let i = shots.firstIndex(where: { $0.id == shotID }) else {
+            // add() writes disk before publishing — Photos can finish first.
+            guard attempt < 20 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                self?.setPhotosAssetIdentifier(identifier, for: shotID, attempt: attempt + 1)
+            }
+            return
+        }
         shots[i].photosAssetLocalIdentifier = identifier
         saveIndex()
     }
