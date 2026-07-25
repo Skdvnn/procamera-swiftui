@@ -2,11 +2,15 @@
 
 The app installs as **"Shutter"** and requires iOS 17.0 or later.
 
-Every push to `master` (and `claude/*` branches) triggers the
-[Build IPA](../../actions/workflows/build-ipa.yml) workflow, which produces an
-**unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
+Every push to `master`, `claude/*`, or `cursor/*` (and PRs into `master`)
+triggers the [Build IPA](../../actions/workflows/build-ipa.yml) workflow, which
+produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
+
+**Build 31 phone test pack (natural capture / landscape / FX):**
+[`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
+from [`latest-build`](../../releases/tag/latest-build).
 
 ## Path A — You have a Mac (fastest)
 
