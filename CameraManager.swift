@@ -1189,12 +1189,12 @@ class CameraManager: NSObject, ObservableObject {
             tempTint.targetNeutral = CIVector(x: 5200, y: 15)
             if let result = tempTint.outputImage { outputImage = result }
 
-            // Skip bloom for preview performance
-            // let bloom = CIFilter.bloom()
-            // bloom.inputImage = outputImage
-            // bloom.radius = 5
-            // bloom.intensity = 0.3
-            // if let result = bloom.outputImage { outputImage = result }
+            // Light halation so preview matches still bake (cheaper than full still bloom).
+            let bloom = CIFilter.bloom()
+            bloom.inputImage = outputImage
+            bloom.radius = 3.2
+            bloom.intensity = 0.22
+            if let result = bloom.outputImage { outputImage = result }
 
         case .velvia50:
             let colorControls = CIFilter.colorControls()
@@ -1213,6 +1213,7 @@ class CameraManager: NSObject, ObservableObject {
             outputImage = applyInstantFilmLook(to: outputImage, preview: true)
         }
 
+        // Live grain stays a Canvas overlay (cheap, stable). Still bake adds CI grain.
         return outputImage
     }
 
@@ -1413,6 +1414,11 @@ class CameraManager: NSObject, ObservableObject {
             outputImage = applyInstantFilmLook(to: outputImage, preview: false)
         }
 
+        // Bake grain into film stills so the finder overlay isn't preview-only.
+        if filmFilter != .none {
+            outputImage = applyFilmGrain(to: outputImage, amount: 0.06)
+        }
+
         // Same retry / software-fallback path as Lens FX — a single createCGImage
         // can fail under live-camera GPU load and used to drop the film look silently.
         if let rendered = renderCIImageSafely(outputImage, scale: image.scale) {
@@ -1420,6 +1426,37 @@ class CameraManager: NSObject, ObservableObject {
         }
         print("FilmFilter: bake failed for \(filmFilter) — saving unfiltered still")
         return image
+    }
+
+    /// Soft luminance grain (shared by live preview + still bake).
+    private func applyFilmGrain(to image: CIImage, amount: Float) -> CIImage {
+        let extent = image.extent
+        guard !extent.isInfinite, extent.width > 1, extent.height > 1, amount > 0 else {
+            return image
+        }
+        let noise = CIFilter.randomGenerator()
+        guard var noiseImage = noise.outputImage?.cropped(to: extent) else { return image }
+
+        let mono = CIFilter.colorControls()
+        mono.inputImage = noiseImage
+        mono.saturation = 0
+        mono.contrast = 1.4
+        if let result = mono.outputImage { noiseImage = result }
+
+        let matrix = CIFilter.colorMatrix()
+        matrix.inputImage = noiseImage
+        let a = CGFloat(amount)
+        matrix.rVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        matrix.gVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        matrix.bVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        matrix.aVector = CIVector(x: a, y: a, z: a, w: 0)
+        matrix.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        guard let grainAlpha = matrix.outputImage else { return image }
+
+        let softLight = CIFilter.softLightBlendMode()
+        softLight.inputImage = grainAlpha
+        softLight.backgroundImage = image
+        return (softLight.outputImage ?? image).cropped(to: extent)
     }
 
     /// Finite-extent + downscale + software CIContext retries for still bakes.
@@ -1667,8 +1704,45 @@ class CameraManager: NSObject, ObservableObject {
         settings.flashMode = flashMode
         settings.maxPhotoDimensions = photoOutput.maxPhotoDimensions
         applyMinimalProcessing(to: &settings)
+        applyCaptureOrientation()
 
         photoOutput.capturePhoto(with: settings, delegate: self)
+    }
+
+    // MARK: - Capture / preview orientation
+
+    /// Match still orientation to what the finder shows (portrait + landscape).
+    private func applyCaptureOrientation() {
+        guard let connection = photoOutput.connection(with: .video) else { return }
+        let orient = Self.currentInterfaceOrientation()
+        let angle = Self.videoRotationAngle(for: orient)
+        if connection.isVideoRotationAngleSupported(angle) {
+            connection.videoRotationAngle = angle
+        }
+        // Front camera: mirror so selfies match the finder (preview layer mirrors).
+        if connection.isVideoMirroringSupported {
+            connection.automaticallyAdjustsVideoMirroring = false
+            connection.isVideoMirrored = (currentCamera == .front)
+        }
+    }
+
+    static func currentInterfaceOrientation() -> UIInterfaceOrientation {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        if let orient = scenes.first(where: { $0.activationState == .foregroundActive })?.interfaceOrientation {
+            return orient
+        }
+        return scenes.first?.interfaceOrientation ?? .portrait
+    }
+
+    /// Degrees clockwise for `AVCaptureConnection.videoRotationAngle`.
+    static func videoRotationAngle(for orient: UIInterfaceOrientation) -> CGFloat {
+        switch orient {
+        case .portrait: return 90
+        case .portraitUpsideDown: return 270
+        case .landscapeRight: return 0
+        case .landscapeLeft: return 180
+        default: return 90
+        }
     }
 
 

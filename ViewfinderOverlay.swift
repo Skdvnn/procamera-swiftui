@@ -48,6 +48,8 @@ struct ViewfinderOverlay: View {
     @Binding var filmFilter: FilmFilterMode
     @Binding var lensFX: LensFXMode
     @Binding var focusPeaking: Bool
+    /// Landscape: tuck pickers closer to the top chrome.
+    var compactChrome: Bool = false
     var onFlipCamera: (() -> Void)? = nil
     var onSaveLook: (() -> Void)? = nil
     @ObservedObject var lookStore: LookRecipeStore = .shared
@@ -60,8 +62,11 @@ struct ViewfinderOverlay: View {
         ZStack {
             GeometryReader { geo in
                 ZStack {
-                    FilmGrainOverlay()
-                        .opacity(0.3)
+                    // Grain only when a film stock is active — matches still bake.
+                    if filmFilter != .none {
+                        FilmGrainOverlay()
+                            .opacity(0.32)
+                    }
 
                     if lensFX == .vhs {
                         ScanlineShaderOverlay()
@@ -193,8 +198,8 @@ struct ViewfinderOverlay: View {
                     isPresented: $showFilmMenu,
                     onSaveLook: { onSaveLook?() }
                 )
-                .padding(.trailing, 16)
-                .padding(.top, 100)
+                .padding(.trailing, compactChrome ? 10 : 16)
+                .padding(.top, compactChrome ? 48 : 100)
             }
         }
         .overlay(alignment: .topTrailing) {
@@ -203,8 +208,8 @@ struct ViewfinderOverlay: View {
                     selectedFX: $lensFX,
                     isPresented: $showFXMenu
                 )
-                .padding(.trailing, 16)
-                .padding(.top, 140)
+                .padding(.trailing, compactChrome ? 10 : 16)
+                .padding(.top, compactChrome ? 72 : 140)
             }
         }
         .overlay(alignment: .topTrailing) {
@@ -216,8 +221,8 @@ struct ViewfinderOverlay: View {
                     isPresented: $showRecipeMenu,
                     onSaveCurrent: { onSaveLook?() }
                 )
-                .padding(.trailing, 16)
-                .padding(.top, 180)
+                .padding(.trailing, compactChrome ? 10 : 16)
+                .padding(.top, compactChrome ? 96 : 180)
             }
         }
     }

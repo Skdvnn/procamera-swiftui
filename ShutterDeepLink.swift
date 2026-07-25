@@ -74,14 +74,47 @@ extension Notification.Name {
     static let shutterHardwareShutter = Notification.Name("shutter.hardwareShutter")
 }
 
+/// Posts deep links immediately once a subscriber is ready; otherwise queues them
+/// so cold-start shortcuts/widgets aren't dropped before ContentView mounts.
 enum ShutterDeepLinkCenter {
+    private static let lock = NSLock()
+    private static var pending: [ShutterDeepLink] = []
+    private static var isReceiving = false
+
     static func post(_ link: ShutterDeepLink) {
-        NotificationCenter.default.post(name: .shutterDeepLink, object: nil, userInfo: ["link": link])
+        lock.lock()
+        if isReceiving {
+            lock.unlock()
+            NotificationCenter.default.post(
+                name: .shutterDeepLink,
+                object: nil,
+                userInfo: ["link": link]
+            )
+        } else {
+            pending.append(link)
+            lock.unlock()
+        }
     }
 
     static func post(url: URL) {
         guard let link = ShutterDeepLink.parse(url) else { return }
         post(link)
+    }
+
+    /// Call from ContentView.onAppear after `.onReceive` is installed.
+    static func beginReceiving() {
+        lock.lock()
+        isReceiving = true
+        let queued = pending
+        pending.removeAll()
+        lock.unlock()
+        for link in queued {
+            NotificationCenter.default.post(
+                name: .shutterDeepLink,
+                object: nil,
+                userInfo: ["link": link]
+            )
+        }
     }
 }
 
@@ -91,5 +124,20 @@ enum ShutterAppGroup {
 
     static var defaults: UserDefaults {
         UserDefaults(suiteName: id) ?? .standard
+    }
+
+    /// Widget look payload: `"Film Name|FX Name"` (FX may be empty / None).
+    static func encodeLook(film: String, fx: String?) -> String {
+        let f = film.isEmpty ? "None" : film
+        let x = (fx?.isEmpty == false) ? fx! : "None"
+        return "\(f)|\(x)"
+    }
+
+    static func decodeLook(_ raw: String) -> (film: String, fx: String?) {
+        let parts = raw.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+        let film = parts.first.map(String.init) ?? raw
+        let fx = parts.count > 1 ? String(parts[1]) : nil
+        let cleanFX = (fx == nil || fx == "None" || fx == "—") ? nil : fx
+        return (film, cleanFX)
     }
 }

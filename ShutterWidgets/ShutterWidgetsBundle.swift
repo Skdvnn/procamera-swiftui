@@ -101,7 +101,12 @@ struct ShutterLaunchView: View {
 
 struct ShutterLooksProvider: TimelineProvider {
     func placeholder(in context: Context) -> ShutterLooksEntry {
-        ShutterLooksEntry(date: Date(), looks: ["Portra 400", "Tri-X 400", "Velvia 50", "Clean"])
+        ShutterLooksEntry(date: Date(), looks: [
+            ShutterLookChip(raw: "Portra 400|None", film: "Portra 400", fx: nil),
+            ShutterLookChip(raw: "Tri-X 400|None", film: "Tri-X 400", fx: nil),
+            ShutterLookChip(raw: "Velvia 50|None", film: "Velvia 50", fx: nil),
+            ShutterLookChip(raw: "None|None", film: "Clean", fx: nil)
+        ])
     }
     func getSnapshot(in context: Context, completion: @escaping (ShutterLooksEntry) -> Void) {
         completion(current())
@@ -112,14 +117,36 @@ struct ShutterLooksProvider: TimelineProvider {
     private func current() -> ShutterLooksEntry {
         let defaults = ShutterAppGroup.defaults
         let saved = defaults.stringArray(forKey: "widget.lookNames") ?? []
-        let looks = saved.isEmpty ? ["Portra 400", "Tri-X 400", "Velvia 50", "None"] : Array(saved.prefix(4))
+        let tokens = saved.isEmpty
+            ? ["Portra 400|None", "Tri-X 400|None", "Velvia 50|None", "None|None"]
+            : Array(saved.prefix(4))
+        let looks = tokens.map { raw -> ShutterLookChip in
+            // Backward compatible: plain film name without "|" still works.
+            if raw.contains("|") {
+                let decoded = ShutterAppGroup.decodeLook(raw)
+                return ShutterLookChip(raw: raw, film: decoded.film, fx: decoded.fx)
+            }
+            return ShutterLookChip(raw: raw, film: raw == "None" ? "Clean" : raw, fx: nil)
+        }
         return ShutterLooksEntry(date: Date(), looks: looks)
+    }
+}
+
+struct ShutterLookChip: Hashable {
+    let raw: String
+    let film: String
+    let fx: String?
+    var title: String {
+        if let fx, fx != "None", !fx.isEmpty {
+            return "\(film) · \(fx)"
+        }
+        return film
     }
 }
 
 struct ShutterLooksEntry: TimelineEntry {
     let date: Date
-    let looks: [String]
+    let looks: [ShutterLookChip]
 }
 
 struct ShutterLooksWidget: Widget {
@@ -129,7 +156,7 @@ struct ShutterLooksWidget: Widget {
                 .containerBackground(for: .widget) { Color.black }
         }
         .configurationDisplayName("Shutter Looks")
-        .description("One-tap film looks.")
+        .description("One-tap film + FX looks.")
         .supportedFamilies([.systemMedium, .systemLarge])
     }
 }
@@ -145,11 +172,16 @@ struct ShutterLooksView: View {
                 .padding(.horizontal, 4)
 
             LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                ForEach(entry.looks, id: \.self) { name in
-                    Link(destination: ShutterDeepLink.look(film: name == "None" || name == "Clean" ? "None" : name, fx: nil).url) {
-                        Text(name.uppercased())
-                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                ForEach(entry.looks, id: \.raw) { chip in
+                    Link(destination: ShutterDeepLink.look(
+                        film: chip.film == "Clean" ? "None" : chip.film,
+                        fx: chip.fx
+                    ).url) {
+                        Text(chip.title.uppercased())
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
                             .foregroundStyle(.white)
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.8)
                             .frame(maxWidth: .infinity, minHeight: 36)
                             .background(
                                 RoundedRectangle(cornerRadius: 8)

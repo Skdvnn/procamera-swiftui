@@ -244,6 +244,7 @@ struct ContentView: View {
     /// Shared collapsed chrome metrics — histogram floats above fade/deck.
     private enum CollapsedChrome {
         static let deckHeight: CGFloat = 88
+        static let landscapeDeckHeight: CGFloat = 72
         static let fadeHeight: CGFloat = 48
         /// Approximate RefractiveGlassInfoBar height (pad + hist + readouts).
         static let infoBarHeight: CGFloat = 56
@@ -344,7 +345,7 @@ struct ContentView: View {
                             .padding(.horizontal, effectiveBottomCollapsed ? 6 : DS.pageMargin)
 
                         if effectiveBottomCollapsed {
-                            collapsedBottomOverlay(safeBottom: safeBottom)
+                            collapsedBottomOverlay(safeBottom: safeBottom, compact: isLandscape)
                                 .transition(
                                     .asymmetric(
                                         insertion: .opacity.combined(with: .offset(y: 14)),
@@ -367,10 +368,11 @@ struct ContentView: View {
                                 isLocked: isLocked,
                                 isManualExposure: camera.isManualExposure,
                                 naturalCapture: naturalCapture,
+                                compact: isLandscape,
                                 onToggleLock: { toggleAEAFLock() },
                                 onReturnToAuto: { returnToAuto() }
                             )
-                            .padding(.horizontal, 14)
+                            .padding(.horizontal, isLandscape ? 10 : 14)
                             .padding(.bottom, CollapsedChrome.histogramBottomPad(safeBottom: safeBottom))
                             .contentShape(Rectangle())
                             .simultaneousGesture(bottomDeckSwipe)
@@ -390,6 +392,7 @@ struct ContentView: View {
                             filmFilter: $filmFilter,
                             lensFX: $lensFX,
                             focusPeaking: $focusPeaking,
+                            compactChrome: isLandscape,
                             onFlipCamera: {
                                 Haptics.click()
                                 camera.switchCamera()
@@ -469,6 +472,16 @@ struct ContentView: View {
                         bottomDeckDrag = 0
                     }
                 }
+                let orient = CameraManager.currentInterfaceOrientation()
+                LensFXEngine.shared.setPreviewBufferRotation(
+                    PreviewBufferRotation.from(interfaceOrientation: orient)
+                )
+            }
+            .onAppear {
+                let orient = CameraManager.currentInterfaceOrientation()
+                LensFXEngine.shared.setPreviewBufferRotation(
+                    PreviewBufferRotation.from(interfaceOrientation: orient)
+                )
             }
         }
         .statusBarHidden(false)
@@ -513,6 +526,8 @@ struct ContentView: View {
                 volumeShutter.start(in: host)
             }
             syncCaptureContextToSystem()
+            // Drain cold-start shortcuts / widgets posted before we subscribed.
+            ShutterDeepLinkCenter.beginReceiving()
         }
         .onDisappear {
             volumeShutter.stop()
@@ -725,13 +740,24 @@ struct ContentView: View {
             peaking: focusPeaking
         )
         ctx.saveToAppGroup()
-        let lookNames = ([filmFilter.name] + LookRecipeStore.shared.recipes.map(\.film.name))
-            .filter { $0 != "None" }
-        var unique: [String] = []
-        for name in lookNames where !unique.contains(name) {
-            unique.append(name)
+        // Encode film|fx so widget deep links restore full looks, not film-only.
+        var encoded: [String] = []
+        func push(film: FilmFilterMode, fx: LensFXMode) {
+            guard film != .none || fx != .none else { return }
+            let token = ShutterAppGroup.encodeLook(film: film.name, fx: fx.name)
+            if !encoded.contains(token) { encoded.append(token) }
         }
-        ShutterAppGroup.defaults.set(Array(unique.prefix(4)), forKey: "widget.lookNames")
+        push(film: filmFilter, fx: lensFX)
+        for recipe in LookRecipeStore.shared.recipes {
+            push(film: recipe.film, fx: recipe.lensFX)
+        }
+        // Fallback film-only chips if the user has no active look yet.
+        if encoded.isEmpty {
+            for name in ["Portra 400", "Tri-X 400", "Velvia 50"] {
+                encoded.append(ShutterAppGroup.encodeLook(film: name, fx: nil))
+            }
+        }
+        ShutterAppGroup.defaults.set(Array(encoded.prefix(4)), forKey: "widget.lookNames")
         if #available(iOS 18.0, *) {
             Task {
                 try? await ShutterCameraCaptureIntent.updateAppContext(ctx)
@@ -1008,9 +1034,10 @@ struct ContentView: View {
     }
 
     /// Compact shutter row — gradient runs UNDER the controls (not only above them).
-    private func collapsedBottomOverlay(safeBottom: CGFloat) -> some View {
+    private func collapsedBottomOverlay(safeBottom: CGFloat, compact: Bool = false) -> some View {
         let bottomPad = CollapsedChrome.bottomPad(safeBottom: safeBottom)
-        let underlayHeight = CollapsedChrome.fadeHeight + CollapsedChrome.deckHeight + bottomPad
+        let deckH = compact ? CollapsedChrome.landscapeDeckHeight : CollapsedChrome.deckHeight
+        let underlayHeight = CollapsedChrome.fadeHeight + deckH + bottomPad
 
         return ZStack(alignment: .bottom) {
             // Soft fade under the whole bottom chrome band (fade + deck + home indicator)
@@ -1037,7 +1064,7 @@ struct ContentView: View {
                     .allowsHitTesting(false)
 
                 bottomCompactDeck
-                    .frame(minHeight: CollapsedChrome.deckHeight)
+                    .frame(minHeight: deckH)
                     .offset(y: bottomDeckDrag * 0.12)
                     .opacity(1.0 - min(abs(bottomDeckDrag) / 90.0, 0.45))
 
@@ -1413,20 +1440,22 @@ struct RefractiveGlassInfoBar: View {
     var isLocked: Bool = false
     var isManualExposure: Bool = false
     var naturalCapture: Bool = true
+    /// Landscape: denser readout, smaller histogram.
+    var compact: Bool = false
     var onToggleLock: (() -> Void)? = nil
     var onReturnToAuto: (() -> Void)? = nil
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: compact ? 8 : 10) {
             // Histogram in glass container
             GlassHistogram(exposureValue: exposureValue, bins: histogram)
-                .frame(width: 70, height: 40)
+                .frame(width: compact ? 54 : 70, height: compact ? 32 : 40)
 
             // Format info
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(captureFormat.label)
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .font(.system(size: compact ? 9 : 10, weight: .medium, design: .monospaced))
                         .foregroundColor(captureFormat == .raw ? DS.accent : .white)
                     if naturalCapture {
                         Text("NAT")

@@ -118,6 +118,24 @@ struct MorphTouchState {
     var isActive: Bool = false
 }
 
+/// How the live preview rotates the sensor buffer to upright UI.
+/// Must stay in sync with `FilteredCameraPreview` orientation mapping.
+enum PreviewBufferRotation: Equatable {
+    case identity       // landscapeRight — sensor-native
+    case rotate180      // landscapeLeft
+    case rotateRight    // portrait
+    case rotateLeft     // portraitUpsideDown
+
+    static func from(interfaceOrientation: UIInterfaceOrientation) -> PreviewBufferRotation {
+        switch interfaceOrientation {
+        case .landscapeRight: return .identity
+        case .landscapeLeft: return .rotate180
+        case .portraitUpsideDown: return .rotateLeft
+        default: return .rotateRight
+        }
+    }
+}
+
 // MARK: - Lens FX Engine
 final class LensFXEngine {
     static let shared = LensFXEngine()
@@ -148,8 +166,16 @@ final class LensFXEngine {
     /// Scoped overrides while applying an effect (still bake freezes these).
     private var applyTouchOverride: MorphTouchState?
     private var applyUprightTouch = false
+    /// Live buffer→UI rotation; updated from the preview / ContentView.
+    private var previewBufferRotation: PreviewBufferRotation = .rotateRight
 
     private init() {}
+
+    func setPreviewBufferRotation(_ rotation: PreviewBufferRotation) {
+        lock.lock()
+        previewBufferRotation = rotation
+        lock.unlock()
+    }
 
     var touch: MorphTouchState {
         touchLock.lock()
@@ -217,10 +243,8 @@ final class LensFXEngine {
         }
     }
 
-    /// Map viewfinder-normalized UIKit point → CIImage point.
-    /// Live FX runs on the landscape pixel buffer before the preview rotates
-    /// with `.oriented(.right)` for portrait, so invert that here.
-    /// Still bakes use upright pixels — UIKit top-left → CI bottom-left.
+    /// Map viewfinder-normalized UIKit point → CIImage point on the live buffer
+    /// (or upright still). Inverts the same rotation `FilteredCameraPreview` applies.
     private func touchCenter(in extent: CGRect, touch: MorphTouchState) -> CGPoint {
         if applyUprightTouch {
             return CGPoint(
@@ -228,11 +252,28 @@ final class LensFXEngine {
                 y: extent.minY + (1.0 - touch.y) * extent.height
             )
         }
-        let bufNX = touch.y
-        let bufNY = touch.x
+        let rotation = previewBufferRotation
+        let nx: CGFloat
+        let ny: CGFloat
+        switch rotation {
+        case .rotateRight:
+            // Preview: buffer.oriented(.right). Existing mapping.
+            nx = touch.y
+            ny = touch.x
+        case .rotateLeft:
+            nx = 1.0 - touch.y
+            ny = 1.0 - touch.x
+        case .rotate180:
+            nx = 1.0 - touch.x
+            ny = 1.0 - touch.y
+        case .identity:
+            // Sensor-native landscape: UIKit top-left → CI bottom-left.
+            nx = touch.x
+            ny = 1.0 - touch.y
+        }
         return CGPoint(
-            x: extent.minX + bufNX * extent.width,
-            y: extent.minY + bufNY * extent.height
+            x: extent.minX + nx * extent.width,
+            y: extent.minY + ny * extent.height
         )
     }
 

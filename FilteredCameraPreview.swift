@@ -406,7 +406,11 @@ extension FilteredPreviewView: MTKViewDelegate {
 
         // Video buffers are sensor-native (landscape). Map to the *interface*
         // orientation so portrait + landscape left/right all read upright.
-        switch Self.interfaceOrientation() {
+        // Keep LensFXEngine touch mapping in lockstep with this rotation.
+        let orient = Self.interfaceOrientation()
+        let rotation = PreviewBufferRotation.from(interfaceOrientation: orient)
+        LensFXEngine.shared.setPreviewBufferRotation(rotation)
+        switch orient {
         case .portrait, .unknown:
             ciImage = ciImage.oriented(.right)
         case .portraitUpsideDown:

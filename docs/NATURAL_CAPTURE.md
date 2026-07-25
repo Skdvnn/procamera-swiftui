@@ -1,6 +1,6 @@
 # Natural capture — minimize Apple processing
 
-Build **29** · Branch `cursor/natural-capture-landscape-1a29`
+Build **30** · Branch `cursor/natural-capture-landscape-1a29`
 
 ## Thesis
 iPhone stills get heavy computational photography (Smart HDR / Deep Fusion / tone fusion). Shutter’s default is **natural**: deliver something closer to what the sensor saw.
@@ -18,12 +18,16 @@ There is **no public API** to disable Deep Fusion by name. The real levers:
 
 **Film / Lens FX always bake** into the processed HEIC/JPEG when selected (WYSIWYG). Natural only reduces Apple’s ISP fusion — it does not strip looks. RAW DNG stays clean.
 
-## Effects safety (build 29)
+## Effects safety (build 29–30)
 - Thread-safe bake gate so live FX doesn’t fight still bake on the GPU
 - Film still render uses the same downscale + software CIContext retries as Lens FX
 - MTKView size-guards before `currentDrawable`; explicit `drawableSize` on layout
 - Comic/Toon has a posterize+edges fallback if `CIComicEffect` is missing
 - Live preview FX runs in an autoreleasepool with extent guards
+- Photo connection orientation matches finder (portrait + landscape); front mirror set
+- Touch-reactive FX map through the same buffer rotation as the preview
+- CineStill preview gets light bloom; film grain overlays only when a stock is active and bakes into stills
+- Cold-start deep links queue until ContentView is ready; widget looks encode `film|fx`
 
 ## Product
 - Settings → **Image honesty** → Natural capture (default ON)
