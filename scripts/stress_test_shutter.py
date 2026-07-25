@@ -581,6 +581,16 @@ def test_source_guards() -> None:
     check("no LookRecipeStore observe on chrome", "@ObservedObject private var lookStore" not in chrome_pre)
     check("no activePicker on overlay", "activePicker" not in chrome_pre)
 
+    # Build 60 — WYSIWYG still bake must not ship clean looks
+    check("bakeLooks returns optional", "-> UIImage?" in cam[cam.find("private func bakeLooksForCapture"):cam.find("private func bakeLooksForCapture")+250])
+    check("no silent clean look save", "saved clean look" not in cam)
+    check("bake fail try again note", "bake failed — try again" in cam)
+    check("pause live preview for bake", "Free live Metal/CI so the still bake" in cam)
+    check("timer freezes film", "frozenFilmFilter" in content and "frozenLensFX" in content)
+    check("picker bindings sync camera", "camera.selectedFilmFilter = $0" in content)
+    check("film bake prefers CGImage", "Prefer CGImage → CIImage" in cam)
+
+
 
 
 
@@ -661,11 +671,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 59", m is not None and int(ver) >= 59, ver)
+    check("Info.plist build >= 60", m is not None and int(ver) >= 60, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 59+", any(v >= 59 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 60+", any(v >= 60 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

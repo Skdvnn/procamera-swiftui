@@ -1806,9 +1806,17 @@ class CameraManager: NSObject, ObservableObject {
 
     private func bakeFilmFilter(_ filmFilter: FilmFilter, onto image: UIImage) -> (image: UIImage, ok: Bool) {
         guard filmFilter != .none else { return (image, true) }
-        guard var ciImage = CIImage(image: image) else { return (image, false) }
+        // Prefer CGImage → CIImage (same as LensFX bake). CIImage(image:) can
+        // fail or drop orientation under HEIC / GPU pressure.
+        let base: CIImage?
+        if let cg = image.cgImage {
+            base = CIImage(cgImage: cg)
+        } else {
+            base = CIImage(image: image)
+        }
+        guard var ciImage = base else { return (image, false) }
 
-        // Bake UIImage orientation into pixels; CIImage(image:) ignores it
+        // Bake UIImage orientation into pixels; CIImage(cgImage:) ignores it
         if image.imageOrientation != .up {
             ciImage = ciImage.oriented(image.imageOrientation.cgImageOrientation)
         }
@@ -2225,32 +2233,90 @@ class CameraManager: NSObject, ObservableObject {
             print("LensFX: recovered bake at 1280px for \(lensFX.name)")
             return (rendered, true)
         }
-        print("LensFX: BAKE FAILED for \(lensFX.name) — saving unfiltered still")
+        print("LensFX: BAKE FAILED for \(lensFX.name)")
         return (image, false)
     }
 
-    /// Bake film then FX; surface a toast note when either look fails.
+    /// Downscale a UIImage for last-ditch look bake recovery.
+    private func downscaledUIImage(_ image: UIImage, maxDimension: CGFloat) -> UIImage? {
+        let size = image.size
+        let longest = max(size.width, size.height)
+        guard longest > maxDimension, longest > 1 else { return image }
+        let scale = maxDimension / longest
+        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
+        return renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: newSize))
+        }
+    }
+
+    /// Bake film then FX. Returns nil when a requested look cannot be applied —
+    /// never silently ship a clean still that disagrees with the preview.
     private func bakeLooksForCapture(
         film: FilmFilter,
         fx: LensFXMode,
         touch: MorphTouchState?,
         onto image: UIImage
-    ) -> UIImage {
+    ) -> UIImage? {
         var working = image
-        var notes: [String] = []
+        var filmOK = film == .none
+        var fxOK = fx == .none
+
         if film != .none {
             let baked = bakeFilmFilter(film, onto: working)
-            working = baked.image
-            if !baked.ok { notes.append("Film bake failed") }
+            if baked.ok {
+                working = baked.image
+                filmOK = true
+            } else if let small = downscaledUIImage(working, maxDimension: 2048) {
+                let retry = bakeFilmFilter(film, onto: small)
+                if retry.ok {
+                    working = retry.image
+                    filmOK = true
+                    print("FilmFilter: recovered bake at 2048px for \(film)")
+                }
+            }
         }
+
         if fx != .none {
             let baked = bakeLensFX(fx, onto: working, touch: touch)
-            working = baked.image
-            if !baked.ok { notes.append("FX bake failed") }
+            if baked.ok {
+                working = baked.image
+                fxOK = true
+            } else if let small = downscaledUIImage(working, maxDimension: 1600) {
+                let retry = bakeLensFX(fx, onto: small, touch: touch)
+                if retry.ok {
+                    working = retry.image
+                    fxOK = true
+                    print("LensFX: recovered bake via UIImage downscale for \(fx.name)")
+                }
+            }
         }
-        if !notes.isEmpty {
-            let message = notes.joined(separator: " · ") + " — saved clean look"
+
+        // Requested look(s) must land. Partial success (film OK, FX fail) still
+        // fails the shot — preview showed both; shipping half is a lie.
+        guard filmOK, fxOK else {
+            var notes: [String] = []
+            if film != .none, !filmOK { notes.append("Film") }
+            if fx != .none, !fxOK { notes.append("FX") }
+            let message = (notes.isEmpty ? "Look" : notes.joined(separator: " + "))
+                + " bake failed — try again"
             DispatchQueue.main.async { self.captureNote = message }
+            print("bakeLooksForCapture FAILED film=\(film) fx=\(fx.name) filmOK=\(filmOK) fxOK=\(fxOK)")
+            return nil
+        }
+
+        if film != .none || fx != .none {
+            // Soft note only when we had to downscale to recover.
+            let shrunk = working.size.width + working.size.height
+                < image.size.width + image.size.height - 1
+            if shrunk {
+                DispatchQueue.main.async {
+                    self.captureNote = "Look baked at lower res"
+                }
+            }
         }
         return working
     }
@@ -2290,6 +2356,12 @@ class CameraManager: NSObject, ObservableObject {
 
         if needsFXBake {
             setBakingStill(true)
+            // Free live Metal/CI so the still bake can own the GPU.
+            pipelineLock.lock()
+            livePreviewActive = false
+            livePreviewFailStreak = 0
+            pipelineLock.unlock()
+            livePreview.push(nil)
         }
 
         print("LensFX capture: fx=\(captureLensFX.name) film=\(captureFilmFilter) format=\(captureFormat) bake=\(needsFXBake) natural=\(naturalCaptureEnabled) touchForce=\(captureTouch?.force ?? 0)")
@@ -2320,7 +2392,7 @@ class CameraManager: NSObject, ObservableObject {
                 let stillCurrent = self.bakeGeneration == gen
                 self.photoStateLock.unlock()
                 guard stillCurrent else { return }
-                let filteredImage: UIImage
+                let filteredImage: UIImage?
                 if needsFXBake {
                     filteredImage = self.bakeLooksForCapture(
                         film: captureFilmFilter,
@@ -2331,7 +2403,11 @@ class CameraManager: NSObject, ObservableObject {
                 } else {
                     filteredImage = image
                 }
-                print("LensFX capture done: out=\(filteredImage.size) orient=\(filteredImage.imageOrientation.rawValue)")
+                if let filteredImage {
+                    print("LensFX capture done: out=\(filteredImage.size) orient=\(filteredImage.imageOrientation.rawValue)")
+                } else {
+                    print("LensFX capture BAKE FAILED — not saving clean still")
+                }
                 self.finishUserBake(filteredImage, generation: gen)
             }
         }

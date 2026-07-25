@@ -241,6 +241,9 @@ struct ContentView: View {
     @State private var timerGeneration = UUID()
     @State private var frozenCaptureIsLE = false
     @State private var frozenLEDuration: Double? = nil
+    /// Film/FX frozen at timer arm — countdown must not change the look mid-flight.
+    @State private var frozenFilmFilter: FilmFilterMode? = nil
+    @State private var frozenLensFX: LensFXMode? = nil
     @State private var lastShutterEventAt: CFAbsoluteTime = 0
     @State private var photoCount = 0
     @State private var lastCapturedImage: UIImage?
@@ -442,10 +445,29 @@ struct ContentView: View {
     /// UIKit overFullScreen — does NOT flip ContentView @State, so the Metal
     /// finder tree is not AttributeGraph-invalidated on open (device crash fix).
     private func toggleChromePicker(_ menu: ChromePickerMenu) {
+        // Bindings write ContentView AND CameraManager immediately — UIKit host
+        // Bindings can lag SwiftUI onChange, which left stills baking .none.
+        let filmBinding = Binding<FilmFilterMode>(
+            get: { filmFilter },
+            set: {
+                filmFilter = $0
+                camera.selectedFilmFilter = $0
+            }
+        )
+        let fxBinding = Binding<LensFXMode>(
+            get: { lensFX },
+            set: {
+                lensFX = $0
+                camera.selectedLensFX = $0
+                if !$0.isTouchReactive {
+                    LensFXEngine.shared.clearStickyTouch()
+                }
+            }
+        )
         ChromePickerGate.toggle(
             menu,
-            filmFilter: $filmFilter,
-            lensFX: $lensFX,
+            filmFilter: filmBinding,
+            lensFX: fxBinding,
             focusPeaking: $focusPeaking,
             shootMode: ShootMode(rawValue: shootModeRaw),
             onApplyShootMode: { applyShootMode($0) },
@@ -1830,6 +1852,10 @@ struct ContentView: View {
             frozenMorphTouch = armFX.isTouchReactive
                 ? LensFXEngine.shared.snapshotForCapture()
                 : nil
+            // Freeze the look the preview is showing — changing film/FX mid-countdown
+            // used to bake a different (or .none) look than the finder.
+            frozenFilmFilter = filmFilter
+            frozenLensFX = lensFX
             // Freeze LE intent so shutter-speed changes during countdown don't alter the shot.
             frozenCaptureIsLE = isLongExposureShutterIndex
             frozenLEDuration = longExposureDurationIfAny
@@ -1847,6 +1873,8 @@ struct ContentView: View {
         timerWorkItem = nil
         timerCountdown = 0
         frozenMorphTouch = nil
+        frozenFilmFilter = nil
+        frozenLensFX = nil
         frozenCaptureIsLE = false
         frozenLEDuration = nil
     }
@@ -1871,11 +1899,14 @@ struct ContentView: View {
     private func captureNow() {
         isCapturing = true
         Haptics.heavy()
-        // Source of truth is ContentView state (viewfinder pickers). Force-sync
-        // and pass explicitly so the still bake cannot see stale .none.
-        syncCaptureControlsToCamera()
-        let shutterFilm = cameraFilmFilter(from: filmFilter)
-        let shutterFX = lensFX
+        // Prefer looks frozen at timer arm; otherwise live viewfinder state.
+        let shutterFilm = cameraFilmFilter(from: frozenFilmFilter ?? filmFilter)
+        let shutterFX = frozenLensFX ?? lensFX
+        frozenFilmFilter = nil
+        frozenLensFX = nil
+        // Force-sync CameraManager so pipeline + bake cannot see stale .none.
+        camera.selectedFilmFilter = shutterFilm
+        camera.selectedLensFX = shutterFX
         // Only use morph touch if FX is still touch-reactive (may have changed during countdown).
         let morphTouch: MorphTouchState? = {
             guard shutterFX.isTouchReactive else { return nil }
