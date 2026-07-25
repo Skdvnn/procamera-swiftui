@@ -402,8 +402,13 @@ struct SharedBookView: View {
 
     var body: some View {
         ZStack {
-            LeicaVulcaniteTexture(scale: 20, intensity: 0.8)
-                .ignoresSafeArea()
+            // Non-Metal grain — same MetadataCache risk as camera vulcanite.
+            ZStack {
+                Color(white: 0.075)
+                ControlsGrain()
+            }
+            .ignoresSafeArea()
+            .transaction { $0.animation = nil }
 
             VStack(spacing: 0) {
                 header

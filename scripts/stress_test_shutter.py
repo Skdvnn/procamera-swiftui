@@ -433,7 +433,7 @@ def test_source_guards() -> None:
         and "Do NOT use isLongExposureCapturing" in cam,
     )
     check("AUTO return resets LE index", "shutterSpeedIndex = 9" in content and "leftover Night" in content)
-    check("LE only when manual", "camera.isManualExposure && shutterSpeedIndex <= 3" in content)
+    check("LE only when manual", "isLongExposureShutterIndex" in content and "longExposureDurationIfAny" in content)
     check("settings syncs camera format", "case .heic: camera.captureFormat = .heic" in content)
     check("no shutter under Darkroom", "guard !showPhotoBook, !showSettings" in content)
     check("zoom syncs clamped factor", "zoomValue = camera.setZoom(requested)" in content)
@@ -457,7 +457,7 @@ def test_source_guards() -> None:
     check("photo handler lock helpers", "func takePhotoHandler" in cam and "func setPhotoHandler" in cam)
     check("STACK keeps LE flag through bake", "Keep isLongExposureCapturing true through bake" in cam)
     check("cancel clears bake + photo handler", "Atomically bump leOpID" in cam or "Invalidate any in-flight still bake" in cam)
-    check("switchCamera blocks mid-bake", "bakeTimeoutCompletion != nil" in cam[cam.find("func switchCamera"):cam.find("func switchCamera")+900])
+    check("switchCamera blocks mid-bake", "capturePipelineBusy(includeUILongExposure: true)" in cam[cam.find("func switchCamera"):cam.find("func switchCamera")+500])
     check("formats empty-safe", "device.formats.first" in cam and "device.formats[0]" not in cam)
     check("HEIC decode fallback", "decodedProcessedPhoto" in cam and "CGImageSourceCreateWithData" in cam)
     check("syncCI used in CameraManager", "ShutterRender.syncCI" in cam)
@@ -504,8 +504,8 @@ def test_source_guards() -> None:
     check("STACK watchdog", "stackWatchdogWork" in cam)
     check("HW timeout work cancel", "hwTimeoutWork" in cam)
     check("pending RAW until processed", "pendingRawData" in cam)
-    check("switchToLens busy gate", "func switchToLens" in cam and "bakeTimeoutCompletion != nil" in cam[cam.find("func switchToLens"):cam.find("func switchToLens")+2500])
-    check("switchCamera gates HW token", "hwLongExposureToken != nil" in cam[cam.find("func switchCamera"):cam.find("func switchCamera")+900])
+    check("switchToLens busy gate", "func switchToLens" in cam and "capturePipelineBusy(includeUILongExposure: true)" in cam[cam.find("func switchToLens"):cam.find("func switchToLens")+2500])
+    check("switchCamera gates HW token", "func capturePipelineBusy" in cam and "hwLongExposureToken != nil" in cam[cam.find("func capturePipelineBusy"):cam.find("func capturePipelineBusy")+500])
     check("STACK accumulate autoreleasepool", "autoreleasepool" in cam[cam.find("accumulationFrame"):cam.find("accumulationFrame")+500] or "autoreleasepool" in cam)
     check("clearStickyTouch API", "func clearStickyTouch" in (ROOT / "LensFXEngine.swift").read_text())
     check("Night chip not full-width hit", ".frame(maxWidth: .infinity" not in content.split("if nightAssistVisible")[1].split("if let cameraError")[0])
@@ -555,6 +555,20 @@ def test_source_guards() -> None:
     check("polish flash wing 88", ".frame(width: 88)" in content and "ModeControl(icon: \"gearshape\"" in content)
     check("tight mode wing 112", ".frame(width: 112, height: 48, alignment: .trailing)" in content)
     check("ModeControl column 26", ".frame(width: 26, height: 48)" in content)
+
+    # Build 57 — crash/freeze hardening
+    check("capture uniqueID gate", "activeCaptureUniqueID" in cam)
+    check("capturePipelineBusy helper", "func capturePipelineBusy" in cam)
+    check("STACK watchdog off-main", "STACK watchdog fired" in cam and "videoDataQueue.async" in cam)
+    check("finalize normalize off-main", "normalizeAccumulator may syncCI" in cam or "never run that on the main queue" in cam)
+    check("switchCamera rollback", "restored previous camera" in cam)
+    check("switchToLens rollback", "restored previous lens" in cam)
+    check("session interruption observers", "wasInterruptedNotification" in cam and "runtimeErrorNotification" in cam)
+    check("safe shutter index", "safeShutterSpeedIndex" in content)
+    check("LE duration helper", "longExposureDurations" in content)
+    check("Field Book no vulcanite Metal", "LeicaVulcaniteTexture" not in (ROOT / "PhotoBook.swift").read_text())
+    check("CloudBooks no vulcanite Metal", "LeicaVulcaniteTexture" not in (ROOT / "CloudBooks.swift").read_text())
+    check("didFinish clears pending RAW", "pendingRawData = nil" in cam[cam.find("didFinishCaptureFor"):cam.find("didFinishCaptureFor")+800])
 
 
 
@@ -636,11 +650,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 56", m is not None and int(ver) >= 56, ver)
+    check("Info.plist build >= 57", m is not None and int(ver) >= 57, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 56+", any(v >= 56 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 57+", any(v >= 57 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

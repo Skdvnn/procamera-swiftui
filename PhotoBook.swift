@@ -554,7 +554,9 @@ struct LibraryView: View {
             )
             .ignoresSafeArea()
 
-            LeicaVulcaniteTexture(scale: 28, intensity: 0.55)
+            // Non-Metal grain — stitchable vulcaniteTexture under shelf animations
+            // was a MetadataCache / EXC_BAD_ACCESS risk (same class as finder crash).
+            ControlsGrain()
                 .opacity(0.55)
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
@@ -1241,10 +1243,14 @@ struct PhotoBookView: View {
 
     var body: some View {
         ZStack {
-            // Vulcanite album cover, same material as the camera body
-            LeicaVulcaniteTexture(scale: 20, intensity: 0.8)
-                .ignoresSafeArea()
-                .opacity(contentRevealed ? 1 : 0.35)
+            // Non-Metal cover grain (avoid stitchable Metal under reveal animation).
+            ZStack {
+                Color(white: 0.075)
+                ControlsGrain()
+            }
+            .ignoresSafeArea()
+            .opacity(contentRevealed ? 1 : 0.35)
+            .transaction { $0.animation = nil }
 
             VStack(spacing: 0) {
                 header

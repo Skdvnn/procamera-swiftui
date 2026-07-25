@@ -458,7 +458,7 @@ struct ContentView: View {
                     LiveExposureChrome(
                         isManualExposure: camera.isManualExposure,
                         isoOverride: isoValue,
-                        shutterOverride: shutterSpeeds[shutterSpeedIndex]
+                        shutterOverride: shutterSpeeds[safeShutterSpeedIndex]
                     ) { liveISO, liveShutter in
                         AnalogDisplayPanel(
                             focusPosition: $focusPosition,
@@ -536,7 +536,7 @@ struct ContentView: View {
                             LiveExposureChrome(
                                 isManualExposure: camera.isManualExposure,
                                 isoOverride: isoValue,
-                                shutterOverride: shutterSpeeds[shutterSpeedIndex]
+                                shutterOverride: shutterSpeeds[safeShutterSpeedIndex]
                             ) { liveISO, liveShutter in
                                 RefractiveGlassInfoBar(
                                     iso: liveISO,
@@ -753,9 +753,26 @@ struct ContentView: View {
         return live > 0 ? live : isoValue
     }
 
+    /// Clamped shutter index — never crash on a restored/corrupt value.
+    private var safeShutterSpeedIndex: Int {
+        min(max(shutterSpeedIndex, 0), shutterSpeeds.count - 1)
+    }
+
+    /// LE durations for shutter indices 0…3 (4″ / 2″ / 1″ / 1/2).
+    private static let longExposureDurations: [Double] = [4.0, 2.0, 1.0, 0.5]
+
+    private var isLongExposureShutterIndex: Bool {
+        camera.isManualExposure && (0...3).contains(safeShutterSpeedIndex)
+    }
+
+    private var longExposureDurationIfAny: Double? {
+        guard isLongExposureShutterIndex else { return nil }
+        return Self.longExposureDurations[safeShutterSpeedIndex]
+    }
+
     /// Shutter label for chrome / metadata — live duration while AUTO.
     private var displayShutterLabel: String {
-        if camera.isManualExposure { return shutterSpeeds[shutterSpeedIndex] }
+        if camera.isManualExposure { return shutterSpeeds[safeShutterSpeedIndex] }
         let live = LiveExposureBus.shared.shutterLabel
         return live.isEmpty || live == "AUTO" ? "AUTO" : live
     }
@@ -888,7 +905,7 @@ struct ContentView: View {
         }
         guard !isCapturing else { return }
         // Manual LE indices — hold is cancel, not burst.
-        if camera.isManualExposure && shutterSpeedIndex <= 3 { return }
+        if isLongExposureShutterIndex { return }
         // Only swallow the Button release when a real burst actually starts.
         burstConsumedTap = true
         isBurstHolding = true
@@ -1395,7 +1412,7 @@ struct ContentView: View {
                         LiveExposureChrome(
                             isManualExposure: camera.isManualExposure,
                             isoOverride: isoValue,
-                            shutterOverride: shutterSpeeds[shutterSpeedIndex]
+                            shutterOverride: shutterSpeeds[safeShutterSpeedIndex]
                         ) { liveISO, liveShutter in
                             RefractiveGlassInfoBar(
                                 iso: liveISO,
@@ -1788,9 +1805,8 @@ struct ContentView: View {
                 ? LensFXEngine.shared.snapshotForCapture()
                 : nil
             // Freeze LE intent so shutter-speed changes during countdown don't alter the shot.
-            let isLE = camera.isManualExposure && shutterSpeedIndex <= 3
-            frozenCaptureIsLE = isLE
-            frozenLEDuration = isLE ? [4.0, 2.0, 1.0, 0.5][shutterSpeedIndex] : nil
+            frozenCaptureIsLE = isLongExposureShutterIndex
+            frozenLEDuration = longExposureDurationIfAny
             let gen = UUID()
             timerGeneration = gen
             runCountdown(expected: gen)
@@ -1849,8 +1865,8 @@ struct ContentView: View {
             duration = d
         } else {
             // LE only when manuals are live — AUTO must not inherit a stale Night index.
-            isLongExposure = camera.isManualExposure && shutterSpeedIndex <= 3
-            duration = isLongExposure ? [4.0, 2.0, 1.0, 0.5][shutterSpeedIndex] : nil
+            isLongExposure = isLongExposureShutterIndex
+            duration = longExposureDurationIfAny
         }
         frozenLEDuration = nil
         frozenCaptureIsLE = false
