@@ -276,14 +276,74 @@ def draw_diagram(panels, meta, path: Path, title: str, size=(390, 844)):
     print(f"wrote {path}")
 
 
+def layout_landscape_compact(W=844.0, H=390.0, safe_top=0.0, safe_bottom=21.0):
+    """Landscape forces compact chrome (effectiveBottomCollapsed)."""
+    margin = 6.0
+    top_panel = 44.0
+    deck_h = 72.0  # landscapeDeckHeight
+    y = safe_top
+    panels = []
+
+    panels.append(Rect("top_panel", margin, y, W - 2 * margin, top_panel, (40, 40, 48), 1))
+    y += top_panel + 4
+
+    bottom_pad_v = bottom_pad(safe_bottom)
+    underlay_h = FADE_H + deck_h + bottom_pad_v
+    underlay_top = H - underlay_h
+    gradient = Rect("gradient_underlay", 0, underlay_top, W, underlay_h, (20, 20, 60), 1)
+    deck = Rect("shutter_deck", 0, H - bottom_pad_v - deck_h, W, deck_h, (30, 30, 34), 2)
+    fade = Rect("fade_band", 0, underlay_top, W, FADE_H, (50, 50, 120), 1)
+    vf = Rect("viewfinder", margin, y, W - 2 * margin, H - y, (10, 10, 12), 0)
+    panels.extend([vf, gradient, fade, deck])
+
+    hist_bottom = H - (deck_h + bottom_pad_v + HIST_DECK_GAP)
+    hist = Rect("histogram", margin + 10, hist_bottom - 48.0, W - 2 * margin - 20, 48.0, (180, 160, 60), 2)
+    panels.append(hist)
+
+    fx_x = W - margin - 10 - CHROME_BTN
+    fx_y = y + 12
+    panels.append(Rect("film_btn", fx_x, fx_y, CHROME_BTN, CHROME_BTN, (80, 180, 220), 40))
+    panels.append(Rect(
+        "shader_btn", fx_x, fx_y + CHROME_BTN + CHROME_STACK_GAP,
+        CHROME_BTN, CHROME_BTN, (80, 200, 180), 40,
+    ))
+
+    return panels, {
+        "mode": "landscape_compact",
+        "hist_deck_gap": deck.top - hist.bottom,
+        "vf_height": vf.h,
+        "gradient_covers_deck": gradient.top <= deck.top and gradient.bottom >= deck.bottom,
+    }
+
+
+def assert_landscape(panels, meta):
+    errors = []
+    hist = next(p for p in panels if p.name == "histogram")
+    deck = next(p for p in panels if p.name == "shutter_deck")
+    film = next(p for p in panels if p.name == "film_btn")
+    if hist.overlaps(deck):
+        errors.append("LANDSCAPE: histogram overlaps shutter")
+    if meta["hist_deck_gap"] < 7.0:
+        errors.append(f"LANDSCAPE: hist↔deck gap too small ({meta['hist_deck_gap']:.1f})")
+    if meta["vf_height"] < 180:
+        errors.append(f"LANDSCAPE: viewfinder too short ({meta['vf_height']:.1f})")
+    if film.bottom > hist.top:
+        errors.append("LANDSCAPE: film button intersects histogram band")
+    if not meta["gradient_covers_deck"]:
+        errors.append("LANDSCAPE: gradient does not cover deck")
+    return errors
+
+
 def main():
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     DOC_DIR.mkdir(parents=True, exist_ok=True)
 
     expanded = layout_expanded()
     collapsed = layout_collapsed()
+    landscape = layout_landscape_compact()
 
     errors = assert_invariants(expanded, collapsed)
+    errors.extend(assert_landscape(landscape[0], landscape[1]))
 
     draw_diagram(
         expanded[0],
@@ -296,6 +356,13 @@ def main():
         collapsed[1],
         OUT_DIR / "collapsed-layout.png",
         "COLLAPSED — gradient under controls; FX top-right",
+    )
+    draw_diagram(
+        landscape[0],
+        landscape[1],
+        OUT_DIR / "landscape-layout.png",
+        "LANDSCAPE COMPACT — hist clear of deck",
+        size=(844, 390),
     )
     # Mirror into docs for the repo
     draw_diagram(
@@ -310,6 +377,13 @@ def main():
         DOC_DIR / "collapsed-layout.png",
         "COLLAPSED — gradient under controls; FX top-right",
     )
+    draw_diagram(
+        landscape[0],
+        landscape[1],
+        DOC_DIR / "landscape-layout.png",
+        "LANDSCAPE COMPACT — hist clear of deck",
+        size=(844, 390),
+    )
 
     report = OUT_DIR / "report.txt"
     lines = []
@@ -320,6 +394,7 @@ def main():
         lines.append("PASS")
         lines.append(f"expanded hist↔shutter gap: {expanded[1]['hist_shutter_gap']:.1f}pt")
         lines.append(f"collapsed hist↔deck gap: {collapsed[1]['hist_deck_gap']:.1f}pt")
+        lines.append(f"landscape hist↔deck gap: {landscape[1]['hist_deck_gap']:.1f}pt")
         lines.append("gradient covers deck: yes")
         lines.append("film/shader clear of bottom chrome: yes")
     report.write_text("\n".join(lines) + "\n")

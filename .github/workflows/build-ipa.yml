@@ -5,6 +5,10 @@ on:
     branches:
       - master
       - "claude/**"
+      - "cursor/**"
+  pull_request:
+    branches:
+      - master
   workflow_dispatch:
 
 permissions:

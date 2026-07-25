@@ -1,5 +1,6 @@
 PASS
 expanded hist↔shutter gap: 19.0pt
 collapsed hist↔deck gap: 8.0pt
+landscape hist↔deck gap: 8.0pt
 gradient covers deck: yes
 film/shader clear of bottom chrome: yes

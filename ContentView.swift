@@ -526,11 +526,14 @@ struct ContentView: View {
                 volumeShutter.start(in: host)
             }
             syncCaptureContextToSystem()
-            // Drain cold-start shortcuts / widgets posted before we subscribed.
-            ShutterDeepLinkCenter.beginReceiving()
+            // Next main turn: `.onReceive` below is installed; then drain the queue.
+            DispatchQueue.main.async {
+                ShutterDeepLinkCenter.beginReceiving()
+            }
         }
         .onDisappear {
             volumeShutter.stop()
+            ShutterDeepLinkCenter.endReceiving()
         }
         .onReceive(NotificationCenter.default.publisher(for: .shutterDeepLink)) { note in
             if let link = note.userInfo?["link"] as? ShutterDeepLink {

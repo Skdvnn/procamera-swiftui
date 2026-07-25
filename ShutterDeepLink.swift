@@ -101,7 +101,7 @@ enum ShutterDeepLinkCenter {
         post(link)
     }
 
-    /// Call from ContentView.onAppear after `.onReceive` is installed.
+    /// Call from ContentView once `.onReceive` is live (prefer next main turn).
     static func beginReceiving() {
         lock.lock()
         isReceiving = true
@@ -115,6 +115,21 @@ enum ShutterDeepLinkCenter {
                 userInfo: ["link": link]
             )
         }
+    }
+
+    /// Call from ContentView.onDisappear so links queue again across remounts.
+    static func endReceiving() {
+        lock.lock()
+        isReceiving = false
+        lock.unlock()
+    }
+
+    /// Test helper — reset queue/subscriber state between stress cases.
+    static func resetForTests() {
+        lock.lock()
+        pending.removeAll()
+        isReceiving = false
+        lock.unlock()
     }
 }
 

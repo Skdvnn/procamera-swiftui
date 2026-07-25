@@ -3,6 +3,7 @@ import UIKit
 import Photos
 import CoreImage
 import CoreImage.CIFilterBuiltins
+import Combine
 
 class CameraManager: NSObject, ObservableObject {
     @Published var session = AVCaptureSession()
@@ -144,6 +145,8 @@ class CameraManager: NSObject, ObservableObject {
     private let photoOutput = AVCapturePhotoOutput()
     private let sessionQueue = DispatchQueue(label: "camera.session.queue")
     private var photoCompletionHandler: ((UIImage?) -> Void)?
+    /// Prevents re-adding inputs/outputs when SwiftUI re-fires onAppear.
+    private var isSessionConfigured = false
 
     // Shutter speed lookup table (index to CMTime)
     static let shutterSpeedValues: [CMTime] = [
@@ -206,6 +209,12 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     private func configureSession() {
+        // SwiftUI can re-call onAppear; never re-add the same photoOutput.
+        guard !isSessionConfigured else {
+            startSession()
+            return
+        }
+
         session.beginConfiguration()
         session.sessionPreset = .photo
 
@@ -260,6 +269,7 @@ class CameraManager: NSObject, ObservableObject {
         updateMaxPhotoDimensions(for: videoDevice)
 
         session.commitConfiguration()
+        isSessionConfigured = true
         startSession()
     }
 
@@ -289,9 +299,6 @@ class CameraManager: NSObject, ObservableObject {
             photoOutput.isAppleProRAWEnabled = !natural
         }
 
-        // Dual/triple-cam fusion blends multiple sensors into one still — off for honesty.
-        photoOutput.isAutoVirtualDeviceFusionEnabled = false
-
         print("NaturalCapture: natural=\(natural) maxQ=\(photoOutput.maxPhotoQualityPrioritization.rawValue) proRAW=\(photoOutput.isAppleProRAWEnabled) rawFormats=\(photoOutput.availableRawPhotoPixelFormatTypes.count)")
     }
 
@@ -314,6 +321,10 @@ class CameraManager: NSObject, ObservableObject {
         settings.photoQualityPrioritization = natural ? .speed : .quality
         // Red-eye is an extra face-rewrite pass — never for natural stills.
         settings.isAutoRedEyeReductionEnabled = false
+        // Per-capture fusion knob lives on settings (not photoOutput).
+        if photoOutput.isVirtualDeviceFusionSupported {
+            settings.isAutoVirtualDeviceFusionEnabled = false
+        }
     }
 
     private func updateDeviceCapabilities(device: AVCaptureDevice) {
@@ -644,7 +655,10 @@ class CameraManager: NSObject, ObservableObject {
                 if self.session.canAddInput(newInput) {
                     self.session.addInput(newInput)
                     self.videoDeviceInput = newInput
+                    self.selectBestFormatForLongExposure(device: newDevice)
+                    self.updateMaxPhotoDimensions(for: newDevice)
                     self.updateDeviceCapabilities(device: newDevice)
+                    self.applyNaturalCapturePhotoOutputConfig()
                     DispatchQueue.main.async {
                         self.currentCamera = newPosition
                         self.zoomFactor = 1.0
@@ -1702,11 +1716,18 @@ class CameraManager: NSObject, ObservableObject {
         }
 
         settings.flashMode = flashMode
-        settings.maxPhotoDimensions = photoOutput.maxPhotoDimensions
         applyMinimalProcessing(to: &settings)
-        applyCaptureOrientation()
 
-        photoOutput.capturePhoto(with: settings, delegate: self)
+        // Connection orientation + max dimensions must touch the session on its queue.
+        sessionQueue.async { [weak self] in
+            guard let self else { return }
+            if let device = self.videoDeviceInput?.device {
+                self.updateMaxPhotoDimensions(for: device)
+            }
+            settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
+            self.applyCaptureOrientation()
+            self.photoOutput.capturePhoto(with: settings, delegate: self)
+        }
     }
 
     // MARK: - Capture / preview orientation
