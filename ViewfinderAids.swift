@@ -154,3 +154,84 @@ final class HorizonMotion: ObservableObject {
         manager.stopDeviceMotionUpdates()
     }
 }
+
+// MARK: - Curved f-stop edge readout (collapse scrub)
+
+/// Animated aperture curve that peels in from the trailing edge while scrubbing
+/// the bottom deck down into fullscreen. Hardware ƒ only — not a fake stop control.
+struct CurvedFStopEdgeReadout: View {
+    let aperture: Float
+    /// 0…1 scrub progress (deck drag / collapse distance).
+    let progress: CGFloat
+
+    var body: some View {
+        GeometryReader { geo in
+            let h = geo.size.height
+            let w = geo.size.width
+            let inset = 10 + (1 - progress) * 28
+            let curve = FStopEdgeCurve(progress: progress)
+
+            ZStack(alignment: .trailing) {
+                curve
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.05 + 0.35 * progress),
+                                Color(red: 1.0, green: 0.85, blue: 0.35).opacity(0.15 + 0.55 * progress),
+                                Color.white.opacity(0.08 + 0.25 * progress)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        style: StrokeStyle(lineWidth: 1.6 + progress * 0.8, lineCap: .round)
+                    )
+                    .frame(width: 36)
+                    .padding(.trailing, inset)
+                    .opacity(Double(min(1, progress * 1.4)))
+
+                VStack(spacing: 4) {
+                    Text("ƒ")
+                        .font(.system(size: 11, weight: .semibold, design: .serif))
+                        .foregroundStyle(Color.white.opacity(0.55 + 0.35 * progress))
+                    Text(String(format: "%.1f", aperture))
+                        .font(.system(size: 22, weight: .medium, design: .serif))
+                        .foregroundStyle(Color.white.opacity(0.75 + 0.25 * progress))
+                        .monospacedDigit()
+                    Text("EQ")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .tracking(1.2)
+                        .foregroundStyle(Color.white.opacity(0.35 + 0.25 * progress))
+                }
+                .padding(.trailing, inset + 18)
+                .offset(y: (0.5 - progress) * 18)
+                .opacity(Double(min(1, max(0, progress * 1.6 - 0.15))))
+            }
+            .frame(width: w, height: h, alignment: .trailing)
+        }
+    }
+}
+
+private struct FStopEdgeCurve: Shape {
+    var progress: CGFloat
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let top = rect.minY + 24
+        let bottom = rect.maxY - 24
+        let midY = rect.midY
+        let xRight = rect.maxX - 2
+        let bulge = 10 + progress * 22
+        path.move(to: CGPoint(x: xRight, y: top))
+        path.addCurve(
+            to: CGPoint(x: xRight, y: bottom),
+            control1: CGPoint(x: xRight - bulge, y: midY - 40),
+            control2: CGPoint(x: xRight - bulge, y: midY + 40)
+        )
+        return path
+    }
+}

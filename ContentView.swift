@@ -181,6 +181,10 @@ struct ContentView: View {
     @AppStorage("cam.shootMode") private var shootModeRaw: String = ShootMode.street.rawValue
     @AppStorage("cam.defaultFilm") private var defaultFilmRaw: Int = FilmFilterMode.none.rawValue
     @AppStorage("cam.captureFormat") private var captureFormatRaw: String = CaptureFormat.heic.rawValue
+    /// Default ON — minimize Apple computational photography (speed + Bayer RAW).
+    @AppStorage("cam.naturalCapture") private var naturalCapture = true
+    /// When natural is on, looks stay preview-only unless the user opts in.
+    @AppStorage("cam.bakeLooks") private var bakeLooksIntoProcessed = false
     @State private var showSettings = false
     @State private var timerSeconds = 0
     @State private var timerCountdown = 0
@@ -269,10 +273,14 @@ struct ContentView: View {
         GeometryReader { geo in
             let safeTop = geo.safeAreaInsets.top
             let safeBottom = geo.safeAreaInsets.bottom
+            let isLandscape = geo.size.width > geo.size.height
+            // Landscape: keep chrome compact so the finder stays the frame.
+            let effectiveTopCollapsed = topCollapsed || isLandscape
+            let effectiveBottomCollapsed = bottomCollapsed || isLandscape
 
             // Layout measurements — top collapse keeps FOCUS/EV strip as the hero
-            let topPanelHeight: CGFloat = topCollapsed ? 52 : 110
-            let gaugeToViewfinderSpacing: CGFloat = topCollapsed ? 4 : 5
+            let topPanelHeight: CGFloat = effectiveTopCollapsed ? (isLandscape ? 44 : 52) : 110
+            let gaugeToViewfinderSpacing: CGFloat = effectiveTopCollapsed ? 4 : 5
             let viewfinderToControlsSpacing: CGFloat = CollapsedChrome.viewfinderToDeckGap
 
             ZStack(alignment: .top) {
@@ -290,7 +298,7 @@ struct ContentView: View {
                         flashMode: camera.flashMode == .off ? "OFF" : "ON",
                         macroEnabled: macroEnabled,
                         isAutoFocus: !isManualFocusEnabled,
-                        compact: topCollapsed,
+                        compact: effectiveTopCollapsed,
                         onFocusChanged: { val in
                             camera.setManualFocus(val)
                             isManualFocusEnabled = true
@@ -331,12 +339,12 @@ struct ContentView: View {
                     // VIEWFINDER — when bottom is collapsed, feed runs under the shutter
                     // with a bottom gradient + compact controls overlaid.
                     ZStack(alignment: .bottom) {
-                        viewfinderFrame(showHistogram: !bottomCollapsed)
+                        viewfinderFrame(showHistogram: !effectiveBottomCollapsed)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .layoutPriority(1)
-                            .padding(.horizontal, bottomCollapsed ? 6 : DS.pageMargin)
+                            .padding(.horizontal, effectiveBottomCollapsed ? 6 : DS.pageMargin)
 
-                        if bottomCollapsed {
+                        if effectiveBottomCollapsed {
                             collapsedBottomOverlay(safeBottom: safeBottom)
                                 .transition(
                                     .asymmetric(
@@ -359,6 +367,7 @@ struct ContentView: View {
                                 aspectLabel: aspectRatio.shortLabel,
                                 isLocked: isLocked,
                                 isManualExposure: camera.isManualExposure,
+                                naturalCapture: naturalCapture,
                                 onToggleLock: { toggleAEAFLock() },
                                 onReturnToAuto: { returnToAuto() }
                             )
@@ -391,7 +400,7 @@ struct ContentView: View {
                                 Haptics.medium()
                             }
                         )
-                        .padding(.horizontal, bottomCollapsed ? 6 : DS.pageMargin)
+                        .padding(.horizontal, effectiveBottomCollapsed ? 6 : DS.pageMargin)
                         .zIndex(40)
 
                         if showLevel {
@@ -411,15 +420,15 @@ struct ContentView: View {
                             .padding(.vertical, 4)
                             .background(Capsule().fill(Color.black.opacity(0.4)))
                             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                            .padding(.leading, bottomCollapsed ? 20 : 24)
-                            .padding(.bottom, bottomCollapsed ? 100 : 16)
+                            .padding(.leading, effectiveBottomCollapsed ? 20 : 24)
+                            .padding(.bottom, effectiveBottomCollapsed ? 100 : 16)
                             .allowsHitTesting(false)
                             .zIndex(36)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .layoutPriority(1)
 
-                    if !bottomCollapsed {
+                    if !effectiveBottomCollapsed {
                         Spacer().frame(height: viewfinderToControlsSpacing)
 
                         // Expanded deck — opaque grain slab (scrubbers live here)
@@ -447,12 +456,21 @@ struct ContentView: View {
                 }
                 .padding(.top, safeTop)
                 .animation(deckCollapseSpring, value: bottomCollapsed)
+                .animation(deckCollapseSpring, value: isLandscape)
 
                 if showFlash {
                     Color.white.ignoresSafeArea()
                 }
             }
             .ignoresSafeArea()
+            .onChange(of: isLandscape) { _, landscape in
+                // Landscape uses compact chrome; remember portrait expanded state separately.
+                if landscape {
+                    withAnimation(deckCollapseSpring) {
+                        bottomDeckDrag = 0
+                    }
+                }
+            }
         }
         .statusBarHidden(false)
         // Require a second deliberate swipe for the home gesture so drags on
@@ -471,6 +489,8 @@ struct ContentView: View {
                 lastCapturedImage = img
             }
             apertureValue = camera.lensAperture
+            camera.naturalCaptureEnabled = naturalCapture
+            camera.bakeLooksIntoProcessed = bakeLooksIntoProcessed
             if let fmt = CaptureFormat(rawValue: captureFormatRaw) {
                 captureFormat = fmt
                 switch fmt {
@@ -516,6 +536,12 @@ struct ContentView: View {
         .onChange(of: camera.lensAperture) { _, value in
             apertureValue = value
         }
+        .onChange(of: naturalCapture) { _, on in
+            camera.naturalCaptureEnabled = on
+        }
+        .onChange(of: bakeLooksIntoProcessed) { _, on in
+            camera.bakeLooksIntoProcessed = on
+        }
         .onChange(of: camera.isAEAFLocked) { _, locked in
             isLocked = locked
         }
@@ -551,6 +577,8 @@ struct ContentView: View {
                 showLevel: $showLevel,
                 captureFormat: $captureFormat,
                 defaultFilm: defaultFilmBinding,
+                naturalCapture: $naturalCapture,
+                bakeLooksIntoProcessed: $bakeLooksIntoProcessed,
                 onApplyMode: { applyShootMode($0) },
                 onDismiss: {
                     captureFormatRaw = captureFormat.rawValue
@@ -893,6 +921,19 @@ struct ContentView: View {
                         .allowsHitTesting(false)
                 }
 
+                // Curved ƒ readout peels from the trailing edge while scrubbing down.
+                if !bottomCollapsed && bottomDeckDrag > 4 && apertureValue > 0.5 {
+                    CurvedFStopEdgeReadout(
+                        aperture: apertureValue,
+                        progress: min(max(bottomDeckDrag / 120.0, 0), 1)
+                    )
+                    .padding(.vertical, 36)
+                    .padding(.trailing, 2)
+                    .allowsHitTesting(false)
+                    .zIndex(6)
+                    .transition(.opacity)
+                }
+
                 // Histogram inside frame only when expanded — sits above the deck
                 // (deck is a separate VStack sibling below the viewfinder, not overlaid).
                 if showHistogram {
@@ -909,6 +950,7 @@ struct ContentView: View {
                             aspectLabel: aspectRatio.shortLabel,
                             isLocked: isLocked,
                             isManualExposure: camera.isManualExposure,
+                            naturalCapture: naturalCapture,
                             onToggleLock: { toggleAEAFLock() },
                             onReturnToAuto: { returnToAuto() }
                         )
@@ -1004,8 +1046,6 @@ struct ContentView: View {
                     .frame(minHeight: CollapsedChrome.deckHeight)
                     .offset(y: bottomDeckDrag * 0.12)
                     .opacity(1.0 - min(abs(bottomDeckDrag) / 90.0, 0.45))
-                    .contentShape(Rectangle())
-                    .gesture(bottomDeckSwipe)
 
                 Color.clear
                     .frame(height: bottomPad)
@@ -1017,15 +1057,23 @@ struct ContentView: View {
         .frame(maxWidth: .infinity)
     }
 
+    /// Clear gap beside shutter — pull-to-collapse lives here, not on the button.
+    private var bottomDeckPullGap: some View {
+        Color.clear
+            .frame(maxWidth: .infinity, minHeight: 76)
+            .contentShape(Rectangle())
+            .gesture(bottomDeckSwipe)
+    }
+
     /// Bottom deck: swipe down collapses, swipe up expands.
-    /// Soft thresholds — viewfinder glass bar + shutter row + grabber all pull.
+    /// Higher thresholds so shutter taps aren't eaten by collapse.
     private var bottomDeckSwipe: some Gesture {
-        DragGesture(minimumDistance: 6, coordinateSpace: .local)
+        DragGesture(minimumDistance: 24, coordinateSpace: .local)
             .onChanged { value in
                 let dy = value.translation.height
                 let dx = value.translation.width
-                // Ignore mostly-horizontal scrubber drags
-                guard abs(dy) > abs(dx) * 0.55 else { return }
+                // Require clearly vertical intent
+                guard abs(dy) > abs(dx) * 1.1 else { return }
                 if bottomCollapsed {
                     // Pull up (negative) to peek expand
                     bottomDeckDrag = min(0, max(dy, -160))
@@ -1038,18 +1086,21 @@ struct ContentView: View {
                 let dy = value.translation.height
                 let dx = value.translation.width
                 let predicted = value.predictedEndTranslation.height
-                let effective = abs(predicted) > abs(dy) ? predicted : dy
+                // Only trust prediction after a real vertical drag past threshold.
+                let effective: CGFloat = {
+                    guard abs(dy) > 20, abs(predicted) > abs(dy) else { return dy }
+                    return predicted
+                }()
 
                 let committedDrag = bottomDeckDrag
                 withAnimation(deckCollapseSpring) {
                     bottomDeckDrag = 0
-                    // Vertical wins easily; scrubbers still own clear horizontal pans
-                    guard abs(effective) > abs(dx) * 0.45 else { return }
+                    guard abs(effective) > abs(dx) * 1.05 else { return }
                     if bottomCollapsed {
-                        if effective < -12 || committedDrag < -18 {
+                        if effective < -44 || committedDrag < -36 {
                             bottomCollapsed = false
                         }
-                    } else if effective > 12 || committedDrag > 18 {
+                    } else if effective > 48 || committedDrag > 40 {
                         bottomCollapsed = true
                     }
                 }
@@ -1063,14 +1114,15 @@ struct ContentView: View {
                 showPhotoBook = true
             }
 
-            Spacer()
+            bottomDeckPullGap
 
             ShutterButton(isCapturing: isCapturing) {
                 Haptics.heavy()
                 handleCapture()
             }
+            .zIndex(2)
 
-            Spacer()
+            bottomDeckPullGap
 
             // Compact deck: WB where ISO/shutter readout used to sit
             WBPill(
@@ -1082,7 +1134,6 @@ struct ContentView: View {
         }
         .padding(.horizontal, DS.pageMargin)
         .padding(.vertical, 6)
-        .contentShape(Rectangle())
     }
 
     private var bottomExpandedDeck: some View {
@@ -1198,21 +1249,22 @@ struct ContentView: View {
             .contentShape(Rectangle())
             .simultaneousGesture(bottomDeckSwipe)
 
-            // ROW 4: Thumbnail | Shutter | WB — big pull zone around shutter
+            // ROW 4: Thumbnail | Shutter | WB — swipe only in gaps beside shutter
             HStack(alignment: .center, spacing: 0) {
                 ThumbnailPill(image: lastCapturedImage) {
                     Haptics.click()
                     showPhotoBook = true
                 }
 
-                Spacer()
+                bottomDeckPullGap
 
                 ShutterButton(isCapturing: isCapturing) {
                     Haptics.heavy()
                     handleCapture()
                 }
+                .zIndex(2)
 
-                Spacer()
+                bottomDeckPullGap
 
                 WBPill(
                     whiteBalanceIndex: $whiteBalanceIndex,
@@ -1222,8 +1274,6 @@ struct ContentView: View {
                 )
             }
             .padding(.horizontal, DS.pageMargin)
-            .contentShape(Rectangle())
-            .simultaneousGesture(bottomDeckSwipe)
         }
     }
 
@@ -1368,6 +1418,7 @@ struct RefractiveGlassInfoBar: View {
     var aspectLabel: String = "FULL"
     var isLocked: Bool = false
     var isManualExposure: Bool = false
+    var naturalCapture: Bool = true
     var onToggleLock: (() -> Void)? = nil
     var onReturnToAuto: (() -> Void)? = nil
 
@@ -1383,6 +1434,11 @@ struct RefractiveGlassInfoBar: View {
                     Text(captureFormat.label)
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundColor(captureFormat == .raw ? DS.accent : .white)
+                    if naturalCapture {
+                        Text("NAT")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundColor(Color(red: 0.55, green: 0.92, blue: 0.62))
+                    }
                     Button {
                         onToggleLock?()
                     } label: {
@@ -2149,173 +2205,183 @@ struct ShutterButton: View {
     let isCapturing: Bool
     let action: () -> Void
 
-    @State private var isPressed = false
-
     var body: some View {
         Button(action: action) {
-            ZStack {
-                // Knurled collar
-                Circle()
-                    .fill(
-                        AngularGradient(
-                            colors: [
-                                Color(red: 0.50, green: 0.52, blue: 0.56),
-                                Color(red: 0.20, green: 0.21, blue: 0.24),
-                                Color(red: 0.44, green: 0.46, blue: 0.50),
-                                Color(red: 0.16, green: 0.17, blue: 0.20),
-                                Color(red: 0.48, green: 0.50, blue: 0.54),
-                                Color(red: 0.22, green: 0.23, blue: 0.26),
-                                Color(red: 0.50, green: 0.52, blue: 0.56)
-                            ],
-                            center: .center
-                        )
+            ShutterButtonChrome(isCapturing: isCapturing)
+        }
+        // ButtonStyle press feedback — never a DragGesture(minDistance: 0),
+        // which stole taps when the expanded deck also owned a swipe gesture.
+        .buttonStyle(ShutterPressStyle())
+        .disabled(isCapturing)
+    }
+}
+
+private struct ShutterPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .brightness(configuration.isPressed ? -0.04 : 0)
+            .opacity(configuration.isPressed ? 0.94 : 1)
+            .shadow(
+                color: Color.black.opacity(configuration.isPressed ? 0.35 : 0.55),
+                radius: configuration.isPressed ? 2 : 5,
+                y: configuration.isPressed ? 1 : 2.5
+            )
+            .onChange(of: configuration.isPressed) { _, pressed in
+                if pressed {
+                    UIImpactFeedbackGenerator(style: .heavy).impactOccurred(intensity: 0.8)
+                } else {
+                    UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.6)
+                }
+            }
+    }
+}
+
+private struct ShutterButtonChrome: View {
+    let isCapturing: Bool
+
+    var body: some View {
+        ZStack {
+            // Knurled collar
+            Circle()
+                .fill(
+                    AngularGradient(
+                        colors: [
+                            Color(red: 0.50, green: 0.52, blue: 0.56),
+                            Color(red: 0.20, green: 0.21, blue: 0.24),
+                            Color(red: 0.44, green: 0.46, blue: 0.50),
+                            Color(red: 0.16, green: 0.17, blue: 0.20),
+                            Color(red: 0.48, green: 0.50, blue: 0.54),
+                            Color(red: 0.22, green: 0.23, blue: 0.26),
+                            Color(red: 0.50, green: 0.52, blue: 0.56)
+                        ],
+                        center: .center
                     )
-                    .frame(width: 76, height: 76)
-                    .overlay {
-                        Circle()
-                            .fill(Color(red: 0.33, green: 0.35, blue: 0.39))
-                            .colorEffect(
-                                ShaderLibrary.metallicSurface(
-                                    .float2(76, 76),
-                                    .float(1.0),
-                                    .float2(0.26, 0.14)
-                                )
-                            )
-                            .clipShape(Circle())
-                            .allowsHitTesting(false)
-                            .brightness(isPressed ? -0.06 : 0)
-                    }
-                    .overlay {
-                        Circle()
-                            .stroke(
-                                LinearGradient(
-                                    colors: [
-                                        Color.white.opacity(isPressed ? 0.35 : 0.55),
-                                        Color.white.opacity(0.08),
-                                        Color.black.opacity(0.7)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 1.35
-                            )
-                    }
-                    .overlay {
-                        Circle()
-                            .stroke(
-                                LinearGradient(
-                                    colors: [
-                                        Color.black.opacity(0.45),
-                                        Color.clear,
-                                        Color.white.opacity(0.12)
-                                    ],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                ),
-                                lineWidth: 1.0
-                            )
-                            .padding(2.5)
-                    }
-
-                Circle()
-                    .stroke(Color.black.opacity(isPressed ? 0.85 : 0.55), lineWidth: isPressed ? 2.6 : 1.75)
-                    .frame(width: 66, height: 66)
-                    .shadow(color: Color.black.opacity(0.35), radius: 1, y: 0.5)
-
-                ZStack {
+                )
+                .frame(width: 76, height: 76)
+                .overlay {
                     Circle()
-                        .fill(Color(red: 0.30, green: 0.32, blue: 0.36))
-                        .frame(width: 60, height: 60)
+                        .fill(Color(red: 0.33, green: 0.35, blue: 0.39))
                         .colorEffect(
                             ShaderLibrary.metallicSurface(
-                                .float2(60, 60),
-                                .float(0.95),
-                                .float2(0.28, 0.20)
+                                .float2(76, 76),
+                                .float(1.0),
+                                .float2(0.26, 0.14)
                             )
                         )
                         .clipShape(Circle())
-                        .brightness(isPressed ? -0.05 : 0)
-
-                    Circle()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(isPressed ? 0.14 : 0.26),
-                                    Color.clear,
-                                    Color.black.opacity(0.22)
-                                ],
-                                startPoint: UnitPoint(x: 0.22, y: 0.12),
-                                endPoint: UnitPoint(x: 0.85, y: 0.92)
-                            )
-                        )
-                        .frame(width: 60, height: 60)
-                        .blendMode(.softLight)
-
-                    Ellipse()
-                        .fill(
-                            RadialGradient(
-                                colors: [
-                                    Color.white.opacity(isPressed ? 0.08 : 0.16),
-                                    Color.clear
-                                ],
-                                center: UnitPoint(x: 0.35, y: 0.28),
-                                startRadius: 0,
-                                endRadius: 18
-                            )
-                        )
-                        .frame(width: 36, height: 22)
-                        .offset(x: -4, y: -8)
-                        .blendMode(.plusLighter)
-                        .opacity(0.55)
-
-                    ForEach(0..<4, id: \.self) { i in
-                        Circle()
-                            .stroke(Color.white.opacity(0.05), lineWidth: 0.55)
-                            .frame(width: CGFloat(50 - i * 9), height: CGFloat(50 - i * 9))
-                    }
-
+                        .allowsHitTesting(false)
+                }
+                .overlay {
                     Circle()
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(isPressed ? 0.16 : 0.32),
-                                    Color.clear,
-                                    Color.black.opacity(0.45)
+                                    Color.white.opacity(0.55),
+                                    Color.white.opacity(0.08),
+                                    Color.black.opacity(0.7)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
-                            lineWidth: 1
+                            lineWidth: 1.35
                         )
-                        .frame(width: 58, height: 58)
+                }
+                .overlay {
+                    Circle()
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.black.opacity(0.45),
+                                    Color.clear,
+                                    Color.white.opacity(0.12)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1.0
+                        )
+                        .padding(2.5)
+                }
 
-                    if isCapturing {
-                        Circle()
-                            .fill(Color.white.opacity(0.12))
-                            .frame(width: 60, height: 60)
-                    }
+            Circle()
+                .stroke(Color.black.opacity(0.55), lineWidth: 1.75)
+                .frame(width: 66, height: 66)
+                .shadow(color: Color.black.opacity(0.35), radius: 1, y: 0.5)
+
+            ZStack {
+                Circle()
+                    .fill(Color(red: 0.30, green: 0.32, blue: 0.36))
+                    .frame(width: 60, height: 60)
+                    .colorEffect(
+                        ShaderLibrary.metallicSurface(
+                            .float2(60, 60),
+                            .float(0.95),
+                            .float2(0.28, 0.20)
+                        )
+                    )
+                    .clipShape(Circle())
+
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.26),
+                                Color.clear,
+                                Color.black.opacity(0.22)
+                            ],
+                            startPoint: UnitPoint(x: 0.22, y: 0.12),
+                            endPoint: UnitPoint(x: 0.85, y: 0.92)
+                        )
+                    )
+                    .frame(width: 60, height: 60)
+                    .blendMode(.softLight)
+
+                Ellipse()
+                    .fill(
+                        RadialGradient(
+                            colors: [
+                                Color.white.opacity(0.16),
+                                Color.clear
+                            ],
+                            center: UnitPoint(x: 0.35, y: 0.28),
+                            startRadius: 0,
+                            endRadius: 18
+                        )
+                    )
+                    .frame(width: 36, height: 22)
+                    .offset(x: -4, y: -8)
+                    .blendMode(.plusLighter)
+                    .opacity(0.55)
+
+                ForEach(0..<4, id: \.self) { i in
+                    Circle()
+                        .stroke(Color.white.opacity(0.05), lineWidth: 0.55)
+                        .frame(width: CGFloat(50 - i * 9), height: CGFloat(50 - i * 9))
                 }
-                // Press settle without scaling the Metal shader layer
-                .opacity(isPressed ? 0.92 : 1.0)
-                .shadow(color: Color.black.opacity(isPressed ? 0.3 : 0.5), radius: isPressed ? 0.5 : 2.5, y: isPressed ? 0 : 1.5)
+
+                Circle()
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.32),
+                                Color.clear,
+                                Color.black.opacity(0.45)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1
+                    )
+                    .frame(width: 58, height: 58)
+
+                if isCapturing {
+                    Circle()
+                        .fill(Color.white.opacity(0.12))
+                        .frame(width: 60, height: 60)
+                }
             }
-            .shadow(color: Color.black.opacity(isPressed ? 0.35 : 0.55), radius: isPressed ? 2 : 5, y: isPressed ? 1 : 2.5)
+            .shadow(color: Color.black.opacity(0.5), radius: 2.5, y: 1.5)
         }
-        .buttonStyle(PlainButtonStyle())
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in
-                    if !isPressed {
-                        isPressed = true
-                        UIImpactFeedbackGenerator(style: .heavy).impactOccurred(intensity: 0.8)
-                    }
-                }
-                .onEnded { _ in
-                    isPressed = false
-                    UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.6)
-                }
-        )
-        .disabled(isCapturing)
     }
 }
 

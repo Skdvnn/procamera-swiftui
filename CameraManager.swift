@@ -60,6 +60,19 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
     @Published var captureFormat: CaptureFormatType = .heic
+    /// Minimal Apple computational photography — prefer speed + Bayer RAW.
+    /// Default ON: less Smart HDR / Deep Fusion fusion, more sensor-honest stills.
+    @Published var naturalCaptureEnabled: Bool = true {
+        didSet {
+            guard oldValue != naturalCaptureEnabled else { return }
+            sessionQueue.async { [weak self] in
+                self?.applyNaturalCapturePhotoOutputConfig()
+            }
+        }
+    }
+    /// When true (default with natural), skip baking film/FX into the processed companion.
+    /// Preview looks still apply; the saved JPEG/HEIC stays clean. RAW DNG is always clean.
+    @Published var bakeLooksIntoProcessed: Bool = false
 
     // Live preview filtering
     @Published var filteredPreviewImage: CIImage?
@@ -228,7 +241,7 @@ class CameraManager: NSObject, ObservableObject {
         // Add photo output
         if session.canAddOutput(photoOutput) {
             session.addOutput(photoOutput)
-            photoOutput.maxPhotoQualityPrioritization = .quality
+            applyNaturalCapturePhotoOutputConfig()
         } else {
             DispatchQueue.main.async { self.error = .cannotAddOutput }
             session.commitConfiguration()
@@ -262,6 +275,49 @@ class CameraManager: NSObject, ObservableObject {
         if let best = supported.max(by: { Int($0.width) * Int($0.height) < Int($1.width) * Int($1.height) }) {
             photoOutput.maxPhotoDimensions = best
         }
+    }
+
+    // MARK: - Natural / rude capture (minimize Apple computational photography)
+
+    /// Configure photo output for natural (speed + Bayer) vs polished (quality + ProRAW allowed).
+    /// Must run on `sessionQueue`. There is no public "disable Deep Fusion" switch —
+    /// `.speed` + Bayer RAW + ProRAW off are the real levers (WWDC / AVFoundation).
+    private func applyNaturalCapturePhotoOutputConfig() {
+        let natural = naturalCaptureEnabled
+        // Per-capture prioritization cannot exceed this max.
+        photoOutput.maxPhotoQualityPrioritization = natural ? .speed : .quality
+
+        // ProRAW is Apple's fused linear DNG — more processing, not less.
+        // Keep it off in natural mode so Bayer formats stay available.
+        if photoOutput.isAppleProRAWSupported {
+            photoOutput.isAppleProRAWEnabled = !natural
+        }
+
+        // Dual/triple-cam fusion blends multiple sensors into one still — off for honesty.
+        photoOutput.isAutoVirtualDeviceFusionEnabled = false
+
+        print("NaturalCapture: natural=\(natural) maxQ=\(photoOutput.maxPhotoQualityPrioritization.rawValue) proRAW=\(photoOutput.isAppleProRAWEnabled) rawFormats=\(photoOutput.availableRawPhotoPixelFormatTypes.count)")
+    }
+
+    /// Prefer pure Bayer sensor RAW over Apple ProRAW (fused / more processed).
+    private func preferredRawPixelFormat() -> OSType? {
+        let available = photoOutput.availableRawPhotoPixelFormatTypes
+        if let bayer = available.first(where: { AVCapturePhotoOutput.isBayerRAWPixelFormat($0) }) {
+            return bayer
+        }
+        // Fallback: any non-ProRAW format, then first available.
+        if let nonPro = available.first(where: { !AVCapturePhotoOutput.isAppleProRAWPixelFormat($0) }) {
+            return nonPro
+        }
+        return available.first
+    }
+
+    private func applyMinimalProcessing(to settings: inout AVCapturePhotoSettings) {
+        let natural = naturalCaptureEnabled
+        // `.speed` skips the heavy multi-frame fusion path that `.quality` invites.
+        settings.photoQualityPrioritization = natural ? .speed : .quality
+        // Red-eye is an extra face-rewrite pass — never for natural stills.
+        settings.isAutoRedEyeReductionEnabled = false
     }
 
     private func updateDeviceCapabilities(device: AVCaptureDevice) {
@@ -1476,17 +1532,16 @@ class CameraManager: NSObject, ObservableObject {
             guard captureLensFX.isTouchReactive else { return nil }
             return LensFXEngine.shared.snapshotForCapture()
         }()
-        // Always bake film/FX into the UIImage companion (gallery + Photos JPEG/HEIC).
-        // RAW DNG stays clean via the separate raw callback — honesty for the preview twin.
-        let shouldProcess = true
-        let needsFXBake = captureLensFX != .none || captureFilmFilter != .none
+        // Natural mode keeps the processed companion un-baked (preview looks stay live).
+        // RAW DNG is always clean via the separate raw callback.
+        let allowBake = bakeLooksIntoProcessed || !naturalCaptureEnabled
+        let needsFXBake = allowBake && (captureLensFX != .none || captureFilmFilter != .none)
 
         if needsFXBake {
             isBakingStill = true
         }
 
-        print("LensFX capture: fx=\(captureLensFX.name) film=\(captureFilmFilter) format=\(captureFormat) process=\(shouldProcess) touchForce=\(captureTouch?.force ?? 0)")
-
+        print("LensFX capture: fx=\(captureLensFX.name) film=\(captureFilmFilter) format=\(captureFormat) bake=\(needsFXBake) natural=\(naturalCaptureEnabled) touchForce=\(captureTouch?.force ?? 0)")
 
         photoCompletionHandler = { [weak self] image in
             guard let self = self, let image = image else {
@@ -1500,14 +1555,12 @@ class CameraManager: NSObject, ObservableObject {
             DispatchQueue.global(qos: .userInitiated).async {
 
                 let filteredImage: UIImage
-                if shouldProcess && needsFXBake {
+                if needsFXBake {
                     filteredImage = self.applyLensFX(
                         captureLensFX,
                         to: self.applyFilmFilter(captureFilmFilter, to: image),
                         touch: captureTouch
                     )
-                } else if shouldProcess {
-                    filteredImage = image
                 } else {
                     filteredImage = image
                 }
@@ -1532,7 +1585,11 @@ class CameraManager: NSObject, ObservableObject {
         case .raw:
             // Dual RAW+processed: DNG alone cannot decode via UIImage(data:),
             // which previously returned nil and dropped the capture silently.
-            if let rawFormat = photoOutput.availableRawPhotoPixelFormatTypes.first {
+            // Prefer Bayer over ProRAW so the DNG stays closer to the sensor.
+            if let rawFormat = preferredRawPixelFormat() {
+                let isBayer = AVCapturePhotoOutput.isBayerRAWPixelFormat(rawFormat)
+                let isPro = AVCapturePhotoOutput.isAppleProRAWPixelFormat(rawFormat)
+                print("NaturalCapture RAW: format=\(rawFormat) bayer=\(isBayer) proRAW=\(isPro)")
                 let processedFormat: [String: Any]
                 if photoOutput.availablePhotoCodecTypes.contains(.hevc) {
                     processedFormat = [AVVideoCodecKey: AVVideoCodecType.hevc]
@@ -1555,6 +1612,7 @@ class CameraManager: NSObject, ObservableObject {
 
         settings.flashMode = flashMode
         settings.maxPhotoDimensions = photoOutput.maxPhotoDimensions
+        applyMinimalProcessing(to: &settings)
 
         photoOutput.capturePhoto(with: settings, delegate: self)
     }

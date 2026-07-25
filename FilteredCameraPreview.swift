@@ -368,6 +368,16 @@ extension FilteredPreviewView: MTKViewDelegate {
         // Handle size changes if needed
     }
 
+    /// Prefer the window scene's interface orientation over UIDevice (more reliable
+    /// while rotating, and correct when device orientation is faceUp/unknown).
+    private static func interfaceOrientation() -> UIInterfaceOrientation {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        if let orient = scenes.first(where: { $0.activationState == .foregroundActive })?.interfaceOrientation {
+            return orient
+        }
+        return scenes.first?.interfaceOrientation ?? .portrait
+    }
+
     func draw(in view: MTKView) {
         guard var ciImage = currentCIImage,
               let commandBuffer = commandQueue?.makeCommandBuffer(),
@@ -386,15 +396,21 @@ extension FilteredPreviewView: MTKViewDelegate {
         // Texture must match drawable size
         guard drawable.texture.width > 1, drawable.texture.height > 1 else { return }
 
-        // Apply orientation correction for portrait mode
-        // Video frames come in landscape orientation, rotate for portrait display
-        let deviceOrientation = UIDevice.current.orientation
-        if deviceOrientation.isPortrait || deviceOrientation == .unknown || deviceOrientation == .faceUp || deviceOrientation == .faceDown {
+        // Video buffers are sensor-native (landscape). Map to the *interface*
+        // orientation so portrait + landscape left/right all read upright.
+        switch Self.interfaceOrientation() {
+        case .portrait, .unknown:
             ciImage = ciImage.oriented(.right)
-        } else if deviceOrientation == .landscapeLeft {
+        case .portraitUpsideDown:
+            ciImage = ciImage.oriented(.left)
+        case .landscapeLeft:
+            // Home button / indicator on the right → buffer needs 180°
             ciImage = ciImage.oriented(.down)
+        case .landscapeRight:
+            break // sensor-native
+        @unknown default:
+            ciImage = ciImage.oriented(.right)
         }
-        // landscapeRight is the native orientation, no transform needed
 
         let extent = ciImage.extent
         let imageSize = extent.size
