@@ -324,6 +324,10 @@ class FilteredPreviewView: UIView {
     var session: AVCaptureSession? {
         didSet {
             previewLayer?.session = session
+            // Session (re)attach — never leave Metal covering a dead feed.
+            if currentCIImage == nil {
+                restoreCleanPreview()
+            }
         }
     }
 

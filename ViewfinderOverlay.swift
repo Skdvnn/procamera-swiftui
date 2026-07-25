@@ -85,6 +85,13 @@ private struct SeededGenerator: RandomNumberGenerator {
     }
 }
 
+/// Film / FX / looks menus — owned by ContentView and presented in a
+/// separate fullScreenCover so they never insert into the Metal viewfinder tree.
+enum ChromePickerMenu: String, Identifiable, CaseIterable {
+    case film, fx, looks
+    var id: String { rawValue }
+}
+
 // MARK: - Viewfinder Overlay (matches Figma design)
 struct ViewfinderOverlay: View {
     let showGrid: Bool
@@ -92,32 +99,19 @@ struct ViewfinderOverlay: View {
     @Binding var filmFilter: FilmFilterMode
     @Binding var lensFX: LensFXMode
     @Binding var focusPeaking: Bool
-    /// Landscape: tuck pickers closer to the top chrome.
+    /// Which chrome picker ContentView currently has open (highlight only).
+    var activePicker: ChromePickerMenu? = nil
+    /// Landscape: tuck chrome padding.
     var compactChrome: Bool = false
-    /// When the bottom deck collapses/expands, force-close film/FX menus so a
-    /// stuck dismiss layer can't freeze the finder.
-    var finderCollapsed: Bool = false
     var onFlipCamera: (() -> Void)? = nil
-    var onSaveLook: (() -> Void)? = nil
-    /// Scene presets live in the film dock (Street chip removed).
-    /// Nil when exposure is AUTO (no scene owns the dials).
-    var shootMode: ShootMode? = nil
-    var onApplyShootMode: ((ShootMode) -> Void)? = nil
-    /// Called when user picks a FILM stock directly (not via SCENE) — clears SCENE highlight.
-    var onFilmApplied: (() -> Void)? = nil
+    /// Tap film / FX / looks — ContentView presents the picker out-of-tree.
+    var onTogglePicker: ((ChromePickerMenu) -> Void)? = nil
     @ObservedObject private var lookStore = LookRecipeStore.shared
-    @State private var showFilmMenu = false
-    @State private var showFXMenu = false
-    @State private var showRecipeMenu = false
-
-    private var anyMenuOpen: Bool {
-        showFilmMenu || showFXMenu || showRecipeMenu
-    }
 
     var body: some View {
-        // Empty space passes taps to shutter. Pickers are overlays with
-        // animation hard-killed — ZStack inserts next to Metal stitchables
-        // were EXC_BAD_ACCESS / MetadataCache crashes on device.
+        // Chrome ONLY — pickers are presented by ContentView via fullScreenCover.
+        // Inserting LeicaFilmPicker here next to FilteredCameraPreview / MTKView
+        // MetadataCache-crashed on device even with animation killed (builds 54–57).
         ZStack(alignment: .topTrailing) {
             GeometryReader { geo in
                 ZStack {
@@ -140,20 +134,10 @@ struct ViewfinderOverlay: View {
             }
             .allowsHitTesting(false)
 
-            // Dismiss under chrome (zIndex -1), not a full .overlay that ate
-            // film/FX button taps and could stick after collapse.
-            if anyMenuOpen {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture { closeAllMenus() }
-                    .zIndex(-1)
-            }
-
             VStack {
                 HStack(alignment: .top) {
                     VStack(spacing: 8) {
                         chromeButton {
-                            closeAllMenus()
                             aspectRatio = aspectRatio.next
                         } label: {
                             Text(aspectRatio.label)
@@ -169,138 +153,50 @@ struct ViewfinderOverlay: View {
                                 .foregroundColor(.white.opacity(0.85))
                         }
                     }
-                    .padding(16)
+                    .padding(compactChrome ? 10 : 16)
 
                     Spacer().allowsHitTesting(false)
 
                     VStack(spacing: 8) {
                         chromeButton {
-                            toggleMenu(.film)
+                            onTogglePicker?(.film)
                         } label: {
                             Image(systemName: "film")
                                 .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(showFilmMenu || filmFilter != .none
+                                .foregroundColor(activePicker == .film || filmFilter != .none
                                                  ? Color(red: 1.0, green: 0.85, blue: 0.35)
                                                  : .white.opacity(0.8))
                         }
 
                         chromeButton {
-                            toggleMenu(.fx)
+                            onTogglePicker?(.fx)
                         } label: {
                             Image(systemName: "water.waves")
                                 .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(showFXMenu || lensFX != .none || focusPeaking
-                                                 ? (focusPeaking && lensFX == .none && !showFXMenu
+                                .foregroundColor(activePicker == .fx || lensFX != .none || focusPeaking
+                                                 ? (focusPeaking && lensFX == .none && activePicker != .fx
                                                     ? Color(red: 0.35, green: 0.95, blue: 0.45)
                                                     : Color(red: 0.55, green: 0.88, blue: 0.95))
                                                  : .white.opacity(0.8))
                         }
 
                         chromeButton {
-                            toggleMenu(.looks)
+                            onTogglePicker?(.looks)
                         } label: {
                             Image(systemName: "bookmark.fill")
                                 .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(showRecipeMenu || !lookStore.recipes.isEmpty
+                                .foregroundColor(activePicker == .looks || !lookStore.recipes.isEmpty
                                                  ? Color(red: 1.0, green: 0.75, blue: 0.45)
                                                  : .white.opacity(0.8))
                         }
                     }
-                    .padding(16)
+                    .padding(compactChrome ? 10 : 16)
                 }
                 Spacer().allowsHitTesting(false)
             }
-            .zIndex(1)
-        }
-        .overlay(alignment: .topTrailing) {
-            Group {
-                if showFilmMenu {
-                    LeicaFilmPicker(
-                        selectedFilter: $filmFilter,
-                        isPresented: $showFilmMenu,
-                        shootMode: shootMode,
-                        onApplyShootMode: onApplyShootMode,
-                        onSaveLook: { onSaveLook?() },
-                        onFilmApplied: onFilmApplied
-                    )
-                    .padding(.trailing, compactChrome ? 10 : 16)
-                    .padding(.top, compactChrome ? 48 : 100)
-                }
-            }
-            .transaction { $0.animation = nil }
-        }
-        .overlay(alignment: .topTrailing) {
-            Group {
-                if showFXMenu {
-                    LensFXPicker(
-                        selectedFX: $lensFX,
-                        focusPeaking: $focusPeaking,
-                        isPresented: $showFXMenu
-                    )
-                    .padding(.trailing, compactChrome ? 10 : 16)
-                    .padding(.top, compactChrome ? 72 : 140)
-                }
-            }
-            .transaction { $0.animation = nil }
-        }
-        .overlay(alignment: .topTrailing) {
-            Group {
-                if showRecipeMenu {
-                    LookRecipePicker(
-                        store: lookStore,
-                        filmFilter: $filmFilter,
-                        lensFX: $lensFX,
-                        isPresented: $showRecipeMenu,
-                        onSaveCurrent: { onSaveLook?() }
-                    )
-                    .padding(.trailing, compactChrome ? 10 : 16)
-                    .padding(.top, compactChrome ? 96 : 180)
-                }
-            }
-            .transaction { $0.animation = nil }
         }
         .transaction { $0.animation = nil }
-        .onChange(of: finderCollapsed) { _, _ in
-            closeAllMenus()
-        }
     }
-
-    private enum ChromeMenu { case film, fx, looks }
-
-    private func closeAllMenus() {
-        var t = Transaction()
-        t.disablesAnimations = true
-        withTransaction(t) {
-            showFilmMenu = false
-            showFXMenu = false
-            showRecipeMenu = false
-        }
-    }
-
-    private func toggleMenu(_ menu: ChromeMenu) {
-        var t = Transaction()
-        t.disablesAnimations = true
-        withTransaction(t) {
-            switch menu {
-            case .film:
-                let open = !showFilmMenu
-                showFXMenu = false
-                showRecipeMenu = false
-                showFilmMenu = open
-            case .fx:
-                let open = !showFXMenu
-                showFilmMenu = false
-                showRecipeMenu = false
-                showFXMenu = open
-            case .looks:
-                let open = !showRecipeMenu
-                showFilmMenu = false
-                showFXMenu = false
-                showRecipeMenu = open
-            }
-        }
-    }
-
 
     private func chromeButton<Label: View>(
         action: @escaping () -> Void,
@@ -1083,6 +979,75 @@ struct LookRecipePicker: View {
         }
         .background(dsPickerChrome())
         .frame(width: 200)
+    }
+}
+
+// MARK: - Out-of-tree chrome picker host (fullScreenCover)
+/// Presented from ContentView — NEVER as a sibling of FilteredCameraPreview.
+struct ChromePickerCover: View {
+    let menu: ChromePickerMenu
+    @Binding var filmFilter: FilmFilterMode
+    @Binding var lensFX: LensFXMode
+    @Binding var focusPeaking: Bool
+    var shootMode: ShootMode? = nil
+    var onApplyShootMode: ((ShootMode) -> Void)? = nil
+    var onSaveLook: (() -> Void)? = nil
+    var onFilmApplied: (() -> Void)? = nil
+    var compactChrome: Bool = false
+    var onDismiss: () -> Void
+
+    @ObservedObject private var lookStore = LookRecipeStore.shared
+
+    private var presentedBinding: Binding<Bool> {
+        Binding(
+            get: { true },
+            set: { if !$0 { onDismiss() } }
+        )
+    }
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            // Dim + tap-out — separate presentation host, not the camera ZStack.
+            Color.black.opacity(0.35)
+                .ignoresSafeArea()
+                .contentShape(Rectangle())
+                .onTapGesture { onDismiss() }
+
+            Group {
+                switch menu {
+                case .film:
+                    LeicaFilmPicker(
+                        selectedFilter: $filmFilter,
+                        isPresented: presentedBinding,
+                        shootMode: shootMode,
+                        onApplyShootMode: onApplyShootMode,
+                        onSaveLook: { onSaveLook?() },
+                        onFilmApplied: onFilmApplied
+                    )
+                    .padding(.trailing, compactChrome ? 10 : 16)
+                    .padding(.top, compactChrome ? 48 : 100)
+                case .fx:
+                    LensFXPicker(
+                        selectedFX: $lensFX,
+                        focusPeaking: $focusPeaking,
+                        isPresented: presentedBinding
+                    )
+                    .padding(.trailing, compactChrome ? 10 : 16)
+                    .padding(.top, compactChrome ? 72 : 140)
+                case .looks:
+                    LookRecipePicker(
+                        store: lookStore,
+                        filmFilter: $filmFilter,
+                        lensFX: $lensFX,
+                        isPresented: presentedBinding,
+                        onSaveCurrent: { onSaveLook?() }
+                    )
+                    .padding(.trailing, compactChrome ? 10 : 16)
+                    .padding(.top, compactChrome ? 96 : 180)
+                }
+            }
+        }
+        .transaction { $0.animation = nil }
     }
 }
 

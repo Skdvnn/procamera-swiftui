@@ -288,6 +288,9 @@ struct ContentView: View {
     @State private var aspectRatio: AspectRatioMode = .full
     @State private var filmFilter: FilmFilterMode = .none
     @State private var lensFX: LensFXMode = .none
+    /// Film / FX / looks — presented OUT of the Metal viewfinder tree.
+    @State private var chromePicker: ChromePickerMenu? = nil
+    @State private var finderIsLandscape = false
     @State private var captureFormat: CaptureFormat = .heic
     @State private var topCollapsed = false
     /// Deep-link / shortcut capture before the session is up.
@@ -424,6 +427,46 @@ struct ContentView: View {
                     showSettings = false
                 }
             )
+        }
+        // HARD isolation: pickers live in a separate presentation host.
+        // In-tree overlays next to MTKView still MetadataCache-crashed on device.
+        .fullScreenCover(item: $chromePicker) { menu in
+            ChromePickerCover(
+                menu: menu,
+                filmFilter: $filmFilter,
+                lensFX: $lensFX,
+                focusPeaking: $focusPeaking,
+                shootMode: ShootMode(rawValue: shootModeRaw),
+                onApplyShootMode: { applyShootMode($0) },
+                onSaveLook: {
+                    LookRecipeStore.shared.saveCurrent(film: filmFilter, lensFX: lensFX)
+                    Haptics.medium()
+                },
+                onFilmApplied: { shootModeRaw = "auto" },
+                compactChrome: finderIsLandscape,
+                onDismiss: {
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) { chromePicker = nil }
+                }
+            )
+            .presentationBackground(.clear)
+            .transaction { $0.animation = nil }
+        }
+        .onChange(of: bottomCollapsed) { _, _ in
+            if chromePicker != nil {
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { chromePicker = nil }
+            }
+        }
+    }
+
+    private func toggleChromePicker(_ menu: ChromePickerMenu) {
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            chromePicker = (chromePicker == menu) ? nil : menu
         }
     }
 
@@ -592,8 +635,8 @@ struct ContentView: View {
                             filmFilter: $filmFilter,
                             lensFX: $lensFX,
                             focusPeaking: $focusPeaking,
+                            activePicker: chromePicker,
                             compactChrome: isLandscape,
-                            finderCollapsed: effectiveBottomCollapsed,
                             onFlipCamera: {
                                 Haptics.click()
                                 camera.switchCamera()
@@ -603,13 +646,7 @@ struct ContentView: View {
                                     zoomValue = camera.zoomFactor
                                 }
                             },
-                            onSaveLook: {
-                                LookRecipeStore.shared.saveCurrent(film: filmFilter, lensFX: lensFX)
-                                Haptics.medium()
-                            },
-                            shootMode: ShootMode(rawValue: shootModeRaw),
-                            onApplyShootMode: { applyShootMode($0) },
-                            onFilmApplied: { shootModeRaw = "auto" }
+                            onTogglePicker: { toggleChromePicker($0) }
                         )
                         .padding(.horizontal, effectiveBottomCollapsed ? 6 : DS.pageMargin)
                         .zIndex(5)
@@ -688,6 +725,7 @@ struct ContentView: View {
                 else { evaluateNightAssist() }
             }
             .onChange(of: isLandscape) { _, landscape in
+                finderIsLandscape = landscape
                 // Landscape uses compact chrome; remember portrait expanded state separately.
                 if landscape {
                     bottomDeckDrag = 0
@@ -697,6 +735,7 @@ struct ContentView: View {
                     PreviewBufferRotation.from(interfaceOrientation: orient)
                 )
             }
+            .onAppear { finderIsLandscape = isLandscape }
             .onAppear {
                 let orient = CameraManager.currentInterfaceOrientation()
                 LensFXEngine.shared.setPreviewBufferRotation(
