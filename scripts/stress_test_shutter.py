@@ -285,6 +285,13 @@ def test_source_guards() -> None:
     check("idle frame early-out", "Idle frames: no CIImage wrap" in cam)
     check("morph texture cache", "morphCacheKey" in (ROOT / "LensFXEngine.swift").read_text())
     check("info bar observes HistogramBus", "HistogramBus.shared" in content)
+    check("ShutterMotion curves", "enum ShutterMotion" in content and "static let deck" in content)
+    check("no VStack deck .animation on Metal tree", ".animation(deckCollapseSpring" not in content)
+    check("Metal preview freezes animation", ".transaction { $0.animation = nil }" in content)
+    check("picker local entrance", "struct PickerEntrance" in (ROOT / "ViewfinderOverlay.swift").read_text())
+    check("deck uses ShutterMotion", "withAnimation(ShutterMotion.deck)" in content)
+    check("flash opacity wash", "opacity(showFlash ? 0.92 : 0)" in content)
+    check("scrub no bounce spring", "withAnimation(ShutterMotion.scrub)" in content)
     check("no Street chip overlay", "cycleShootMode" not in content)
     check("scenes in film dock", "sectionLabel(\"SCENE\")" in (ROOT / "ViewfinderOverlay.swift").read_text())
     gauge = (ROOT / "AnalogGaugeView.swift").read_text()
@@ -422,10 +429,10 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 42", m is not None and int(ver) >= 42, ver)
+    check("Info.plist build >= 43", m is not None and int(ver) >= 43, ver)
     import re as _re
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 42+", any(v >= 42 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 43+", any(v >= 43 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

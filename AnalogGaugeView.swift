@@ -811,7 +811,7 @@ struct CompactMeter: View {
                         .frame(width: 2, height: 12)
                         .shadow(color: Color(red: 1.0, green: 0.62, blue: 0.3).opacity(0.35), radius: 1.5, y: 0)
                         .offset(x: clamped * (width - 2))
-                        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: clamped)
+                        .animation(ShutterMotion.scrub, value: clamped)
                 }
             }
             .frame(height: 12)

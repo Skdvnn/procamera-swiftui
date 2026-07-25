@@ -245,6 +245,7 @@ struct ViewfinderOverlay: View {
                     onApplyShootMode: onApplyShootMode,
                     onSaveLook: { onSaveLook?() }
                 )
+                .modifier(PickerEntrance())
                 .padding(.trailing, compactChrome ? 10 : 16)
                 .padding(.top, compactChrome ? 48 : 100)
             }
@@ -254,6 +255,7 @@ struct ViewfinderOverlay: View {
                     selectedFX: $lensFX,
                     isPresented: $showFXMenu
                 )
+                .modifier(PickerEntrance())
                 .padding(.trailing, compactChrome ? 10 : 16)
                 .padding(.top, compactChrome ? 72 : 140)
             }
@@ -266,9 +268,25 @@ struct ViewfinderOverlay: View {
                     isPresented: $showRecipeMenu,
                     onSaveCurrent: { onSaveLook?() }
                 )
+                .modifier(PickerEntrance())
                 .padding(.trailing, compactChrome ? 10 : 16)
                 .padding(.top, compactChrome ? 96 : 180)
             }
+        }
+    }
+
+    /// Soft picker entrance scoped to the picker root — never `withAnimation` on
+    /// the overlay ZStack (that walks Metal shutter chrome).
+    private struct PickerEntrance: ViewModifier {
+        @State private var revealed = false
+
+        func body(content: Content) -> some View {
+            content
+                .opacity(revealed ? 1 : 0)
+                .offset(y: revealed ? 0 : -8)
+                .scaleEffect(revealed ? 1 : 0.98, anchor: .topTrailing)
+                .onAppear { revealed = true }
+                .animation(ShutterMotion.picker, value: revealed)
         }
     }
 
@@ -626,8 +644,8 @@ struct LeicaFilmPicker: View {
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
 
     var body: some View {
-        // No withAnimation / scaleEffect — those transactions walk the camera
-        // tree (Metal shutter shaders) and can MetadataCache-crash on device.
+        // Entrance motion lives on PickerEntrance (local opacity/offset only).
+        // Do not wrap apply/dismiss in withAnimation — that walks Metal chrome.
         VStack(spacing: 0) {
             HStack {
                 Text("LOOKS")
@@ -838,7 +856,7 @@ struct LensFXPicker: View {
     }
 
     var body: some View {
-        // Instant present — no spring/withAnimation (crashes over Metal camera chrome).
+        // Apply/dismiss stay transaction-frozen; entrance is PickerEntrance only.
         VStack(spacing: 0) {
             HStack {
                 Text("LENS FX")

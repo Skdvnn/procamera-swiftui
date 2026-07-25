@@ -9,6 +9,28 @@ struct Haptics {
     static func click() { UIImpactFeedbackGenerator(style: .rigid).impactOccurred() }
 }
 
+// MARK: - Finder motion
+/// Timing curves for camera chrome. Prefer these over bouncy springs so motion
+/// stays mechanical and never walks animated Metal shutter params.
+enum ShutterMotion {
+    /// Bottom / top deck expand-collapse
+    static let deck = Animation.timingCurve(0.22, 0.82, 0.2, 1.0, duration: 0.38)
+    /// Glass info bar / compact overlays
+    static let chrome = Animation.timingCurve(0.22, 0.78, 0.2, 1.0, duration: 0.28)
+    /// Focus reticle
+    static let reticleIn = Animation.easeOut(duration: 0.14)
+    static let reticleOut = Animation.easeOut(duration: 0.2)
+    /// Capture flash wash
+    static let flash = Animation.easeOut(duration: 0.07)
+    /// Timer digit tick
+    static let tick = Animation.easeOut(duration: 0.15)
+    /// Local film / FX / recipe picker entrance (picker subtree only)
+    static let picker = Animation.timingCurve(0.2, 0.8, 0.22, 1.0, duration: 0.2)
+    /// Scrubber / ticker settle — no bounce
+    static let scrub = Animation.easeOut(duration: 0.18)
+    static let press = Animation.easeOut(duration: 0.1)
+}
+
 // MARK: - Vulcanite Leather Texture (Leica-style vulcanite rubber grain)
 struct VulcaniteGrain: View {
     var body: some View {
@@ -263,10 +285,6 @@ struct ContentView: View {
         }
     }
 
-    private var deckCollapseSpring: Animation {
-        .spring(response: 0.52, dampingFraction: 0.92)
-    }
-
     var body: some View {
         GeometryReader { geo in
             let safeTop = geo.safeAreaInsets.top
@@ -381,8 +399,8 @@ struct ContentView: View {
                             ))
                             .transition(
                                 .asymmetric(
-                                    insertion: .opacity.combined(with: .offset(y: 10)),
-                                    removal: .opacity
+                                    insertion: .opacity.combined(with: .offset(y: 8)),
+                                    removal: .opacity.combined(with: .offset(y: 6))
                                 )
                             )
                             .zIndex(2)
@@ -393,8 +411,8 @@ struct ContentView: View {
                                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                                 .transition(
                                     .asymmetric(
-                                        insertion: .opacity.combined(with: .offset(y: 14)),
-                                        removal: .opacity.combined(with: .offset(y: 16))
+                                        insertion: .opacity.combined(with: .offset(y: 12)),
+                                        removal: .opacity.combined(with: .offset(y: 10))
                                     )
                                 )
                                 // Above histogram + viewfinder chrome so shutter wins taps.
@@ -461,27 +479,28 @@ struct ContentView: View {
                         .background { ControlsGrain() }
                         .transition(
                             .asymmetric(
-                                insertion: .opacity.combined(with: .offset(y: 12)),
-                                removal: .opacity.combined(with: .offset(y: 14))
+                                insertion: .opacity.combined(with: .offset(y: 10)),
+                                removal: .opacity.combined(with: .offset(y: 12))
                             )
                         )
                     }
                 }
                 .padding(.top, safeTop)
-                .animation(deckCollapseSpring, value: bottomCollapsed)
-                .animation(deckCollapseSpring, value: isLandscape)
+                // Animate only chrome commits via withAnimation(ShutterMotion.deck) —
+                // never attach .animation to this VStack (it owns the Metal preview).
 
-                if showFlash {
-                    Color.white.ignoresSafeArea()
-                }
+                // Flash wash stays in-tree so opacity can ease; never hits Metal params.
+                Color.white
+                    .ignoresSafeArea()
+                    .opacity(showFlash ? 0.92 : 0)
+                    .allowsHitTesting(false)
+                    .animation(ShutterMotion.flash, value: showFlash)
             }
             .ignoresSafeArea()
             .onChange(of: isLandscape) { _, landscape in
                 // Landscape uses compact chrome; remember portrait expanded state separately.
                 if landscape {
-                    withAnimation(deckCollapseSpring) {
-                        bottomDeckDrag = 0
-                    }
+                    bottomDeckDrag = 0
                 }
                 let orient = CameraManager.currentInterfaceOrientation()
                 LensFXEngine.shared.setPreviewBufferRotation(
@@ -836,7 +855,9 @@ struct ContentView: View {
         focusStartEV = exposureValue
         lastExposureHapticStep = Int((exposureValue * 10).rounded())
         isDraggingExposure = false
-        withAnimation(.easeOut(duration: 0.15)) { showFocusPoint = true }
+        // Local reticle animation via .animation on the preview chrome — not withAnimation
+        // (avoids walking the Metal shutter tree).
+        showFocusPoint = true
         scheduleFocusHide(after: 2.8)
         // Tap also drops a decaying ripple when a morphic FX is active
         if lensFX.isTouchReactive {
@@ -875,10 +896,8 @@ struct ContentView: View {
     private func scheduleFocusHide(after delay: TimeInterval) {
         focusHideWorkItem?.cancel()
         let work = DispatchWorkItem {
-            withAnimation(.easeOut(duration: 0.25)) {
-                if !isDraggingExposure {
-                    showFocusPoint = false
-                }
+            if !isDraggingExposure {
+                showFocusPoint = false
             }
         }
         focusHideWorkItem = work
@@ -913,7 +932,7 @@ struct ContentView: View {
                 let dy = value.translation.height
                 let threshold = max(30, minDistance * 0.6)
                 guard abs(dy) > abs(value.translation.width) * 1.15 else { return }
-                withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                withAnimation(ShutterMotion.deck) {
                     if dy < -threshold {
                         set(collapseOnSwipeUp)
                     } else if dy > threshold {
@@ -957,41 +976,64 @@ struct ContentView: View {
                         }
                     )
                     .frame(width: vfGeo.size.width, height: vfGeo.size.height)
+                    // Hard-stop inherited animations — Metal shutter args must stay constant.
+                    .transaction { $0.animation = nil }
 
                     if showFocusPoint || isDraggingExposure {
                         FocusExposureReticle(exposureBias: exposureValue)
                             .position(focusPoint)
                             .allowsHitTesting(false)
+                            .transition(
+                                .opacity.combined(with: .scale(scale: 1.06))
+                            )
                     }
                 }
+                .animation(
+                    showFocusPoint ? ShutterMotion.reticleIn : ShutterMotion.reticleOut,
+                    value: showFocusPoint
+                )
 
                 ViewfinderVignette()
 
-                if timerCountdown > 0 {
-                    Text("\(timerCountdown)")
-                        .font(.system(size: 80, weight: .thin, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.9))
-                        .allowsHitTesting(false)
+                Group {
+                    if timerCountdown > 0 {
+                        Text("\(timerCountdown)")
+                            .font(.system(size: 80, weight: .thin, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.9))
+                            .contentTransition(.numericText())
+                            .id(timerCountdown)
+                            .transition(.opacity.combined(with: .scale(scale: 1.12)))
+                            .allowsHitTesting(false)
+                    }
                 }
+                .animation(ShutterMotion.tick, value: timerCountdown)
 
-                if camera.isLongExposureCapturing {
-                    LongExposureProgressOverlay(
-                        progress: camera.longExposureProgress,
-                        pathLabel: camera.longExposurePathLabel
-                    )
+                Group {
+                    if camera.isLongExposureCapturing {
+                        LongExposureProgressOverlay(
+                            progress: camera.longExposureProgress,
+                            pathLabel: camera.longExposurePathLabel
+                        )
+                        .transition(.opacity)
+                    }
                 }
+                .animation(ShutterMotion.chrome, value: camera.isLongExposureCapturing)
 
-                if showingCleanCompare {
-                    Text("CLEAN")
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 5)
-                        .background(Capsule().fill(Color.black.opacity(0.55)))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .padding(.top, 56)
-                        .allowsHitTesting(false)
+                Group {
+                    if showingCleanCompare {
+                        Text("CLEAN")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .background(Capsule().fill(Color.black.opacity(0.55)))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                            .padding(.top, 56)
+                            .transition(.opacity)
+                            .allowsHitTesting(false)
+                    }
                 }
+                .animation(ShutterMotion.press, value: showingCleanCompare)
 
                 // Curved ƒ readout peels from the trailing edge while scrubbing down.
                 if !bottomCollapsed && bottomDeckDrag > 4 && apertureValue > 0.5 {
@@ -1030,6 +1072,12 @@ struct ContentView: View {
                         // never reads as overlapping the expanded shutter row below.
                         .simultaneousGesture(bottomDeckSwipe)
                         .padding(.bottom, CollapsedChrome.expandedHistogramBottomPad)
+                        .transition(
+                            .asymmetric(
+                                insertion: .opacity.combined(with: .offset(y: 8)),
+                                removal: .opacity.combined(with: .offset(y: 6))
+                            )
+                        )
                     }
                     .zIndex(5)
                 }
@@ -1157,7 +1205,7 @@ struct ContentView: View {
                 }()
 
                 let committedDrag = bottomDeckDrag
-                withAnimation(deckCollapseSpring) {
+                withAnimation(ShutterMotion.deck) {
                     bottomDeckDrag = 0
                     guard abs(effective) > abs(dx) * 0.5 else { return }
                     if bottomCollapsed {
@@ -1421,10 +1469,10 @@ struct ContentView: View {
                 }
             }
         } else {
-            // Normal capture with flash effect
+            // Normal capture with flash wash (opacity eases via ShutterMotion.flash)
             isCapturing = true
             showFlash = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { showFlash = false }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.055) { showFlash = false }
             camera.capturePhoto(
                 filmFilter: shutterFilm,
                 lensFX: shutterFX,
@@ -1722,10 +1770,10 @@ struct TickerValue: View {
         Text(currentValue)
             .font(.system(size: 12, weight: .bold, design: .monospaced))
             .foregroundColor(isDragging ? DS.accent : .white)
-            .scaleEffect(isDragging ? 1.15 : 1.0)
+            .scaleEffect(isDragging ? 1.12 : 1.0)
             .contentTransition(.numericText())
-            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isDragging)
-            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: currentIndex)
+            .animation(ShutterMotion.scrub, value: isDragging)
+            .animation(ShutterMotion.scrub, value: currentIndex)
     }
 }
 
@@ -2087,7 +2135,7 @@ struct LiquidGlassZoomControl: View {
                     Rectangle()
                         .fill(isDragging ? DS.accent : Color.white.opacity(0.7))
                         .frame(width: isDragging ? 2.5 : 2, height: isDragging ? 16 : 12)
-                        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: isDragging)
+                        .animation(ShutterMotion.scrub, value: isDragging)
                 }
 
                 // Dot indicators on right
@@ -2117,14 +2165,14 @@ struct LiquidGlassZoomControl: View {
                         let newIndex = max(0, min(focalLengths.count - 1, startIndex + steps))
                         if newIndex != currentIndex {
                             Haptics.light()
-                            withAnimation(.spring(response: 0.25, dampingFraction: 0.7)) {
+                            withAnimation(ShutterMotion.scrub) {
                                 focalLength = focalLengths[newIndex]
                             }
                             onFocalLengthChanged(focalLength)
                         }
                     }
                     .onEnded { _ in
-                        withAnimation(.spring(response: 0.35, dampingFraction: 0.6)) {
+                        withAnimation(ShutterMotion.scrub) {
                             isDragging = false
                             tickerOffset = 0
                         }
@@ -2462,7 +2510,7 @@ struct ScaleButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.94 : 1.0)
-            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+            .animation(ShutterMotion.press, value: configuration.isPressed)
     }
 }
 
@@ -2886,7 +2934,7 @@ struct ProButtonStyle: ButtonStyle {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.96 : 1.0)
             .opacity(configuration.isPressed ? 0.8 : 1.0)
-            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+            .animation(ShutterMotion.press, value: configuration.isPressed)
     }
 }
 
@@ -2895,7 +2943,7 @@ struct SkeuomorphicButtonStyle: ButtonStyle {
         configuration.label
             .scaleEffect(configuration.isPressed ? 0.95 : 1.0)
             .opacity(configuration.isPressed ? 0.85 : 1.0)
-            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+            .animation(ShutterMotion.press, value: configuration.isPressed)
     }
 }
 
@@ -3548,7 +3596,7 @@ struct ISOScrubberVertical: View {
                     }
                     .onEnded { _ in
                         isDragging = false
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) {
+                        withAnimation(ShutterMotion.scrub) {
                             dragOffset = 0
                         }
                     }
@@ -3767,8 +3815,10 @@ struct FocusExposureReticle: View {
             }
         }
         .scaleEffect(scale)
+        .animation(ShutterMotion.reticleIn, value: scale)
         .onAppear {
-            withAnimation(.easeOut(duration: 0.18)) { scale = 1 }
+            // Next turn so the scale change animates after the view is mounted.
+            DispatchQueue.main.async { scale = 1 }
         }
     }
 }
