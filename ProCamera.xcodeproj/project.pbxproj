@@ -552,7 +552,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = ProCameraDebug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 60;
+				CURRENT_PROJECT_VERSION = 61;
 				DEVELOPMENT_TEAM = 9DKG694QL7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
@@ -583,7 +583,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = ProCamera.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 60;
+				CURRENT_PROJECT_VERSION = 61;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
@@ -612,7 +612,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ShutterWidgets/ShutterWidgetsDebug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 60;
+				CURRENT_PROJECT_VERSION = 61;
 				DEVELOPMENT_TEAM = 9DKG694QL7;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShutterWidgets/Info.plist;
@@ -638,7 +638,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ShutterWidgets/ShutterWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 60;
+				CURRENT_PROJECT_VERSION = 61;
 				DEVELOPMENT_TEAM = 9DKG694QL7;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShutterWidgets/Info.plist;
@@ -665,7 +665,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ShutterCaptureExtension/ShutterCaptureExtensionDebug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 60;
+				CURRENT_PROJECT_VERSION = 61;
 				DEVELOPMENT_TEAM = 9DKG694QL7;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShutterCaptureExtension/Info.plist;
@@ -691,7 +691,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ShutterCaptureExtension/ShutterCaptureExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 60;
+				CURRENT_PROJECT_VERSION = 61;
 				DEVELOPMENT_TEAM = 9DKG694QL7;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShutterCaptureExtension/Info.plist;

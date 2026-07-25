@@ -564,11 +564,10 @@ def test_source_guards() -> None:
     check("CloudBooks no vulcanite Metal", "LeicaVulcaniteTexture" not in (ROOT / "CloudBooks.swift").read_text())
     check("didFinish clears pending RAW", "pendingRawData = nil" in cam[cam.find("didFinishCaptureFor"):cam.find("didFinishCaptureFor")+800])
 
-    # Build 58/59 — pickers NEVER in Metal tree; UIKit gate (no ContentView @State)
+    # Build 58–61 — pickers NEVER in Metal tree
     chrome_pre = vf.split("struct ChromePickerCover")[0]
     check("ChromePickerMenu enum", "enum ChromePickerMenu" in vf)
     check("ChromePickerGate UIKit", "enum ChromePickerGate" in vf and "UIHostingController" in vf)
-    check("overFullScreen presentation", "modalPresentationStyle = .overFullScreen" in vf)
     check("ChromePickerCover host", "struct ChromePickerCover" in vf)
     check("overlay chrome no local pickers", "LeicaFilmPicker(" not in chrome_pre)
     check("overlay chrome no FX picker", "LensFXPicker(" not in chrome_pre)
@@ -580,6 +579,7 @@ def test_source_guards() -> None:
     check("onTogglePicker film", "onTogglePicker?(.film)" in vf)
     check("no LookRecipeStore observe on chrome", "@ObservedObject private var lookStore" not in chrome_pre)
     check("no activePicker on overlay", "activePicker" not in chrome_pre)
+    check("no LookRecipeStore read on looks icon", "LookRecipeStore.shared.recipes" not in chrome_pre)
 
     # Build 60 — WYSIWYG still bake must not ship clean looks
     check("bakeLooks returns optional", "-> UIImage?" in cam[cam.find("private func bakeLooksForCapture"):cam.find("private func bakeLooksForCapture")+250])
@@ -587,8 +587,16 @@ def test_source_guards() -> None:
     check("bake fail try again note", "bake failed — try again" in cam)
     check("pause live preview for bake", "Free live Metal/CI so the still bake" in cam)
     check("timer freezes film", "frozenFilmFilter" in content and "frozenLensFX" in content)
-    check("picker bindings sync camera", "camera.selectedFilmFilter = $0" in content)
     check("film bake prefers CGImage", "Prefer CGImage → CIImage" in cam)
+
+    # Build 61 — separate UIWindow + snapshot session (no live Bindings)
+    check("picker overlay UIWindow", "UIWindow(windowScene:" in vf and "windowLevel = .alert" in vf)
+    check("ChromePickerSession snapshot", "final class ChromePickerSession" in vf)
+    check("commit after window teardown", "Apply AFTER the overlay window is gone" in vf)
+    check("deferred present off touch", "Defer off the button's touch transaction" in vf)
+    check("toggle passes values not Bindings", "filmFilter: filmFilter," in content and "onCommit:" in content)
+    check("applyChromePickerCommit", "func applyChromePickerCommit" in content)
+    check("park Metal before picker", "Park live Metal before the overlay" in content)
 
 
 
@@ -671,11 +679,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 60", m is not None and int(ver) >= 60, ver)
+    check("Info.plist build >= 61", m is not None and int(ver) >= 61, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 60+", any(v >= 60 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 61+", any(v >= 61 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

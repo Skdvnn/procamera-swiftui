@@ -355,7 +355,7 @@ struct ContentView: View {
         .id(colorScheme)  // Force redraw on color scheme change
         .onAppear(perform: handleAppear)
         .onDisappear {
-            ChromePickerGate.dismiss()
+            ChromePickerGate.dismiss(commit: false)
             volumeShutter.stop()
             ShutterDeepLinkCenter.endReceiving()
             cancelTimerCountdown()
@@ -442,42 +442,44 @@ struct ContentView: View {
         }
     }
 
-    /// UIKit overFullScreen — does NOT flip ContentView @State, so the Metal
-    /// finder tree is not AttributeGraph-invalidated on open (device crash fix).
+    /// Separate UIWindow + snapshot session — no Bindings into this view.
+    /// Applying looks happens only after the overlay window is torn down.
     private func toggleChromePicker(_ menu: ChromePickerMenu) {
-        // Bindings write ContentView AND CameraManager immediately — UIKit host
-        // Bindings can lag SwiftUI onChange, which left stills baking .none.
-        let filmBinding = Binding<FilmFilterMode>(
-            get: { filmFilter },
-            set: {
-                filmFilter = $0
-                camera.selectedFilmFilter = $0
-            }
-        )
-        let fxBinding = Binding<LensFXMode>(
-            get: { lensFX },
-            set: {
-                lensFX = $0
-                camera.selectedLensFX = $0
-                if !$0.isTouchReactive {
-                    LensFXEngine.shared.clearStickyTouch()
-                }
-            }
-        )
+        // Park live Metal before the overlay window appears.
+        camera.livePreview.push(nil)
         ChromePickerGate.toggle(
             menu,
-            filmFilter: filmBinding,
-            lensFX: fxBinding,
-            focusPeaking: $focusPeaking,
+            filmFilter: filmFilter,
+            lensFX: lensFX,
+            focusPeaking: focusPeaking,
             shootMode: ShootMode(rawValue: shootModeRaw),
-            onApplyShootMode: { applyShootMode($0) },
-            onSaveLook: {
-                LookRecipeStore.shared.saveCurrent(film: filmFilter, lensFX: lensFX)
-                Haptics.medium()
-            },
-            onFilmApplied: { shootModeRaw = "auto" },
-            compactChrome: finderIsLandscape
+            compactChrome: finderIsLandscape,
+            onCommit: { commit in
+                applyChromePickerCommit(commit)
+            }
         )
+    }
+
+    private func applyChromePickerCommit(_ commit: ChromePickerCommit) {
+        filmFilter = commit.filmFilter
+        lensFX = commit.lensFX
+        focusPeaking = commit.focusPeaking
+        camera.selectedFilmFilter = commit.filmFilter
+        camera.selectedLensFX = commit.lensFX
+        if !commit.lensFX.isTouchReactive {
+            LensFXEngine.shared.clearStickyTouch()
+        }
+        if commit.filmAppliedDirectly {
+            shootModeRaw = "auto"
+        }
+        if let mode = commit.shootMode {
+            applyShootMode(mode)
+        }
+        if commit.saveLook {
+            LookRecipeStore.shared.saveCurrent(film: commit.filmFilter, lensFX: commit.lensFX)
+            Haptics.medium()
+        }
+        syncCaptureContextToSystem()
     }
 
     /// Split out of `body` so the Swift type-checker can finish (CI archive).

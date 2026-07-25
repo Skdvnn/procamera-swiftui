@@ -91,98 +91,172 @@ enum ChromePickerMenu: String, Identifiable, CaseIterable {
     var id: String { rawValue }
 }
 
-/// UIKit presentation gate — opening a picker MUST NOT mutate ContentView
-/// `@State`. SwiftUI `fullScreenCover` still re-evaluated the Metal finder
-/// tree (builds 54–58 MetadataCache / EXC_BAD_ACCESS on device).
+/// Snapshot of looks for the picker window — never a Binding into ContentView.
+@MainActor
+final class ChromePickerSession: ObservableObject {
+    let menu: ChromePickerMenu
+    @Published var filmFilter: FilmFilterMode
+    @Published var lensFX: LensFXMode
+    @Published var focusPeaking: Bool
+    var shootMode: ShootMode?
+    var compactChrome: Bool
+
+    init(
+        menu: ChromePickerMenu,
+        filmFilter: FilmFilterMode,
+        lensFX: LensFXMode,
+        focusPeaking: Bool,
+        shootMode: ShootMode?,
+        compactChrome: Bool
+    ) {
+        self.menu = menu
+        self.filmFilter = filmFilter
+        self.lensFX = lensFX
+        self.focusPeaking = focusPeaking
+        self.shootMode = shootMode
+        self.compactChrome = compactChrome
+    }
+}
+
+/// Result committed when the picker window closes.
+struct ChromePickerCommit {
+    var filmFilter: FilmFilterMode
+    var lensFX: LensFXMode
+    var focusPeaking: Bool
+    var shootMode: ShootMode?
+    var filmAppliedDirectly: Bool
+    var saveLook: Bool
+}
+
+/// Presents film/FX/looks in a **separate UIWindow**.
+/// Modal-on-camera-window and SwiftUI fullScreenCover both still walked the
+/// Metal finder AttributeGraph (device EXC_BAD_ACCESS / MetadataCache).
 @MainActor
 enum ChromePickerGate {
-    private static weak var host: UIViewController?
+    private static var overlayWindow: UIWindow?
     private static var currentMenu: ChromePickerMenu?
+    private static var session: ChromePickerSession?
+    private static var onCommit: ((ChromePickerCommit) -> Void)?
+    private static var filmAppliedDirectly = false
+    private static var pendingSaveLook = false
 
-    static var isPresented: Bool { host != nil }
+    static var isPresented: Bool { overlayWindow != nil }
 
-    static func dismiss() {
-        let hc = host
-        host = nil
+    static func dismiss(commit: Bool = true) {
+        let sess = session
+        let commitHandler = onCommit
+        let applied = filmAppliedDirectly
+        let save = pendingSaveLook
+        let menu = currentMenu
+
+        overlayWindow?.isHidden = true
+        overlayWindow?.rootViewController = nil
+        overlayWindow = nil
+        session = nil
         currentMenu = nil
-        hc?.dismiss(animated: false)
+        onCommit = nil
+        filmAppliedDirectly = false
+        pendingSaveLook = false
+
+        guard commit, let sess, let commitHandler else { return }
+        let result = ChromePickerCommit(
+            filmFilter: sess.filmFilter,
+            lensFX: sess.lensFX,
+            focusPeaking: sess.focusPeaking,
+            shootMode: menu == .film ? sess.shootMode : nil,
+            filmAppliedDirectly: applied,
+            saveLook: save
+        )
+        // Apply AFTER the overlay window is gone — never during Metal invalidation.
+        DispatchQueue.main.async {
+            commitHandler(result)
+        }
     }
 
     static func toggle(
         _ menu: ChromePickerMenu,
-        filmFilter: Binding<FilmFilterMode>,
-        lensFX: Binding<LensFXMode>,
-        focusPeaking: Binding<Bool>,
+        filmFilter: FilmFilterMode,
+        lensFX: LensFXMode,
+        focusPeaking: Bool,
         shootMode: ShootMode?,
-        onApplyShootMode: ((ShootMode) -> Void)?,
-        onSaveLook: (() -> Void)?,
-        onFilmApplied: (() -> Void)?,
-        compactChrome: Bool
+        compactChrome: Bool,
+        onCommit: @escaping (ChromePickerCommit) -> Void
     ) {
-        if currentMenu == menu, host != nil {
-            dismiss()
+        if currentMenu == menu, overlayWindow != nil {
+            dismiss(commit: true)
             return
         }
-        if host != nil { dismiss() }
-        present(
-            menu,
-            filmFilter: filmFilter,
-            lensFX: lensFX,
-            focusPeaking: focusPeaking,
-            shootMode: shootMode,
-            onApplyShootMode: onApplyShootMode,
-            onSaveLook: onSaveLook,
-            onFilmApplied: onFilmApplied,
-            compactChrome: compactChrome
-        )
+        if overlayWindow != nil {
+            dismiss(commit: true)
+        }
+        // Defer off the button's touch transaction — presenting mid-touch
+        // next to Metal was still crashing on device.
+        DispatchQueue.main.async {
+            present(
+                menu,
+                filmFilter: filmFilter,
+                lensFX: lensFX,
+                focusPeaking: focusPeaking,
+                shootMode: shootMode,
+                compactChrome: compactChrome,
+                onCommit: onCommit
+            )
+        }
     }
 
     private static func present(
         _ menu: ChromePickerMenu,
-        filmFilter: Binding<FilmFilterMode>,
-        lensFX: Binding<LensFXMode>,
-        focusPeaking: Binding<Bool>,
+        filmFilter: FilmFilterMode,
+        lensFX: LensFXMode,
+        focusPeaking: Bool,
         shootMode: ShootMode?,
-        onApplyShootMode: ((ShootMode) -> Void)?,
-        onSaveLook: (() -> Void)?,
-        onFilmApplied: (() -> Void)?,
-        compactChrome: Bool
+        compactChrome: Bool,
+        onCommit: @escaping (ChromePickerCommit) -> Void
     ) {
-        guard let presenter = topPresenter() else { return }
-        let cover = ChromePickerCover(
+        guard let scene = activeWindowScene() else { return }
+
+        let sess = ChromePickerSession(
             menu: menu,
             filmFilter: filmFilter,
             lensFX: lensFX,
             focusPeaking: focusPeaking,
             shootMode: shootMode,
-            onApplyShootMode: onApplyShootMode,
-            onSaveLook: onSaveLook,
-            onFilmApplied: onFilmApplied,
-            compactChrome: compactChrome,
-            onDismiss: { dismiss() }
+            compactChrome: compactChrome
         )
-        let hc = UIHostingController(rootView: cover)
-        hc.modalPresentationStyle = .overFullScreen
-        hc.modalTransitionStyle = .crossDissolve
-        hc.view.backgroundColor = .clear
-        hc.view.isOpaque = false
-        host = hc
+        session = sess
         currentMenu = menu
-        presenter.present(hc, animated: false)
+        self.onCommit = onCommit
+        filmAppliedDirectly = false
+        pendingSaveLook = false
+
+        let cover = ChromePickerCover(
+            session: sess,
+            onFilmApplied: { filmAppliedDirectly = true },
+            onSaveLook: { pendingSaveLook = true },
+            onApplyShootMode: { mode in
+                sess.shootMode = mode
+                // Scene presets also imply dials — commit closes so ContentView can apply.
+                dismiss(commit: true)
+            },
+            onDismiss: { dismiss(commit: true) }
+        )
+
+        let host = UIHostingController(rootView: cover)
+        host.view.backgroundColor = .clear
+        host.view.isOpaque = false
+
+        let window = UIWindow(windowScene: scene)
+        window.windowLevel = .alert + 1
+        window.backgroundColor = .clear
+        window.rootViewController = host
+        window.isHidden = false
+        window.makeKeyAndVisible()
+        overlayWindow = window
     }
 
-    private static func topPresenter() -> UIViewController? {
+    private static func activeWindowScene() -> UIWindowScene? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        let active = scenes.first(where: { $0.activationState == .foregroundActive })
-        let window = active?.windows.first(where: \.isKeyWindow)
-            ?? scenes.flatMap(\.windows).first(where: \.isKeyWindow)
-        var top = window?.rootViewController
-        while let presented = top?.presentedViewController {
-            // Don't climb through our own host if somehow nested.
-            if presented === host { break }
-            top = presented
-        }
-        return top
+        return scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
     }
 }
 
@@ -277,10 +351,9 @@ struct ViewfinderOverlay: View {
                         } label: {
                             Image(systemName: "bookmark.fill")
                                 .font(.system(size: 12, weight: .medium))
-                                // Non-observing read — avoid LookRecipeStore invalidating Metal tree.
-                                .foregroundColor(!LookRecipeStore.shared.recipes.isEmpty
-                                                 ? Color(red: 1.0, green: 0.75, blue: 0.45)
-                                                 : .white.opacity(0.8))
+                                // No LookRecipeStore read here — shared store access from
+                                // the Metal-adjacent tree correlated with device crashes.
+                                .foregroundColor(.white.opacity(0.8))
                         }
                     }
                     .padding(compactChrome ? 10 : 16)
@@ -1075,18 +1148,13 @@ struct LookRecipePicker: View {
     }
 }
 
-// MARK: - Out-of-tree chrome picker host (UIKit overFullScreen)
-/// Presented by ChromePickerGate — NEVER as a sibling of FilteredCameraPreview.
+// MARK: - Out-of-tree chrome picker host (separate UIWindow)
+/// Lives only inside ChromePickerGate's overlay window — never the camera tree.
 struct ChromePickerCover: View {
-    let menu: ChromePickerMenu
-    @Binding var filmFilter: FilmFilterMode
-    @Binding var lensFX: LensFXMode
-    @Binding var focusPeaking: Bool
-    var shootMode: ShootMode? = nil
-    var onApplyShootMode: ((ShootMode) -> Void)? = nil
-    var onSaveLook: (() -> Void)? = nil
+    @ObservedObject var session: ChromePickerSession
     var onFilmApplied: (() -> Void)? = nil
-    var compactChrome: Bool = false
+    var onSaveLook: (() -> Void)? = nil
+    var onApplyShootMode: ((ShootMode) -> Void)? = nil
     var onDismiss: () -> Void
 
     @ObservedObject private var lookStore = LookRecipeStore.shared
@@ -1100,43 +1168,48 @@ struct ChromePickerCover: View {
 
     var body: some View {
         ZStack(alignment: .topTrailing) {
-            // Dim + tap-out — separate presentation host, not the camera ZStack.
             Color.black.opacity(0.35)
                 .ignoresSafeArea()
                 .contentShape(Rectangle())
                 .onTapGesture { onDismiss() }
 
             Group {
-                switch menu {
+                switch session.menu {
                 case .film:
                     LeicaFilmPicker(
-                        selectedFilter: $filmFilter,
+                        selectedFilter: $session.filmFilter,
                         isPresented: presentedBinding,
-                        shootMode: shootMode,
+                        shootMode: session.shootMode,
                         onApplyShootMode: onApplyShootMode,
-                        onSaveLook: { onSaveLook?() },
+                        onSaveLook: {
+                            onSaveLook?()
+                            onDismiss()
+                        },
                         onFilmApplied: onFilmApplied
                     )
-                    .padding(.trailing, compactChrome ? 10 : 16)
-                    .padding(.top, compactChrome ? 48 : 100)
+                    .padding(.trailing, session.compactChrome ? 10 : 16)
+                    .padding(.top, session.compactChrome ? 48 : 100)
                 case .fx:
                     LensFXPicker(
-                        selectedFX: $lensFX,
-                        focusPeaking: $focusPeaking,
+                        selectedFX: $session.lensFX,
+                        focusPeaking: $session.focusPeaking,
                         isPresented: presentedBinding
                     )
-                    .padding(.trailing, compactChrome ? 10 : 16)
-                    .padding(.top, compactChrome ? 72 : 140)
+                    .padding(.trailing, session.compactChrome ? 10 : 16)
+                    .padding(.top, session.compactChrome ? 72 : 140)
                 case .looks:
                     LookRecipePicker(
                         store: lookStore,
-                        filmFilter: $filmFilter,
-                        lensFX: $lensFX,
+                        filmFilter: $session.filmFilter,
+                        lensFX: $session.lensFX,
                         isPresented: presentedBinding,
-                        onSaveCurrent: { onSaveLook?() }
+                        onSaveCurrent: {
+                            onSaveLook?()
+                            onDismiss()
+                        }
                     )
-                    .padding(.trailing, compactChrome ? 10 : 16)
-                    .padding(.top, compactChrome ? 96 : 180)
+                    .padding(.trailing, session.compactChrome ? 10 : 16)
+                    .padding(.top, session.compactChrome ? 96 : 180)
                 }
             }
         }
