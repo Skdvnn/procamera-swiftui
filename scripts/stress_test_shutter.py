@@ -343,7 +343,9 @@ def test_project_sanity() -> None:
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
     check("Info.plist build >= 30", m is not None and int(ver) >= 30, ver)
-    check("pbx CURRENT_PROJECT_VERSION 30+", "CURRENT_PROJECT_VERSION = 30" in pbx or "CURRENT_PROJECT_VERSION = 31" in pbx)
+    import re as _re
+    vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
+    check("pbx CURRENT_PROJECT_VERSION 30+", any(v >= 30 for v in vers), f"versions={sorted(set(vers))}")
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)
     check("landscape in INFOPLIST_KEY", "LandscapeLeft" in pbx)
