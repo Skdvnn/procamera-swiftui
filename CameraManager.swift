@@ -87,6 +87,8 @@ class CameraManager: NSObject, ObservableObject {
     private var lastPreviewFrameTime: CFAbsoluteTime = 0
     /// True while Metal is showing a filtered frame (video-queue flag).
     private var livePreviewActive = false
+    /// createCGImage failures while filtered — fall back to clean AV preview.
+    private var livePreviewFailStreak = 0
     /// Cap live FX preview — heavy FX go slower (build 42: slightly lower for headroom).
     private let previewFrameInterval: CFAbsoluteTime = 1.0 / 12.0
 
@@ -2027,6 +2029,7 @@ class CameraManager: NSObject, ObservableObject {
             || (selectedFilmFilter == .none && selectedLensFX == .none
                 && !focusPeakingEnabled && !zebraEnabled) {
             livePreviewActive = false
+            livePreviewFailStreak = 0
             livePreview.push(nil)
         }
     }
@@ -2492,6 +2495,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             if bypass || livePreviewActive {
                 if livePreviewActive {
                     livePreviewActive = false
+                    livePreviewFailStreak = 0
                     livePreview.push(nil)
                 }
             }
@@ -2520,6 +2524,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         if bypass {
             if livePreviewActive {
                 livePreviewActive = false
+                livePreviewFailStreak = 0
                 livePreview.push(nil)
             }
         } else if wantsLiveProcessing {
@@ -2568,13 +2573,24 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 }
 
                 if let processed {
+                    livePreviewFailStreak = 0
                     livePreviewActive = true
                     livePreview.push(processed)
+                } else {
+                    // GPU/CI miss after a successful push left Metal stuck black
+                    // (esp. collapsed resize). Restore AV preview and retry later.
+                    livePreviewFailStreak += 1
+                    if livePreviewActive, livePreviewFailStreak >= 3 {
+                        livePreviewActive = false
+                        livePreviewFailStreak = 0
+                        livePreview.push(nil)
+                    }
                 }
             }
         } else if livePreviewActive {
             // Clear once — do not hop to main on every idle camera frame.
             livePreviewActive = false
+            livePreviewFailStreak = 0
             livePreview.push(nil)
         }
 

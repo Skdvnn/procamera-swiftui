@@ -94,6 +94,9 @@ struct ViewfinderOverlay: View {
     @Binding var focusPeaking: Bool
     /// Landscape: tuck pickers closer to the top chrome.
     var compactChrome: Bool = false
+    /// When the bottom deck collapses/expands, force-close film/FX menus so a
+    /// stuck dismiss layer can't freeze the finder.
+    var finderCollapsed: Bool = false
     var onFlipCamera: (() -> Void)? = nil
     var onSaveLook: (() -> Void)? = nil
     /// Scene presets live in the film dock (Street chip removed).
@@ -106,6 +109,10 @@ struct ViewfinderOverlay: View {
     @State private var showFilmMenu = false
     @State private var showFXMenu = false
     @State private var showRecipeMenu = false
+
+    private var anyMenuOpen: Bool {
+        showFilmMenu || showFXMenu || showRecipeMenu
+    }
 
     var body: some View {
         // Empty space passes taps to shutter. Pickers are overlays with
@@ -132,6 +139,15 @@ struct ViewfinderOverlay: View {
                 }
             }
             .allowsHitTesting(false)
+
+            // Dismiss under chrome (zIndex -1), not a full .overlay that ate
+            // film/FX button taps and could stick after collapse.
+            if anyMenuOpen {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { closeAllMenus() }
+                    .zIndex(-1)
+            }
 
             VStack {
                 HStack(alignment: .top) {
@@ -194,13 +210,7 @@ struct ViewfinderOverlay: View {
                 }
                 Spacer().allowsHitTesting(false)
             }
-        }
-        .overlay {
-            if showFilmMenu || showFXMenu || showRecipeMenu {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture { closeAllMenus() }
-            }
+            .zIndex(1)
         }
         .overlay(alignment: .topTrailing) {
             Group {
@@ -250,6 +260,9 @@ struct ViewfinderOverlay: View {
             .transaction { $0.animation = nil }
         }
         .transaction { $0.animation = nil }
+        .onChange(of: finderCollapsed) { _, _ in
+            closeAllMenus()
+        }
     }
 
     private enum ChromeMenu { case film, fx, looks }

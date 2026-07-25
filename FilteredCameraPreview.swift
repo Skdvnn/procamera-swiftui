@@ -309,12 +309,17 @@ struct FilteredCameraPreview: UIViewRepresentable {
 class FilteredPreviewView: UIView {
     private var metalView: MTKView?
     fileprivate(set) var previewLayer: AVCaptureVideoPreviewLayer?
+    /// Own CIContext — never share ShutterRender.ciContext / ciQueue from
+    /// main-thread `draw(in:)`. Shared-context sync froze the UI whenever
+    /// bake/LE owned the queue (black finder + dead shutter).
     private let ciContext: CIContext
     private var commandQueue: MTLCommandQueue?
     private var device: MTLDevice?
     private var currentCIImage: CIImage?
     /// Avoid re-locking LensFXEngine on every Metal frame.
     private var lastPreviewRotation: PreviewBufferRotation?
+    /// Consecutive failed Metal draws → fall back to AV preview.
+    private var consecutiveDrawFails = 0
 
     var session: AVCaptureSession? {
         didSet {
@@ -322,10 +327,23 @@ class FilteredPreviewView: UIView {
         }
     }
 
+    private static func makePreviewCIContext(device: MTLDevice?) -> CIContext {
+        if let device {
+            return CIContext(
+                mtlDevice: device,
+                options: [
+                    .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
+                    .cacheIntermediates: false
+                ]
+            )
+        }
+        return CIContext(options: [.cacheIntermediates: false])
+    }
+
     override init(frame: CGRect) {
         self.device = ShutterRender.device
         self.commandQueue = ShutterRender.device?.makeCommandQueue()
-        self.ciContext = ShutterRender.ciContext
+        self.ciContext = Self.makePreviewCIContext(device: ShutterRender.device)
 
         super.init(frame: frame)
         setupViews()
@@ -335,7 +353,7 @@ class FilteredPreviewView: UIView {
     required init?(coder: NSCoder) {
         self.device = ShutterRender.device
         self.commandQueue = ShutterRender.device?.makeCommandQueue()
-        self.ciContext = ShutterRender.ciContext
+        self.ciContext = Self.makePreviewCIContext(device: ShutterRender.device)
 
         super.init(coder: coder)
         setupViews()
@@ -424,32 +442,46 @@ class FilteredPreviewView: UIView {
         return scenes.first?.interfaceOrientation ?? .portrait
     }
 
+    /// True after Metal has presented at least one filtered frame.
+    private var metalHasPresented = false
+
     func updateFilteredImage(_ image: CIImage?) {
         currentCIImage = image
 
         if image != nil {
             let wasHidden = metalView?.isHidden ?? true
+            // Show Metal, but KEEP the AV preview visible until Metal paints —
+            // otherwise collapsed resize / failed drawable = permanent black.
             metalView?.isHidden = false
-            previewLayer?.isHidden = true
-            // First enable after FX/film toggle: wait for a real drawable.
+            if metalHasPresented {
+                previewLayer?.isHidden = true
+            } else {
+                previewLayer?.isHidden = false
+            }
             if wasHidden {
                 setNeedsLayout()
                 layoutIfNeeded()
                 metalView?.setNeedsLayout()
                 metalView?.layoutIfNeeded()
-                scheduleMetalDraw(attemptsLeft: 10)
+                scheduleMetalDraw(attemptsLeft: 12)
             } else {
                 metalView?.setNeedsDisplay()
             }
         } else {
+            metalHasPresented = false
             metalView?.isHidden = true
             previewLayer?.isHidden = false
+            currentCIImage = nil
         }
     }
 
-    /// Retries until MTKView has a non-zero drawable (avoids Metal crash on FX enable).
+    /// Retries until MTKView has a non-zero drawable. On exhaustion, fall back
+    /// to AVCaptureVideoPreviewLayer so the finder never stays black.
     private func scheduleMetalDraw(attemptsLeft: Int) {
-        guard attemptsLeft > 0 else { return }
+        if attemptsLeft <= 0 {
+            restoreCleanPreview()
+            return
+        }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
             guard let self, let metalView = self.metalView, !metalView.isHidden else { return }
             self.layoutIfNeeded()
@@ -460,6 +492,30 @@ class FilteredPreviewView: UIView {
             } else {
                 self.scheduleMetalDraw(attemptsLeft: attemptsLeft - 1)
             }
+        }
+    }
+
+    fileprivate func restoreCleanPreview() {
+        metalHasPresented = false
+        consecutiveDrawFails = 0
+        currentCIImage = nil
+        metalView?.isHidden = true
+        previewLayer?.isHidden = false
+    }
+
+    fileprivate func markMetalPresented() {
+        guard !metalHasPresented else { return }
+        metalHasPresented = true
+        consecutiveDrawFails = 0
+        previewLayer?.isHidden = true
+    }
+
+    private func noteDrawFailure() {
+        consecutiveDrawFails += 1
+        // After resize / GPU blip, don't leave Metal visible over a hidden
+        // AV layer with nothing presenting — that's the black frozen finder.
+        if metalHasPresented || consecutiveDrawFails >= 8 {
+            restoreCleanPreview()
         }
     }
 }
@@ -476,14 +532,20 @@ extension FilteredPreviewView: MTKViewDelegate {
         let drawableSize = view.drawableSize
         guard drawableSize.width > 1, drawableSize.height > 1,
               view.bounds.width > 1, view.bounds.height > 1 else {
+            noteDrawFailure()
             return
         }
 
-        guard var ciImage = currentCIImage,
-              let commandBuffer = commandQueue?.makeCommandBuffer(),
+        guard var ciImage = currentCIImage else {
+            // Metal visible with nothing to draw — snap back to live camera.
+            restoreCleanPreview()
+            return
+        }
+        guard let commandBuffer = commandQueue?.makeCommandBuffer(),
               let drawable = view.currentDrawable,
               drawable.texture.width > 1,
               drawable.texture.height > 1 else {
+            noteDrawFailure()
             return
         }
 
@@ -518,6 +580,7 @@ extension FilteredPreviewView: MTKViewDelegate {
               imageSize.height > 1,
               imageSize.width.isFinite,
               imageSize.height.isFinite else {
+            noteDrawFailure()
             return
         }
 
@@ -525,7 +588,10 @@ extension FilteredPreviewView: MTKViewDelegate {
         let scaleX = drawableSize.width / imageSize.width
         let scaleY = drawableSize.height / imageSize.height
         let scale = max(scaleX, scaleY)
-        guard scale.isFinite, scale > 0 else { return }
+        guard scale.isFinite, scale > 0 else {
+            noteDrawFailure()
+            return
+        }
 
         // Center the scaled image
         let scaledWidth = imageSize.width * scale
@@ -542,18 +608,22 @@ extension FilteredPreviewView: MTKViewDelegate {
         let drawableRect = CGRect(origin: .zero, size: drawableSize)
         transformedImage = transformedImage.cropped(to: drawableRect)
 
-        // Render to Metal texture — serialize with still bake / LE flatten.
+        // Preview-only CIContext (not ShutterRender.ciQueue) — never block main.
         let colorSpace = CGColorSpaceCreateDeviceRGB()
-        ShutterRender.syncCI {
-            ciContext.render(
-                transformedImage,
-                to: drawable.texture,
-                commandBuffer: commandBuffer,
-                bounds: drawableRect,
-                colorSpace: colorSpace
-            )
-        }
+        ciContext.render(
+            transformedImage,
+            to: drawable.texture,
+            commandBuffer: commandBuffer,
+            bounds: drawableRect,
+            colorSpace: colorSpace
+        )
 
+        consecutiveDrawFails = 0
+        commandBuffer.addCompletedHandler { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.markMetalPresented()
+            }
+        }
         commandBuffer.present(drawable)
         commandBuffer.commit()
     }

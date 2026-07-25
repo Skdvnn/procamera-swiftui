@@ -593,6 +593,7 @@ struct ContentView: View {
                             lensFX: $lensFX,
                             focusPeaking: $focusPeaking,
                             compactChrome: isLandscape,
+                            finderCollapsed: effectiveBottomCollapsed,
                             onFlipCamera: {
                                 Haptics.click()
                                 camera.switchCamera()
@@ -1652,16 +1653,13 @@ struct ContentView: View {
 
             Spacer().frame(height: 6)
 
-            // ROW 3: Flash | Format (centered on shutter) | Mode icons
+            // ROW 3: Flash | Format | Mode icons — polish proportions (88 | center | 112)
             HStack(alignment: .center, spacing: 0) {
-                HStack {
-                    FlashButtonPill(flashMode: camera.flashMode) {
-                        Haptics.click()
-                        camera.cycleFlash()
-                    }
-                    Spacer(minLength: 0)
+                FlashButtonPill(flashMode: camera.flashMode) {
+                    Haptics.click()
+                    camera.cycleFlash()
                 }
-                .frame(width: 160, alignment: .leading)
+                .frame(width: 88)
 
                 Spacer(minLength: 0)
 
@@ -1676,7 +1674,7 @@ struct ContentView: View {
 
                 Spacer(minLength: 0)
 
-                HStack(spacing: 4) {
+                HStack(spacing: 2) {
                     ModeControl(icon: "gearshape", isActive: showSettings) {
                         Haptics.click()
                         showSettings = true
@@ -1705,7 +1703,7 @@ struct ContentView: View {
                         showGrid.toggle()
                     }
                 }
-                .frame(width: 160, height: 48, alignment: .trailing)
+                .frame(width: 112, height: 48, alignment: .trailing)
             }
             .padding(.horizontal, DS.pageMargin)
             .contentShape(Rectangle())
@@ -3403,11 +3401,12 @@ struct ModeControl: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 6) {
+            VStack(spacing: 5) {
                 ModeIcon(icon: icon, isActive: isActive)
                 ModeButtonChrome(isActive: isActive)
             }
-            .frame(width: 36, height: 48)
+            // Tight column — four fit in the polish 112pt trailing wing.
+            .frame(width: 26, height: 48)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

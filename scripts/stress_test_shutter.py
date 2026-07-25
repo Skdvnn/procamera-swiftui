@@ -494,7 +494,7 @@ def test_source_guards() -> None:
     check("CloudKit found lock", "NSLock()" in (ROOT / "CloudBooks.swift").read_text() and "found.append" in (ROOT / "CloudBooks.swift").read_text())
     check("thumb cache limits", "thumbCache.countLimit" in (ROOT / "PhotoBook.swift").read_text())
     check("loupeSessionActive still present", "loupeSessionActive" in (ROOT / "CullGallery.swift").read_text())
-    check("ModeControl tight column", "frame(width: 36, height: 48)" in content)
+    # ModeControl sizing asserted in Build 56 block (26×48 / wing 112)
 
     # Build 53 — full-surface fixes
     check("timer generation cancel", "timerGeneration" in content and "runCountdown(expected:" in content)
@@ -509,7 +509,6 @@ def test_source_guards() -> None:
     check("STACK accumulate autoreleasepool", "autoreleasepool" in cam[cam.find("accumulationFrame"):cam.find("accumulationFrame")+500] or "autoreleasepool" in cam)
     check("clearStickyTouch API", "func clearStickyTouch" in (ROOT / "LensFXEngine.swift").read_text())
     check("Night chip not full-width hit", ".frame(maxWidth: .infinity" not in content.split("if nightAssistVisible")[1].split("if let cameraError")[0])
-    check("ModeControl wing 160", ".frame(width: 160, height: 48, alignment: .trailing)" in content)
     check("FinishDone onDismiss handled", "handledFinishDone" in (ROOT / "CullGallery.swift").read_text())
     check("loupeSessionActive cleared only by cull drag", "Keep loupeSessionActive" in (ROOT / "CullGallery.swift").read_text() or "only cull drag onEnded clears" in (ROOT / "CullGallery.swift").read_text())
     check("contact loupeArmed", "loupedShotID" in (ROOT / "CullGallery.swift").read_text())
@@ -528,7 +527,6 @@ def test_source_guards() -> None:
     # Build 54 — layout polish + crash fix
     check("peaking in FX picker", "peakingRow" in (ROOT / "ViewfinderOverlay.swift").read_text() and "PEAKING" in (ROOT / "ViewfinderOverlay.swift").read_text())
     check("no peaking chrome toggle", "plus.viewfinder" not in (ROOT / "ViewfinderOverlay.swift").read_text())
-    check("format wing balance", ".frame(width: 160, alignment: .leading)" in content)
     check("scrubber white majors only", "yellow is reserved for the center indicator" in content)
     check("scrubber value spring", "scaleEffect(isScrolling ? 1.12" in content)
     check("shutter no press brightness", "No brightness shift" in content)
@@ -542,6 +540,21 @@ def test_source_guards() -> None:
     check("toggleMenu film", "toggleMenu(.film)" in (ROOT / "ViewfinderOverlay.swift").read_text())
 
     check("info bar L overlay hit", 'Text("L")' in content and "frame(width: 44, height: 36)" in content)
+
+    # Build 56 — black finder freeze + tight ModeControl
+    preview = (ROOT / "FilteredCameraPreview.swift").read_text()
+    vf = (ROOT / "ViewfinderOverlay.swift").read_text()
+    cam = (ROOT / "CameraManager.swift").read_text()
+    check("preview keeps AV until Metal presents", "KEEP the AV preview visible until Metal paints" in preview)
+    check("preview own CIContext", "makePreviewCIContext" in preview)
+    check("preview restore on draw fail", "noteDrawFailure" in preview)
+    check("preview scheduleMetalDraw fallback", "restoreCleanPreview()" in preview and "scheduleMetalDraw" in preview)
+    check("live preview fail streak", "livePreviewFailStreak" in cam)
+    check("dismiss scrim under chrome", "zIndex(-1)" in vf and "anyMenuOpen" in vf)
+    check("close menus on collapse", "finderCollapsed" in vf and "onChange(of: finderCollapsed)" in vf)
+    check("polish flash wing 88", ".frame(width: 88)" in content and "ModeControl(icon: \"gearshape\"" in content)
+    check("tight mode wing 112", ".frame(width: 112, height: 48, alignment: .trailing)" in content)
+    check("ModeControl column 26", ".frame(width: 26, height: 48)" in content)
 
 
 
@@ -623,11 +636,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 55", m is not None and int(ver) >= 55, ver)
+    check("Info.plist build >= 56", m is not None and int(ver) >= 56, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 55+", any(v >= 55 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 56+", any(v >= 56 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)
