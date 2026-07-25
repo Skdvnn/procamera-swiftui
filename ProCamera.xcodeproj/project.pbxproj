@@ -607,7 +607,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ShutterWidgets/ShutterWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 31;
+				CURRENT_PROJECT_VERSION = 32;
 				DEVELOPMENT_TEAM = 9DKG694QL7;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShutterWidgets/Info.plist;
@@ -633,7 +633,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ShutterWidgets/ShutterWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 31;
+				CURRENT_PROJECT_VERSION = 32;
 				DEVELOPMENT_TEAM = 9DKG694QL7;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShutterWidgets/Info.plist;
@@ -660,7 +660,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ShutterCaptureExtension/ShutterCaptureExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 31;
+				CURRENT_PROJECT_VERSION = 32;
 				DEVELOPMENT_TEAM = 9DKG694QL7;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShutterCaptureExtension/Info.plist;
@@ -686,7 +686,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ShutterCaptureExtension/ShutterCaptureExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 31;
+				CURRENT_PROJECT_VERSION = 32;
 				DEVELOPMENT_TEAM = 9DKG694QL7;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShutterCaptureExtension/Info.plist;
