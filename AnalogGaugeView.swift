@@ -492,9 +492,20 @@ struct HorizontalExposureMeter: View {
                 Text("ISO")
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundColor(.white.opacity(0.5))
-                Text(isoIsAuto ? "AUTO" : "\(iso)")
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.8))
+                if isoIsAuto {
+                    HStack(spacing: 2) {
+                        Text("A")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.45))
+                        Text(iso > 0 ? "\(iso)" : "—")
+                            .font(.system(size: 13, weight: .bold, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.8))
+                    }
+                } else {
+                    Text("\(iso)")
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.8))
+                }
             }
         }
         .contentShape(Rectangle())

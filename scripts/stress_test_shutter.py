@@ -294,6 +294,11 @@ def test_source_guards() -> None:
     )
     check("lock screen honest about looks", "LOOKS IN FULL APP" in (ROOT / "ShutterCaptureExtension" / "ShutterCaptureExtension.swift").read_text())
     check("photos denial toast", "Saved in app · Photos access needed" in content)
+    check("live AUTO ISO probe", "liveISO" in cam and "startExposureProbe" in cam and "displayISO" in content)
+    check("finish done handoff", "FinishDoneSheet" in (ROOT / "CullGallery.swift").read_text() and "initialBookID" in (ROOT / "PhotoBook.swift").read_text())
+    check("open Photos helper", "func openPhotosApp" in (ROOT / "ShootCull.swift").read_text())
+    check("contact loupe on long-press", "Long-press opens loupe" in (ROOT / "CullGallery.swift").read_text())
+    check("shortcuts for look+timer", "ApplyShutterLookIntent()" in (ROOT / "ShutterAppIntents.swift").read_text() and "SetShutterTimerIntent()" in (ROOT / "ShutterAppIntents.swift").read_text())
     check("bake failure note", "bakeLooksForCapture" in cam and "captureNote" in cam and "captureNote" in content)
     check("album export failure surfaced", "Album export failed — keepers in Field Book" in (ROOT / "CullGallery.swift").read_text())
     check("comic fallback", "func applyToon" in (ROOT / "LensFXEngine.swift").read_text())
@@ -356,7 +361,10 @@ def test_source_guards() -> None:
     check("ISO sentinel unclamped", "currentExposureDuration is a keep-current sentinel" in cam)
     check("portrait framed aspect", "case .ratio4x3: return 3.0 / 4.0" in (ROOT / "ViewfinderAids.swift").read_text())
     check("shutter passes UI ISO", "setShutterSpeed(index: idx, iso: Float(isoValue))" in content)
-    check("AUTO readout when not manual", "ISO AUTO" in content and 'shutterSpeed : "AUTO"' in content)
+    check(
+        "AUTO readout when not manual",
+        "·A" in content and "liveISO" in cam and "displayISO" in content,
+    )
     check("pinch does not write focus", "never write zoom into FOCUS" in content)
     check("timer countdown cancellable", "cancelTimerCountdown" in content)
     check("HW LE passes morphTouch", "morphTouch: self.longExposureMorphTouch" in cam)
@@ -460,10 +468,10 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 46", m is not None and int(ver) >= 45, ver)
+    check("Info.plist build >= 47", m is not None and int(ver) >= 45, ver)
     import re as _re
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 46+", any(v >= 45 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 47+", any(v >= 45 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

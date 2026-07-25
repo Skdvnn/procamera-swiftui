@@ -418,6 +418,8 @@ struct CullLibraryView: View {
     @State private var sessions: [ShootSession] = []
     @State private var route: CullRoute?
     @State private var showFieldBooks = false
+    /// Book to open after a cull finish handoff.
+    @State private var openBookID: UUID?
     @State private var appeared = false
     @State private var sheetLoupe: UIImage?
     @State private var comparePair: ComparePair?
@@ -496,9 +498,13 @@ struct CullLibraryView: View {
                 session: r.session,
                 marks: marks,
                 startIndex: r.startIndex,
-                onFinished: {
+                onFinished: { bookID in
                     route = nil
                     rebuildSessions()
+                    if let bookID {
+                        openBookID = bookID
+                        showFieldBooks = true
+                    }
                 }
             )
         }
@@ -518,8 +524,10 @@ struct CullLibraryView: View {
                 onDismiss: { comparePair = nil }
             )
         }
-        .fullScreenCover(isPresented: $showFieldBooks) {
-            LibraryView(store: store)
+        .fullScreenCover(isPresented: $showFieldBooks, onDismiss: {
+            openBookID = nil
+        }) {
+            LibraryView(store: store, initialBookID: openBookID)
         }
     }
 
@@ -906,15 +914,12 @@ struct SessionContactSheet: View {
             LongPressGesture(minimumDuration: 0.35)
                 .onEnded { _ in
                     Haptics.medium()
-                    // First long-press starts compare pick; second completes;
-                    // if already picking, toggle membership. Triple path: if
-                    // not picking and user long-presses once with empty set,
-                    // also offer loupe via a second hold — compare takes priority.
-                    toggleCompare(shot)
+                    // Long-press opens loupe; compare stays on context menu / COMPARE chip.
+                    onLoupe?(shot)
                 }
         )
         .accessibilityLabel("Frame \(index + 1), \(state.rawValue)")
-        .accessibilityHint("Long press to select for compare")
+        .accessibilityHint("Long press to loupe; use context menu to compare")
         .contextMenu {
             Button {
                 onLoupe?(shot)
@@ -959,7 +964,8 @@ struct CullSessionView: View {
     let session: ShootSession
     @ObservedObject var marks: FrameMarkStore
     var startIndex: Int = 0
-    var onFinished: () -> Void
+    /// Called when the session finishes; pass a book ID to open Field Book onto it.
+    var onFinished: (_ openBookID: UUID?) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var undo = CullUndoStack()
@@ -968,6 +974,11 @@ struct CullSessionView: View {
     @State private var showFinish = false
     @State private var isFinishing = false
     @State private var shareProofURL: URL?
+    @State private var shareKeeperItems: [Any] = []
+    @State private var showFinishDone = false
+    @State private var doneBookID: UUID?
+    @State private var doneAlbumName: String = ""
+    @State private var doneKeeperShots: [ShotMetadata] = []
     @State private var finishMessage: String?
     @State private var flashMark: FrameMarkState?
     @State private var loupeTouch: CGPoint?
@@ -1084,6 +1095,40 @@ struct CullSessionView: View {
                 ShareSheet(items: [url])
                     .preferredColorScheme(.dark)
             }
+        }
+        .sheet(isPresented: Binding(
+            get: { !shareKeeperItems.isEmpty },
+            set: { if !$0 { shareKeeperItems = [] } }
+        )) {
+            ShareSheet(items: shareKeeperItems)
+                .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $showFinishDone) {
+            FinishDoneSheet(
+                albumName: doneAlbumName,
+                hasBook: doneBookID != nil,
+                keeperCount: doneKeeperShots.count,
+                onOpenBook: {
+                    showFinishDone = false
+                    let id = doneBookID
+                    onFinished(id)
+                    dismiss()
+                },
+                onShareKeepers: {
+                    shareKeeperImages()
+                },
+                onOpenPhotos: {
+                    PhotosLibraryService.openPhotosApp()
+                },
+                onDone: {
+                    showFinishDone = false
+                    onFinished(nil)
+                    dismiss()
+                }
+            )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+            .preferredColorScheme(.dark)
         }
         .overlay {
             if isFinishing {
@@ -1692,8 +1737,22 @@ struct CullSessionView: View {
         let albumName = session.title
         PhotosLibraryService.exportKeepers(albumName: albumName, assetLocalIdentifiers: keeperIDs) { albumOK in
             let albumFailed = !albumOK && !keeperIDs.isEmpty
+            var createdBookID: UUID?
             if !keepers.isEmpty, let book = store.createBook(title: albumName) {
                 for shot in keepers { store.add(shot, to: book) }
+                createdBookID = book.id
+            }
+
+            let complete: () -> Void = {
+                marks.clear(shotIDs: rejects.map(\.id) + keepers.map(\.id))
+                doneKeeperShots = keepers
+                doneBookID = createdBookID
+                doneAlbumName = albumName
+                isFinishing = false
+                if albumFailed {
+                    finishMessage = "Album export failed — keepers in Field Book"
+                }
+                showFinishDone = true
             }
 
             if deleteRejects {
@@ -1711,28 +1770,26 @@ struct CullSessionView: View {
                         finishMessage = albumFailed
                             ? "Album export + Photos delete failed — local frames kept."
                             : "Photos delete failed — local frames kept."
-                        isFinishing = false
+                        // Still clear marks + offer handoff for keepers that made it.
+                        complete()
                         return
                     }
                     for shot in rejects { store.delete(shot) }
-                    marks.clear(shotIDs: rejects.map(\.id) + keepers.map(\.id))
-                    isFinishing = false
-                    onFinished()
-                    dismiss()
-                }
-            } else if albumFailed {
-                finishMessage = "Album export failed — keepers in Field Book"
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
-                    isFinishing = false
-                    onFinished()
-                    dismiss()
+                    complete()
                 }
             } else {
-                isFinishing = false
-                onFinished()
-                dismiss()
+                if albumFailed {
+                    finishMessage = "Album export failed — keepers in Field Book"
+                }
+                complete()
             }
         }
+    }
+
+    private func shareKeeperImages() {
+        let images: [UIImage] = doneKeeperShots.compactMap { store.image(for: $0) ?? store.thumbnail(for: $0) }
+        guard !images.isEmpty else { return }
+        shareKeeperItems = images
     }
 
     private func exportProofPDF() {
@@ -1742,6 +1799,105 @@ struct CullSessionView: View {
         if let url = ProofPDFExporter.makePDF(title: session.title, shots: frames, store: store) {
             shareProofURL = url
         }
+    }
+}
+
+// MARK: - Finish done (handoff after export)
+
+struct FinishDoneSheet: View {
+    let albumName: String
+    let hasBook: Bool
+    let keeperCount: Int
+    let onOpenBook: () -> Void
+    let onShareKeepers: () -> Void
+    let onOpenPhotos: () -> Void
+    let onDone: () -> Void
+
+    var body: some View {
+        ZStack {
+            DarkroomGround(intensity: 0.85)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("SHEET FILED")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .tracking(3)
+                    .foregroundColor(CullPalette.amber.opacity(0.7))
+                    .padding(.bottom, 8)
+
+                Text(albumName)
+                    .font(.system(size: 24, weight: .semibold, design: .serif))
+                    .foregroundColor(.white.opacity(0.95))
+                    .padding(.bottom, 6)
+
+                Text("\(keeperCount) keepers · album “\(albumName)”")
+                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.4))
+                    .padding(.bottom, 24)
+
+                VStack(spacing: 12) {
+                    if hasBook {
+                        Button(action: onOpenBook) {
+                            finishActionRow(
+                                title: "OPEN FIELD BOOK",
+                                subtitle: "Jump straight to the new book",
+                                accent: true
+                            )
+                        }
+                    }
+
+                    Button(action: onShareKeepers) {
+                        finishActionRow(
+                            title: "SHARE KEEPERS",
+                            subtitle: "System share sheet of keeper frames",
+                            accent: false
+                        )
+                    }
+
+                    Button(action: onOpenPhotos) {
+                        finishActionRow(
+                            title: "OPEN PHOTOS",
+                            subtitle: "Find the album in Photos",
+                            accent: false
+                        )
+                    }
+
+                    Button(action: onDone) {
+                        Text("DONE")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .tracking(1.5)
+                            .foregroundColor(.white.opacity(0.35))
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 4)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(24)
+        }
+    }
+
+    private func finishActionRow(title: String, subtitle: String, accent: Bool) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .tracking(0.8)
+                Text(subtitle)
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.45))
+            }
+            Spacer()
+        }
+        .foregroundColor(accent ? CullPalette.amber : .white.opacity(0.9))
+        .padding(14)
+        .background(accent ? CullPalette.amber.opacity(0.1) : Color.white.opacity(0.06))
+        .overlay(
+            RoundedRectangle(cornerRadius: 2)
+                .stroke(
+                    accent ? CullPalette.amber.opacity(0.5) : CullPalette.hairline.opacity(0.6),
+                    lineWidth: accent ? 0.8 : 0.6
+                )
+        )
     }
 }
 

@@ -344,6 +344,15 @@ enum PhotosLibraryService {
     }
 
     /// Fallback match when localIdentifier is stale: exact creationDate.
+    /// Opens the Photos app (no public deep link to a named album).
+    static func openPhotosApp() {
+        // `photos-redirect://` is the supported springboard jump into Photos.
+        guard let url = URL(string: "photos-redirect://") else { return }
+        DispatchQueue.main.async {
+            UIApplication.shared.open(url)
+        }
+    }
+
     static func resolveAsset(
         preferredID: String?,
         creationDate: Date

@@ -259,6 +259,8 @@ final class GalleryStore: ObservableObject {
 // CloudKit shared books sit on their own shelf rows below.
 struct LibraryView: View {
     @ObservedObject var store: GalleryStore
+    /// When set, open this book as soon as the shelf appears (cull finish handoff).
+    var initialBookID: UUID? = nil
     @ObservedObject private var cloud = CloudBookManager.shared
     @Environment(\.dismiss) private var dismiss
     @Namespace private var bookNamespace
@@ -270,6 +272,7 @@ struct LibraryView: View {
     @State private var pressedRouteID: String?
     /// Open a book and immediately present the file-frames picker
     @State private var pendingAddFrames = false
+    @State private var didApplyInitialBook = false
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
     private let booksPerShelf = 3
@@ -412,6 +415,12 @@ struct LibraryView: View {
             Text("Name your book — you'll pick frames from All Frames next.")
         }
         .statusBarHidden(true)
+        .onAppear {
+            guard !didApplyInitialBook, let id = initialBookID,
+                  store.books.contains(where: { $0.id == id }) else { return }
+            didApplyInitialBook = true
+            route = .book(id)
+        }
     }
 
     private func shelfRow(for row: [ShelfItem]) -> some View {

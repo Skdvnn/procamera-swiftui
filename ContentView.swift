@@ -317,7 +317,7 @@ struct ContentView: View {
                         exposureValue: $exposureValue,
                         shutterSpeedIndex: $shutterSpeedIndex,
                         timerSeconds: timerSeconds,
-                        iso: isoValue,
+                        iso: displayISO,
                         flashMode: flashModeLabel(camera.flashMode),
                         isoIsAuto: !camera.isManualExposure,
                         macroEnabled: macroEnabled,
@@ -382,8 +382,8 @@ struct ContentView: View {
                             // on the bottom-padded frame — that invisible pad sat on top
                             // of the shutter and ate every tap.
                             RefractiveGlassInfoBar(
-                                iso: isoValue,
-                                shutterSpeed: shutterSpeeds[shutterSpeedIndex],
+                                iso: displayISO,
+                                shutterSpeed: displayShutterLabel,
                                 aperture: apertureValue,
                                 photoCount: photoCount,
                                 exposureValue: exposureValue,
@@ -701,14 +701,27 @@ struct ContentView: View {
         }
     }
 
+    /// ISO for chrome / metadata — live sensor value while AUTO.
+    private var displayISO: Int {
+        if camera.isManualExposure { return isoValue }
+        let live = Int(camera.liveISO.rounded())
+        return live > 0 ? live : isoValue
+    }
+
+    /// Shutter label for chrome / metadata — live duration while AUTO.
+    private var displayShutterLabel: String {
+        if camera.isManualExposure { return shutterSpeeds[shutterSpeedIndex] }
+        let live = camera.liveShutterLabel
+        return live.isEmpty || live == "AUTO" ? "AUTO" : live
+    }
+
     // Bind a captured frame into the Field Book with the live shot settings
     private func recordShot(_ img: UIImage) {
-        let manual = camera.isManualExposure
         let metadata = ShotMetadata(
             id: UUID(),
             date: Date(),
-            iso: manual ? isoValue : 0,
-            shutter: manual ? shutterSpeeds[shutterSpeedIndex] : "AUTO",
+            iso: displayISO,
+            shutter: displayShutterLabel,
             aperture: apertureValue > 0 ? apertureValue : 0,
             ev: exposureValue,
             filmFilter: filmFilter.name,
@@ -1136,8 +1149,8 @@ struct ContentView: View {
                     VStack {
                         Spacer().allowsHitTesting(false)
                         RefractiveGlassInfoBar(
-                            iso: isoValue,
-                            shutterSpeed: shutterSpeeds[shutterSpeedIndex],
+                            iso: displayISO,
+                            shutterSpeed: displayShutterLabel,
                             aperture: apertureValue,
                             photoCount: photoCount,
                             exposureValue: exposureValue,
@@ -1799,10 +1812,10 @@ struct RefractiveGlassInfoBar: View {
                             .foregroundColor(isManualExposure ? Color(red: 1.0, green: 0.85, blue: 0.35) : .white)
                     }
                     .buttonStyle(.plain)
-                    Text(isManualExposure ? "ISO \(iso)" : "ISO AUTO")
+                    Text(isManualExposure ? "ISO \(iso)" : "ISO \(iso)·A")
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                 }
-                Text(isManualExposure ? shutterSpeed : "AUTO")
+                Text(isManualExposure ? shutterSpeed : (shutterSpeed == "AUTO" ? "AUTO" : "\(shutterSpeed)·A"))
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
             }
             .foregroundColor(.white)

@@ -23,6 +23,10 @@ class CameraManager: NSObject, ObservableObject {
     @Published var zoomFactor: CGFloat = 1.0
     @Published var isManualExposure: Bool = false
     @Published var isAEAFLocked: Bool = false
+    /// Live sensor ISO while AUTO (0 when unknown / manual owns the dial).
+    @Published var liveISO: Float = 0
+    /// Live shutter readout while AUTO (e.g. "1/125").
+    @Published var liveShutterLabel: String = "AUTO"
     /// Hardware lens aperture (read-only; phones don't stop down).
     @Published var lensAperture: Float = 0
     @Published var focusPeakingEnabled: Bool = false {
@@ -167,6 +171,8 @@ class CameraManager: NSObject, ObservableObject {
     private var photoCompletionHandler: ((UIImage?) -> Void)?
     /// Prevents re-adding inputs/outputs when SwiftUI re-fires onAppear.
     private var isSessionConfigured = false
+    /// Samples device.iso / exposureDuration for AUTO readouts.
+    private var exposureProbe: DispatchSourceTimer?
 
     // Shutter speed lookup table (index to CMTime)
     static let shutterSpeedValues: [CMTime] = [
@@ -812,12 +818,14 @@ class CameraManager: NSObject, ObservableObject {
                     self.isSessionRunning = self.session.isRunning
                 }
             }
+            self.startExposureProbe()
         }
     }
 
     func stopSession() {
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
+            self.stopExposureProbe()
             if self.session.isRunning {
                 self.session.stopRunning()
                 DispatchQueue.main.async {
@@ -825,6 +833,52 @@ class CameraManager: NSObject, ObservableObject {
                 }
             }
         }
+    }
+
+    private func startExposureProbe() {
+        stopExposureProbe()
+        let timer = DispatchSource.makeTimerSource(queue: sessionQueue)
+        timer.schedule(deadline: .now() + 0.35, repeating: 0.4)
+        timer.setEventHandler { [weak self] in
+            self?.sampleLiveExposure()
+        }
+        timer.resume()
+        exposureProbe = timer
+    }
+
+    private func stopExposureProbe() {
+        exposureProbe?.cancel()
+        exposureProbe = nil
+    }
+
+    private func sampleLiveExposure() {
+        guard let device = videoDeviceInput?.device else { return }
+        let iso = device.iso
+        let label = Self.formatShutterDuration(device.exposureDuration)
+        DispatchQueue.main.async {
+            // Manual dials own the UI numbers — don't fight them with sensor samples.
+            guard !self.isManualExposure else { return }
+            if abs(self.liveISO - iso) > 2 {
+                self.liveISO = iso
+            }
+            if self.liveShutterLabel != label {
+                self.liveShutterLabel = label
+            }
+        }
+    }
+
+    /// Compact shutter string for AUTO readout / metadata.
+    static func formatShutterDuration(_ time: CMTime) -> String {
+        let seconds = CMTimeGetSeconds(time)
+        guard seconds.isFinite, seconds > 0 else { return "AUTO" }
+        if seconds >= 1 {
+            if abs(seconds - seconds.rounded()) < 0.05 {
+                return "\(Int(seconds.rounded()))\""
+            }
+            return String(format: "%.1f\"", seconds)
+        }
+        let denom = max(1, Int((1.0 / seconds).rounded()))
+        return "1/\(denom)"
     }
 
     func switchCamera() {
@@ -1004,6 +1058,7 @@ class CameraManager: NSObject, ObservableObject {
                     self.isManualExposure = false
                     self.isAEAFLocked = false
                 }
+                self.sampleLiveExposure()
             } catch {
                 print("Error setting auto exposure: \(error)")
             }

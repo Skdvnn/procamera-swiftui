@@ -102,5 +102,23 @@ struct ShutterAppShortcuts: AppShortcutsProvider {
             shortTitle: "Darkroom",
             systemImageName: "square.stack.3d.up"
         )
+        AppShortcut(
+            intent: ApplyShutterLookIntent(),
+            phrases: [
+                "Apply a look in \(.applicationName)",
+                "Set film look in \(.applicationName)"
+            ],
+            shortTitle: "Apply Look",
+            systemImageName: "camera.filters"
+        )
+        AppShortcut(
+            intent: SetShutterTimerIntent(),
+            phrases: [
+                "Set \(.applicationName) timer",
+                "Self timer with \(.applicationName)"
+            ],
+            shortTitle: "Timer",
+            systemImageName: "timer"
+        )
     }
 }
