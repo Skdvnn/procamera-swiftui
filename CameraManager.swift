@@ -412,7 +412,8 @@ class CameraManager: NSObject, ObservableObject {
            index >= 0, index < CameraManager.shutterSpeedValues.count {
             duration = clampDuration(CameraManager.shutterSpeedValues[index], to: device)
         } else {
-            duration = clampDuration(AVCaptureDevice.currentExposureDuration, to: device)
+            // currentExposureDuration is a keep-current sentinel — never clamp it.
+            duration = AVCaptureDevice.currentExposureDuration
         }
 
         let isoSource = manualISOValue ?? isoValue
@@ -534,6 +535,18 @@ class CameraManager: NSObject, ObservableObject {
             self.longExposureProgress = 0.0
         }
 
+        // If the custom-exposure callback never fires, don't leave the shutter stuck.
+        let hwTimeout = DispatchWorkItem { [weak self] in
+            guard let self, self.isLongExposureCapturing else { return }
+            print("HW long-exposure timeout — aborting")
+            self.restoreExposureAfterLongExposure()
+            self.isLongExposureCapturing = false
+            self.longExposureProgress = 0.0
+            self.longExposurePathLabel = ""
+            completion(nil)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration + 8, execute: hwTimeout)
+
         sessionQueue.async {
             do {
                 try device.lockForConfiguration()
@@ -543,8 +556,13 @@ class CameraManager: NSObject, ObservableObject {
                 device.setExposureModeCustom(duration: targetDuration, iso: targetISO) { _ in
                     // Now capture the photo
                     DispatchQueue.main.async {
+                        hwTimeout.cancel()
                         self.longExposureProgress = 1.0
-                        self.capturePhoto(filmFilter: captureFilm, lensFX: captureFX) { image in
+                        self.capturePhoto(
+                            filmFilter: captureFilm,
+                            lensFX: captureFX,
+                            morphTouch: self.longExposureMorphTouch
+                        ) { image in
                             // Thaw multi-second preview lock, then restore manuals.
                             self.restoreExposureAfterLongExposure()
                             self.isLongExposureCapturing = false
@@ -559,6 +577,7 @@ class CameraManager: NSObject, ObservableObject {
             } catch {
                 print("Error setting long exposure: \(error)")
                 DispatchQueue.main.async {
+                    hwTimeout.cancel()
                     self.isLongExposureCapturing = false
                     completion(nil)
                 }
@@ -703,6 +722,11 @@ class CameraManager: NSObject, ObservableObject {
 
     func setExposure(_ value: Float) {
         guard let device = videoDeviceInput?.device else { return }
+        // Target bias is ignored in .custom — don't pretend EV works over manuals.
+        guard !isManualExposure else {
+            DispatchQueue.main.async { self.exposureValue = value }
+            return
+        }
 
         sessionQueue.async {
             do {
@@ -732,7 +756,8 @@ class CameraManager: NSObject, ObservableObject {
                index >= 0, index < CameraManager.shutterSpeedValues.count {
                 duration = self.clampDuration(CameraManager.shutterSpeedValues[index], to: device)
             } else {
-                duration = self.clampDuration(AVCaptureDevice.currentExposureDuration, to: device)
+                // currentExposureDuration is a keep-current sentinel — never clamp it.
+                duration = AVCaptureDevice.currentExposureDuration
             }
             let clampedISO = max(device.activeFormat.minISO, min(value, device.activeFormat.maxISO))
 
@@ -742,7 +767,6 @@ class CameraManager: NSObject, ObservableObject {
                 device.unlockForConfiguration()
                 DispatchQueue.main.async {
                     self.isoValue = clampedISO
-                    self.shutterSpeed = duration
                     self.isManualExposure = true
                 }
             } catch {
@@ -751,11 +775,13 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    func setShutterSpeed(index: Int) {
+    /// - Parameter iso: UI ISO to lock with shutter (avoids CameraManager default 100 desync).
+    func setShutterSpeed(index: Int, iso: Float? = nil) {
         guard let device = videoDeviceInput?.device else { return }
         guard index >= 0 && index < CameraManager.shutterSpeedValues.count else { return }
         guard device.isExposureModeSupported(.custom) else { return }
 
+        if let iso { manualISOValue = iso }
         manualShutterIndex = index
         let targetDuration = CameraManager.shutterSpeedValues[index]
 
@@ -1677,9 +1703,10 @@ class CameraManager: NSObject, ObservableObject {
         morphTouch: MorphTouchState? = nil,
         completion: @escaping (UIImage?) -> Void
     ) {
-        // Serialize — a second shutter while bake is in-flight used to overwrite
-        // photoCompletionHandler and drop / mis-route the first still.
-        if photoCompletionHandler != nil {
+        // Serialize — handler nils when the still arrives, but bake can still
+        // be running; also block during long exposure.
+        let (_, _, _, _, _, baking) = currentPipelineSelection()
+        if photoCompletionHandler != nil || baking || isLongExposureCapturing {
             DispatchQueue.main.async { completion(nil) }
             return
         }
@@ -2061,6 +2088,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         longExposureCompletion = nil
         longExposureMorphTouch = nil
         setBakingStill(true)
+        armBakeTimeout()
 
         let resultImage = normalizeAccumulator()
 

@@ -218,6 +218,7 @@ struct ContentView: View {
     @State private var topCollapsed = false
     /// Deep-link / shortcut capture before the session is up.
     @State private var pendingCaptureWhenReady = false
+    @State private var timerWorkItem: DispatchWorkItem?
     /// Start fullscreen (shutter docked at bottom) — swipe up to expand controls.
     @State private var bottomCollapsed = true
     /// Live vertical drag on the bottom deck (positive = pulling down / collapsing).
@@ -302,12 +303,14 @@ struct ContentView: View {
                             isManualFocusEnabled = true
                         },
                         onExposureChanged: { val in
+                            guard !isLocked, !camera.isManualExposure else { return }
                             camera.setExposure(val)
                         },
                         onShutterSpeedChanged: { idx in
-                            // idx is the real 15-stop table index (dial maps 4k…30 → 14…7).
+                            guard !isLocked else { return }
+                            // Pass UI ISO so we don't lock shutter with CameraManager's stale 100.
                             shutterSpeedIndex = idx
-                            camera.setShutterSpeed(index: idx)
+                            camera.setShutterSpeed(index: idx, iso: Float(isoValue))
                         },
                         onTimerTap: {
                             Haptics.click()
@@ -534,6 +537,7 @@ struct ContentView: View {
         .onDisappear {
             volumeShutter.stop()
             ShutterDeepLinkCenter.endReceiving()
+            cancelTimerCountdown()
         }
         .onReceive(NotificationCenter.default.publisher(for: .shutterDeepLink)) { note in
             if let link = note.userInfo?["link"] as? ShutterDeepLink {
@@ -705,9 +709,7 @@ struct ContentView: View {
         isLocked = false
         isManualFocusEnabled = false
         exposureValue = 0
-        // Neutral readouts so the glass bar doesn't keep stale manual numbers.
-        shutterSpeedIndex = 9 // 1/125
-        isoValue = 400
+        // Sensor goes continuous-auto — glass bar shows AUTO (not fake 1/125).
         camera.returnToAuto()
     }
 
@@ -791,12 +793,7 @@ struct ContentView: View {
 
     /// Apply aspect crop then dual-write gallery + Photos.
     private func finishCapturedImage(_ img: UIImage) {
-        let framed: UIImage
-        if let aspect = aspectRatio.framedAspect {
-            framed = img.croppedToAspect(aspect)
-        } else {
-            framed = img
-        }
+        let framed = img.croppedToAspectMode(aspectRatio)
         lastCapturedImage = framed
         photoCount += 1
         recordShot(framed)
@@ -920,9 +917,7 @@ struct ContentView: View {
                             let newZoom = zoomValue * scale
                             zoomValue = min(max(newZoom, 0.5), 10.0)
                             camera.setZoom(zoomValue)
-                            if !isManualFocusEnabled {
-                                focusPosition = Float(zoomValue - 1) / 4.0
-                            }
+                            // Focus and zoom are independent — never write zoom into FOCUS.
                         },
                         onMorphTouch: handleMorphTouch,
                         exposureDragEnabled: showFocusPoint || isDraggingExposure,
@@ -1198,6 +1193,7 @@ struct ContentView: View {
                     }
                 },
                 onISOChanged: { iso in
+                    guard !isLocked else { return }
                     camera.setISO(Float(iso))
                 }
             )
@@ -1211,6 +1207,7 @@ struct ContentView: View {
                 ISOScrubberHorizontal(
                     iso: $isoValue,
                     onChanged: { iso in
+                        guard !isLocked else { return }
                         camera.setISO(Float(iso))
                     }
                 )
@@ -1218,8 +1215,9 @@ struct ContentView: View {
                 ShutterScrubber(
                     shutterSpeed: $shutterSpeedIndex,
                     onChanged: { idx in
-                        // Shutter and EV are independent — don't fake EV from index.
-                        camera.setShutterSpeed(index: idx)
+                        guard !isLocked else { return }
+                        // Pass UI ISO; shutter and EV stay independent.
+                        camera.setShutterSpeed(index: idx, iso: Float(isoValue))
                     }
                 )
             }
@@ -1322,6 +1320,11 @@ struct ContentView: View {
     }
 
     private func handleCapture() {
+        // Second tap during countdown cancels.
+        if timerWorkItem != nil || timerCountdown > 0 {
+            cancelTimerCountdown()
+            return
+        }
         guard !isCapturing else { return }
         if timerSeconds > 0 {
             isCapturing = true
@@ -1332,13 +1335,28 @@ struct ContentView: View {
         }
     }
 
+    private func cancelTimerCountdown() {
+        timerWorkItem?.cancel()
+        timerWorkItem = nil
+        timerCountdown = 0
+        if !camera.isLongExposureCapturing {
+            isCapturing = false
+        }
+    }
+
     private func runCountdown() {
-        guard timerCountdown > 0 else { captureNow(); return }
+        guard timerCountdown > 0 else {
+            timerWorkItem = nil
+            captureNow()
+            return
+        }
         Haptics.light()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+        let work = DispatchWorkItem {
             timerCountdown -= 1
             runCountdown()
         }
+        timerWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
     }
 
     private func captureNow() {
@@ -1534,10 +1552,10 @@ struct RefractiveGlassInfoBar: View {
                             .foregroundColor(isManualExposure ? Color(red: 1.0, green: 0.85, blue: 0.35) : .white)
                     }
                     .buttonStyle(.plain)
-                    Text("ISO \(iso)")
+                    Text(isManualExposure ? "ISO \(iso)" : "ISO AUTO")
                         .font(.system(size: 12, weight: .semibold, design: .monospaced))
                 }
-                Text(shutterSpeed)
+                Text(isManualExposure ? shutterSpeed : "AUTO")
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
             }
             .foregroundColor(.white)

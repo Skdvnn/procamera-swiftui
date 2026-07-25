@@ -281,7 +281,11 @@ def test_source_guards() -> None:
         "shutter dial covers Night/LE",
         "cameraIndices = [14, 12, 11, 9, 7, 5, 2, 0]" in gauge,
     )
-    check("dial calls setShutterSpeed", "onShutterSpeedChanged" in content and "camera.setShutterSpeed(index: idx)" in content)
+    check(
+        "dial calls setShutterSpeed",
+        "onShutterSpeedChanged" in content
+        and "setShutterSpeed(index: idx, iso: Float(isoValue))" in content,
+    )
     import re as _re_film
     _film_branch = _re_film.search(
         r"case \.film:(.*?)syncCaptureContextToSystem", content, _re_film.S
@@ -298,8 +302,16 @@ def test_source_guards() -> None:
     check("orientation snapshotted on main", "Snapshot UIKit orientation on main" in cam)
     check("deep-link waits for session", "pendingCaptureWhenReady" in content)
     check("flip reapplies manual exposure", "reapplyManualExposure(on: newDevice)" in cam)
-    check("scrubber does not fake EV", "don't fake EV from index" in content)
-    check("compact focus matches dial", 'stopLabels = [".4m", ".7m", "1m", "3m", "5m", "∞"]' in gauge)
+    check("scrubber does not fake EV", "Pass UI ISO; shutter and EV stay independent" in content)
+    check("compact focus matches dial", 'stopValues: [Float] = [0.0, 0.17, 0.33, 0.5, 0.67, 1.0]' in gauge)
+    check("ISO sentinel unclamped", "currentExposureDuration is a keep-current sentinel" in cam)
+    check("portrait framed aspect", "case .ratio4x3: return 3.0 / 4.0" in (ROOT / "ViewfinderAids.swift").read_text())
+    check("shutter passes UI ISO", "setShutterSpeed(index: idx, iso: Float(isoValue))" in content)
+    check("AUTO readout when not manual", "ISO AUTO" in content and 'shutterSpeed : "AUTO"' in content)
+    check("pinch does not write focus", "never write zoom into FOCUS" in content)
+    check("timer countdown cancellable", "cancelTimerCountdown" in content)
+    check("HW LE passes morphTouch", "morphTouch: self.longExposureMorphTouch" in cam)
+    check("bake blocks mid-bake capture", "baking || isLongExposureCapturing" in cam)
 
 
 # ── Landscape layout invariants ─────────────────────────────────────────────

@@ -8,11 +8,11 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 38 phone test pack (LE restore / bake timeout / dial range):**
+**Build 39 phone test pack (ISO/aspect/AUTO/timer):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **38**.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **39**.
 
 ## Path A — You have a Mac (fastest)
 

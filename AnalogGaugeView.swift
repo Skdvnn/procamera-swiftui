@@ -13,7 +13,7 @@ struct FocusDial: View {
     let onChanged: (Float) -> Void
 
     private let marks: [(String, Float)] = [
-        (".4m", 0.0), (".7", 0.17), ("1", 0.33), ("3", 0.5), ("5", 0.67), ("inf", 0.83)
+        (".4m", 0.0), (".7", 0.17), ("1", 0.33), ("3", 0.5), ("5", 0.67), ("inf", 1.0)
     ]
 
     var body: some View {
@@ -640,7 +640,7 @@ struct CompactFocusScrubber: View {
 
     /// Discrete focus stops matching the FocusDial major marks (shared table).
     private let stops: [Int] = Array(0...5)
-    private let stopValues: [Float] = [0.0, 0.17, 0.33, 0.5, 0.67, 0.83]
+    private let stopValues: [Float] = [0.0, 0.17, 0.33, 0.5, 0.67, 1.0]
     private let stopLabels = [".4m", ".7m", "1m", "3m", "5m", "∞"]
 
     /// Stable index — avoids Binding get/set snap ping-pong with ScrollView.

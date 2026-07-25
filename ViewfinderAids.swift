@@ -10,19 +10,35 @@ extension AspectRatioMode {
     /// Short label for the info bar (FULL / 4:3 / 1:1 / …).
     var shortLabel: String { label }
 
-    /// Framed width÷height for the portrait viewfinder. `nil` = no crop.
+    /// Portrait-native width÷height (phone upright). `nil` = no crop.
+    /// 4:3 means a 3:4 portrait still — matching iOS Camera labeling.
     var framedAspect: CGFloat? {
         switch self {
         case .full: return nil
-        case .ratio4x3: return 4.0 / 3.0
+        case .ratio4x3: return 3.0 / 4.0
         case .ratio1x1: return 1.0
-        case .ratio16x9: return 16.0 / 9.0
-        case .ratio3x2: return 3.0 / 2.0
+        case .ratio16x9: return 9.0 / 16.0
+        case .ratio3x2: return 2.0 / 3.0
         }
+    }
+
+    /// Aspect for a viewfinder or still of the given size (inverts for landscape).
+    func framedAspect(fitting size: CGSize) -> CGFloat? {
+        guard let base = framedAspect else { return nil }
+        if size.width > size.height, abs(base - 1) > 0.01 {
+            return 1.0 / base
+        }
+        return base
     }
 }
 
 extension UIImage {
+    /// Center-crop using an aspect mode (orientation-aware).
+    func croppedToAspectMode(_ mode: AspectRatioMode) -> UIImage {
+        guard let aspect = mode.framedAspect(fitting: size) else { return self }
+        return croppedToAspect(aspect)
+    }
+
     /// Center-crop to a width/height aspect (same framing as the viewfinder mask).
     func croppedToAspect(_ aspect: CGFloat) -> UIImage {
         let w = size.width

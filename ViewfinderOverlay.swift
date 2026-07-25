@@ -344,15 +344,7 @@ struct AspectRatioMask: View {
     let size: CGSize
 
     var body: some View {
-        let targetRatio: CGFloat = {
-            switch mode {
-            case .full: return size.width / size.height
-            case .ratio4x3: return 4.0 / 3.0
-            case .ratio1x1: return 1.0
-            case .ratio16x9: return 16.0 / 9.0
-            case .ratio3x2: return 3.0 / 2.0
-            }
-        }()
+        let targetRatio: CGFloat = mode.framedAspect(fitting: size) ?? (size.width / size.height)
 
         let currentRatio = size.width / size.height
 
