@@ -125,6 +125,9 @@ class CameraManager: NSObject, ObservableObject {
     private var longExposureFilmFilter: FilmFilter = .none
     private var longExposureLensFX: LensFXMode = .none
     private var longExposureMorphTouch: MorphTouchState?
+    /// Manual shutter/ISO to restore after LE thaws the multi-second preview lock.
+    private var exposureSnapshotBeforeLE: (shutter: Int?, iso: Float?)?
+    private var bakeTimeoutWork: DispatchWorkItem?
 
     // Film stocks — same enum as UI (`FilmFilterMode`).
     typealias FilmFilter = FilmFilterMode
@@ -364,6 +367,26 @@ class CameraManager: NSObject, ObservableObject {
         pipelineLock.unlock()
     }
 
+    private func armBakeTimeout() {
+        bakeTimeoutWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            guard self.photoCompletionHandler != nil else { return }
+            print("Capture timeout — clearing stuck bake gate")
+            let handler = self.photoCompletionHandler
+            self.photoCompletionHandler = nil
+            self.setBakingStill(false)
+            handler?(nil)
+        }
+        bakeTimeoutWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 12, execute: work)
+    }
+
+    private func cancelBakeTimeout() {
+        bakeTimeoutWork?.cancel()
+        bakeTimeoutWork = nil
+    }
+
     private func currentPipelineSelection() -> (FilmFilter, LensFXMode, Bool, Bool, Bool, Bool) {
         pipelineLock.lock()
         defer { pipelineLock.unlock() }
@@ -479,6 +502,8 @@ class CameraManager: NSObject, ObservableObject {
         longExposureMorphTouch = fx.isTouchReactive
             ? LensFXEngine.shared.snapshotForCapture()
             : nil
+        // Remember manuals so thawing the LE custom exposure doesn't wipe Night/Street.
+        exposureSnapshotBeforeLE = (manualShutterIndex, manualISOValue)
 
         // Get device's actual max exposure duration
         let maxHardwareDuration = CMTimeGetSeconds(device.activeFormat.maxExposureDuration)
@@ -520,9 +545,8 @@ class CameraManager: NSObject, ObservableObject {
                     DispatchQueue.main.async {
                         self.longExposureProgress = 1.0
                         self.capturePhoto(filmFilter: captureFilm, lensFX: captureFX) { image in
-                            // Restore auto exposure or the preview stays at
-                            // seconds-per-frame and the camera looks frozen
-                            self.resetToAutoExposure()
+                            // Thaw multi-second preview lock, then restore manuals.
+                            self.restoreExposureAfterLongExposure()
                             self.isLongExposureCapturing = false
                             self.longExposureProgress = 0.0
                             self.longExposurePathLabel = ""
@@ -666,6 +690,8 @@ class CameraManager: NSObject, ObservableObject {
                         self.currentCamera = newPosition
                         self.zoomFactor = 1.0
                     }
+                    // Flip drops custom exposure on the new device — restore manuals.
+                    self.reapplyManualExposure(on: newDevice)
                 }
 
                 self.session.commitConfiguration()
@@ -1679,6 +1705,7 @@ class CameraManager: NSObject, ObservableObject {
         print("LensFX capture: fx=\(captureLensFX.name) film=\(captureFilmFilter) format=\(captureFormat) bake=\(needsFXBake) natural=\(naturalCaptureEnabled) touchForce=\(captureTouch?.force ?? 0)")
 
         photoCompletionHandler = { [weak self] image in
+            self?.cancelBakeTimeout()
             guard let self = self, let image = image else {
                 self?.setBakingStill(false)
                 DispatchQueue.main.async { completion(nil) }
@@ -1705,6 +1732,7 @@ class CameraManager: NSObject, ObservableObject {
                 DispatchQueue.main.async { completion(filteredImage) }
             }
         }
+        armBakeTimeout()
 
         var settings: AVCapturePhotoSettings
 
@@ -1748,27 +1776,43 @@ class CameraManager: NSObject, ObservableObject {
         settings.flashMode = flashMode
         applyMinimalProcessing(to: &settings)
 
-        // Connection orientation + max dimensions must touch the session on its queue.
-        sessionQueue.async { [weak self] in
+        // Snapshot UIKit orientation on main — never from sessionQueue.
+        let fire: (CGFloat) -> Void = { [weak self] angle in
             guard let self else { return }
-            if let device = self.videoDeviceInput?.device {
-                self.updateMaxPhotoDimensions(for: device)
+            self.sessionQueue.async {
+                guard self.session.isRunning else {
+                    DispatchQueue.main.async {
+                        self.cancelBakeTimeout()
+                        self.photoCompletionHandler = nil
+                        self.setBakingStill(false)
+                        completion(nil)
+                    }
+                    return
+                }
+                if let device = self.videoDeviceInput?.device {
+                    self.updateMaxPhotoDimensions(for: device)
+                }
+                settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
+                self.applyCaptureOrientation(rotationAngle: angle)
+                self.photoOutput.capturePhoto(with: settings, delegate: self)
             }
-            settings.maxPhotoDimensions = self.photoOutput.maxPhotoDimensions
-            self.applyCaptureOrientation()
-            self.photoOutput.capturePhoto(with: settings, delegate: self)
+        }
+        if Thread.isMainThread {
+            fire(Self.videoRotationAngle(for: Self.currentInterfaceOrientation()))
+        } else {
+            DispatchQueue.main.async {
+                fire(Self.videoRotationAngle(for: Self.currentInterfaceOrientation()))
+            }
         }
     }
 
     // MARK: - Capture / preview orientation
 
     /// Match still orientation to what the finder shows (portrait + landscape).
-    private func applyCaptureOrientation() {
+    private func applyCaptureOrientation(rotationAngle: CGFloat) {
         guard let connection = photoOutput.connection(with: .video) else { return }
-        let orient = Self.currentInterfaceOrientation()
-        let angle = Self.videoRotationAngle(for: orient)
-        if connection.isVideoRotationAngleSupported(angle) {
-            connection.videoRotationAngle = angle
+        if connection.isVideoRotationAngleSupported(rotationAngle) {
+            connection.videoRotationAngle = rotationAngle
         }
         // Front camera: mirror so selfies match the finder (preview layer mirrors).
         if connection.isVideoMirroringSupported {
@@ -1825,8 +1869,10 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
             print("Photo capture error: \(error)")
             // RAW half of a dual capture can fail independently; still wait for processed
             if photo.isRawPhoto { return }
+            cancelBakeTimeout()
             let handler = photoCompletionHandler
             photoCompletionHandler = nil
+            setBakingStill(false)
             handler?(nil)
             return
         }
@@ -1841,8 +1887,10 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
 
         guard let imageData = photo.fileDataRepresentation(),
               let image = UIImage(data: imageData) else {
+            cancelBakeTimeout()
             let handler = photoCompletionHandler
             photoCompletionHandler = nil
+            setBakingStill(false)
             handler?(nil)
             return
         }
@@ -1850,6 +1898,25 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
         let handler = photoCompletionHandler
         photoCompletionHandler = nil
         handler?(image)
+    }
+
+    func photoOutput(
+        _ output: AVCapturePhotoOutput,
+        didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings,
+        error: Error?
+    ) {
+        // Last-chance clear if processed never arrived (stuck bake / RAW-only fail).
+        guard photoCompletionHandler != nil else { return }
+        if let error {
+            print("didFinishCaptureFor error: \(error)")
+        } else {
+            print("didFinishCaptureFor with handler still armed — clearing")
+        }
+        cancelBakeTimeout()
+        let handler = photoCompletionHandler
+        photoCompletionHandler = nil
+        setBakingStill(false)
+        handler?(nil)
     }
 }
 
@@ -2001,7 +2068,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         longExposureFrameCount = 0
         longExposureTargetDuration = 0
 
-        resetToAutoExposure()
+        restoreExposureAfterLongExposure()
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
@@ -2019,12 +2086,47 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             }
 
             self.setBakingStill(false)
+            self.cancelBakeTimeout()
             self.isFinalizingLongExposure = false
 
             DispatchQueue.main.async {
                 completion?(finalImage)
                 self.longExposureProgress = 0.0
                 self.longExposurePathLabel = ""
+            }
+        }
+    }
+
+    /// Drop the multi-second custom exposure that freezes the finder, then
+    /// put back the user's Night/Street manuals (do not wipe them).
+    private func restoreExposureAfterLongExposure() {
+        let snap = exposureSnapshotBeforeLE
+        exposureSnapshotBeforeLE = nil
+        guard let device = videoDeviceInput?.device else { return }
+
+        sessionQueue.async {
+            do {
+                try device.lockForConfiguration()
+                if device.isExposureModeSupported(.continuousAutoExposure) {
+                    device.exposureMode = .continuousAutoExposure
+                }
+                device.unlockForConfiguration()
+            } catch {
+                print("Error thawing exposure after LE: \(error)")
+            }
+
+            DispatchQueue.main.async {
+                if let shutter = snap?.shutter {
+                    self.setShutterSpeed(index: shutter)
+                }
+                if let iso = snap?.iso {
+                    self.setISO(iso)
+                }
+                if snap?.shutter == nil, snap?.iso == nil {
+                    self.manualShutterIndex = nil
+                    self.manualISOValue = nil
+                    self.isManualExposure = false
+                }
             }
         }
     }

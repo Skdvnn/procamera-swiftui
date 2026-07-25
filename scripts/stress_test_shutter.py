@@ -276,7 +276,11 @@ def test_source_guards() -> None:
     check("cached grain texture", "enum CachedGrainTexture" in (ROOT / "ViewfinderOverlay.swift").read_text())
     check("no Street chip overlay", "cycleShootMode" not in content)
     check("scenes in film dock", "sectionLabel(\"SCENE\")" in (ROOT / "ViewfinderOverlay.swift").read_text())
-    check("shutter dial maps camera indices", "cameraIndices = [14, 13, 12, 11, 10, 9, 8, 7]" in (ROOT / "AnalogGaugeView.swift").read_text())
+    gauge = (ROOT / "AnalogGaugeView.swift").read_text()
+    check(
+        "shutter dial covers Night/LE",
+        "cameraIndices = [14, 12, 11, 9, 7, 5, 2, 0]" in gauge,
+    )
     check("dial calls setShutterSpeed", "onShutterSpeedChanged" in content and "camera.setShutterSpeed(index: idx)" in content)
     import re as _re_film
     _film_branch = _re_film.search(
@@ -289,6 +293,13 @@ def test_source_guards() -> None:
     check("shortcut not double-posted at launch", "Cold-start shortcuts are handled in FingerTipSceneDelegate only" in (ROOT / "ProCameraApp.swift").read_text())
     check("capture serialized", "if photoCompletionHandler != nil" in cam)
     check("look deep link clears FX", "lensFX = .none" in content and "Always apply both" in content)
+    check("LE restores manuals", "restoreExposureAfterLongExposure" in cam and "exposureSnapshotBeforeLE" in cam)
+    check("bake timeout armed", "func armBakeTimeout" in cam and "didFinishCaptureFor" in cam)
+    check("orientation snapshotted on main", "Snapshot UIKit orientation on main" in cam)
+    check("deep-link waits for session", "pendingCaptureWhenReady" in content)
+    check("flip reapplies manual exposure", "reapplyManualExposure(on: newDevice)" in cam)
+    check("scrubber does not fake EV", "don't fake EV from index" in content)
+    check("compact focus matches dial", 'stopLabels = [".4m", ".7m", "1m", "3m", "5m", "∞"]' in gauge)
 
 
 # ── Landscape layout invariants ─────────────────────────────────────────────

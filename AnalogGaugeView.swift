@@ -128,12 +128,12 @@ struct ShutterSpeedDial: View {
     @Binding var value: Int
     let onChanged: (Int) -> Void
 
-    // Dial ticks (fast → slow) mapped onto the 15-stop capture table.
-    private let dialLabels = ["4k", "2k", "1k", "500", "250", "125", "60", "30"]
-    private let cameraIndices = [14, 13, 12, 11, 10, 9, 8, 7]
+    // Full useful range: 1/4000…4″ so Night/LE aren't nearest-neighbor snapped to 1/30.
+    private let dialLabels = ["4k", "1k", "500", "125", "30", "1/8", "1\"", "4\""]
+    private let cameraIndices = [14, 12, 11, 9, 7, 5, 2, 0]
     private let marks: [(String, Float)] = [
-        ("4k", 0.0), ("2k", 0.143), ("1k", 0.286), ("500", 0.429),
-        ("250", 0.571), ("125", 0.714), ("60", 0.857), ("30", 1.0)
+        ("4k", 0.0), ("1k", 0.143), ("500", 0.286), ("125", 0.429),
+        ("30", 0.571), ("1/8", 0.714), ("1\"", 0.857), ("4\"", 1.0)
     ]
 
     private var dialPosition: Int {
@@ -638,10 +638,10 @@ struct CompactFocusScrubber: View {
     let isAutoFocus: Bool
     let onChanged: (Float) -> Void
 
-    /// Discrete focus stops matching the FocusDial major marks.
-    private let stops: [Int] = Array(0...6)
-    private let stopValues: [Float] = [0.0, 0.17, 0.33, 0.5, 0.67, 0.83, 1.0]
-    private let stopLabels = [".4m", ".7m", "1m", "3m", "5m", "10m", "∞"]
+    /// Discrete focus stops matching the FocusDial major marks (shared table).
+    private let stops: [Int] = Array(0...5)
+    private let stopValues: [Float] = [0.0, 0.17, 0.33, 0.5, 0.67, 0.83]
+    private let stopLabels = [".4m", ".7m", "1m", "3m", "5m", "∞"]
 
     /// Stable index — avoids Binding get/set snap ping-pong with ScrollView.
     @State private var index: Int = 3
@@ -834,7 +834,7 @@ extension AnalogDisplayPanel {
     ) {
         self._focusPosition = focusPosition
         self._exposureValue = exposureValue
-        self._shutterSpeedIndex = .constant(4)  // Default to 1/250
+        self._shutterSpeedIndex = .constant(10)  // Default to 1/250
         self.timerSeconds = timerSeconds
         self.iso = iso
         self.flashMode = flashMode

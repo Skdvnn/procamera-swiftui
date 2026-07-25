@@ -205,7 +205,7 @@ struct ContentView: View {
     @State private var isLocked = false
     @State private var focusPosition: Float = 0.5
     @State private var exposureValue: Float = 0.0
-    @State private var isoValue: Int = 800
+    @State private var isoValue: Int = 400
     @State private var focalLength: Int = 24
     @State private var zoomValue: CGFloat = 1.0
     /// Hardware lens aperture readout only (phones don't stop down).
@@ -216,6 +216,8 @@ struct ContentView: View {
     @State private var lensFX: LensFXMode = .none
     @State private var captureFormat: CaptureFormat = .heic
     @State private var topCollapsed = false
+    /// Deep-link / shortcut capture before the session is up.
+    @State private var pendingCaptureWhenReady = false
     /// Start fullscreen (shutter docked at bottom) — swipe up to expand controls.
     @State private var bottomCollapsed = true
     /// Live vertical drag on the bottom deck (positive = pulling down / collapsing).
@@ -324,8 +326,14 @@ struct ContentView: View {
                     )
                     .frame(height: topPanelHeight)
                     .padding(.horizontal, DS.pageMargin)
-                    // Swipe up to minimize — simultaneous so compact scrubbers stay interactive
-                    .simultaneousGesture(deckSwipe(collapseOnSwipeUp: true) { topCollapsed = $0 })
+                    // Higher threshold when dials are out so vertical dial drags
+                    // don't collapse the top deck.
+                    .simultaneousGesture(
+                        deckSwipe(
+                            collapseOnSwipeUp: true,
+                            minDistance: effectiveTopCollapsed ? 20 : 56
+                        ) { topCollapsed = $0 }
+                    )
 
                     Spacer().frame(height: gaugeToViewfinderSpacing)
 
@@ -535,6 +543,13 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .shutterHardwareShutter)) { _ in
             handleCapture()
         }
+        .onChange(of: camera.isSessionRunning) { _, running in
+            guard running, pendingCaptureWhenReady else { return }
+            pendingCaptureWhenReady = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                handleCapture()
+            }
+        }
         .onChange(of: focusPeaking) { _, on in
             camera.focusPeakingEnabled = on
         }
@@ -702,8 +717,12 @@ struct ContentView: View {
             showPhotoBook = false
         case .capture:
             showPhotoBook = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                handleCapture()
+            if camera.isSessionRunning {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                    handleCapture()
+                }
+            } else {
+                pendingCaptureWhenReady = true
             }
         case .darkroom:
             showPhotoBook = true
@@ -859,15 +878,20 @@ struct ContentView: View {
 
     // Vertical swipe that collapses/expands a control deck.
     // For the top deck a swipe up collapses; for the bottom deck a swipe down does.
-    private func deckSwipe(collapseOnSwipeUp: Bool, set: @escaping (Bool) -> Void) -> some Gesture {
-        DragGesture(minimumDistance: 20)
+    private func deckSwipe(
+        collapseOnSwipeUp: Bool,
+        minDistance: CGFloat = 20,
+        set: @escaping (Bool) -> Void
+    ) -> some Gesture {
+        DragGesture(minimumDistance: minDistance)
             .onEnded { value in
                 let dy = value.translation.height
-                guard abs(dy) > abs(value.translation.width) else { return }
+                let threshold = max(30, minDistance * 0.6)
+                guard abs(dy) > abs(value.translation.width) * 1.15 else { return }
                 withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                    if dy < -30 {
+                    if dy < -threshold {
                         set(collapseOnSwipeUp)
-                    } else if dy > 30 {
+                    } else if dy > threshold {
                         set(!collapseOnSwipeUp)
                     }
                 }
@@ -1194,9 +1218,8 @@ struct ContentView: View {
                 ShutterScrubber(
                     shutterSpeed: $shutterSpeedIndex,
                     onChanged: { idx in
+                        // Shutter and EV are independent — don't fake EV from index.
                         camera.setShutterSpeed(index: idx)
-                        let evShift = Float(idx - 9) * 0.5
-                        exposureValue = max(-2, min(2, evShift))
                     }
                 )
             }
