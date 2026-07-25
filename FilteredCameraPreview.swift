@@ -235,6 +235,8 @@ class FilteredPreviewView: UIView {
     private var commandQueue: MTLCommandQueue?
     private var device: MTLDevice?
     private var currentCIImage: CIImage?
+    /// Avoid re-locking LensFXEngine on every Metal frame.
+    private var lastPreviewRotation: PreviewBufferRotation?
 
     var session: AVCaptureSession? {
         didSet {
@@ -406,10 +408,14 @@ extension FilteredPreviewView: MTKViewDelegate {
 
         // Video buffers are sensor-native (landscape). Map to the *interface*
         // orientation so portrait + landscape left/right all read upright.
-        // Keep LensFXEngine touch mapping in lockstep with this rotation.
         let orient = Self.interfaceOrientation()
+        // Only push FX touch mapping when orientation changes — locking every
+        // Metal frame was freezing the UI under load.
         let rotation = PreviewBufferRotation.from(interfaceOrientation: orient)
-        LensFXEngine.shared.setPreviewBufferRotation(rotation)
+        if lastPreviewRotation != rotation {
+            lastPreviewRotation = rotation
+            LensFXEngine.shared.setPreviewBufferRotation(rotation)
+        }
         switch orient {
         case .portrait, .unknown:
             ciImage = ciImage.oriented(.right)

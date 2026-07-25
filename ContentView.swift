@@ -215,7 +215,8 @@ struct ContentView: View {
     @State private var lensFX: LensFXMode = .none
     @State private var captureFormat: CaptureFormat = .heic
     @State private var topCollapsed = false
-    @State private var bottomCollapsed = false
+    /// Start fullscreen (shutter docked at bottom) — swipe up to expand controls.
+    @State private var bottomCollapsed = true
     /// Live vertical drag on the bottom deck (positive = pulling down / collapsing).
     @State private var bottomDeckDrag: CGFloat = 0
     @StateObject private var gallery = GalleryStore()
@@ -260,7 +261,7 @@ struct ContentView: View {
         }
 
         /// Lift the glass bar above the safe-area strip + shutter deck.
-        static func histogramBottomPad(safeBottom: CGFloat) -> CGFloat {
+        static func histogramBottomPad(safeBottom: CGFloat, deckHeight: CGFloat = deckHeight) -> CGFloat {
             deckHeight + bottomPad(safeBottom: safeBottom) + histDeckGap
         }
     }
@@ -346,6 +347,9 @@ struct ContentView: View {
 
                         if effectiveBottomCollapsed {
                             collapsedBottomOverlay(safeBottom: safeBottom, compact: isLandscape)
+                                // Fill the finder and pin chrome to the bottom edge —
+                                // without this the shutter can float mid-frame.
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                                 .transition(
                                     .asymmetric(
                                         insertion: .opacity.combined(with: .offset(y: 14)),
@@ -373,7 +377,12 @@ struct ContentView: View {
                                 onReturnToAuto: { returnToAuto() }
                             )
                             .padding(.horizontal, isLandscape ? 10 : 14)
-                            .padding(.bottom, CollapsedChrome.histogramBottomPad(safeBottom: safeBottom))
+                            .padding(.bottom, CollapsedChrome.histogramBottomPad(
+                                safeBottom: safeBottom,
+                                deckHeight: isLandscape
+                                    ? CollapsedChrome.landscapeDeckHeight
+                                    : CollapsedChrome.deckHeight
+                            ))
                             .contentShape(Rectangle())
                             .simultaneousGesture(bottomDeckSwipe)
                             .transition(
@@ -413,19 +422,24 @@ struct ContentView: View {
                                 .zIndex(35)
                         }
 
-                        // Active shoot mode chip
-                        Text((ShootMode(rawValue: shootModeRaw) ?? .street).title.uppercased())
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
-                            .tracking(1.2)
-                            .foregroundColor(.white.opacity(0.7))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 4)
-                            .background(Capsule().fill(Color.black.opacity(0.4)))
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
-                            .padding(.leading, effectiveBottomCollapsed ? 20 : 24)
-                            .padding(.bottom, effectiveBottomCollapsed ? 100 : 16)
-                            .allowsHitTesting(false)
-                            .zIndex(36)
+                        // Shoot mode chip — tap cycles Street → Night → Studio → Film
+                        Button {
+                            Haptics.click()
+                            cycleShootMode()
+                        } label: {
+                            Text((ShootMode(rawValue: shootModeRaw) ?? .street).title.uppercased())
+                                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                .tracking(1.2)
+                                .foregroundColor(.white.opacity(0.85))
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 4)
+                                .background(Capsule().fill(Color.black.opacity(0.45)))
+                        }
+                        .buttonStyle(.plain)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                        .padding(.leading, effectiveBottomCollapsed ? 20 : 24)
+                        .padding(.bottom, effectiveBottomCollapsed ? 100 : 16)
+                        .zIndex(36)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .layoutPriority(1)
@@ -633,6 +647,14 @@ struct ContentView: View {
     private func syncCaptureControlsToCamera() {
         syncFilmFilter(filmFilter)
         camera.selectedLensFX = lensFX
+    }
+
+    private func cycleShootMode() {
+        let all = ShootMode.allCases
+        let current = ShootMode(rawValue: shootModeRaw) ?? .street
+        let idx = all.firstIndex(of: current) ?? 0
+        let next = all[(idx + 1) % all.count]
+        applyShootMode(next)
     }
 
     private func applyShootMode(_ mode: ShootMode) {
@@ -1042,46 +1064,51 @@ struct ContentView: View {
         let deckH = compact ? CollapsedChrome.landscapeDeckHeight : CollapsedChrome.deckHeight
         let underlayHeight = CollapsedChrome.fadeHeight + deckH + bottomPad
 
-        return ZStack(alignment: .bottom) {
-            // Soft fade under the whole bottom chrome band (fade + deck + home indicator)
-            LinearGradient(
-                colors: [
-                    Color.clear,
-                    Color.black.opacity(0.35),
-                    Color.black.opacity(0.75),
-                    Color.black.opacity(0.92)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .frame(height: underlayHeight)
-            .allowsHitTesting(false)
+        return VStack(spacing: 0) {
+            Spacer(minLength: 0)
+                .allowsHitTesting(false)
 
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
-                    .allowsHitTesting(false)
+            ZStack(alignment: .bottom) {
+                // Soft fade under the whole bottom chrome band
+                LinearGradient(
+                    colors: [
+                        Color.clear,
+                        Color.black.opacity(0.35),
+                        Color.black.opacity(0.75),
+                        Color.black.opacity(0.92)
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: underlayHeight)
+                .allowsHitTesting(false)
 
-                // Reserve the fade band so the deck sits below it; gradient paints underneath
-                Color.clear
-                    .frame(height: CollapsedChrome.fadeHeight)
-                    .allowsHitTesting(false)
+                VStack(spacing: 0) {
+                    // Pull strip above the shutter — swipe up to leave fullscreen
+                    Color.clear
+                        .frame(height: CollapsedChrome.fadeHeight)
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
+                        .gesture(bottomDeckSwipe)
 
-                bottomCompactDeck
-                    .frame(minHeight: deckH)
-                    .offset(y: bottomDeckDrag * 0.12)
-                    .opacity(1.0 - min(abs(bottomDeckDrag) / 90.0, 0.45))
+                    bottomCompactDeck
+                        .frame(height: deckH)
+                        .offset(y: bottomDeckDrag * 0.12)
+                        .opacity(1.0 - min(abs(bottomDeckDrag) / 90.0, 0.45))
 
-                Color.clear
-                    .frame(height: bottomPad)
-                    .frame(maxWidth: .infinity)
-                    .contentShape(Rectangle())
-                    .gesture(bottomDeckSwipe)
+                    Color.clear
+                        .frame(height: bottomPad)
+                        .frame(maxWidth: .infinity)
+                        .contentShape(Rectangle())
+                        .gesture(bottomDeckSwipe)
+                }
             }
+            .frame(height: underlayHeight)
         }
-        .frame(maxWidth: .infinity)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
     }
 
-    /// Clear gap beside shutter — pull-to-collapse lives here, not on the button.
+    /// Clear gap beside shutter — vertical pull lives here, not on the button.
     private var bottomDeckPullGap: some View {
         Color.clear
             .frame(maxWidth: .infinity, minHeight: 76)
@@ -1090,14 +1117,13 @@ struct ContentView: View {
     }
 
     /// Bottom deck: swipe down collapses, swipe up expands.
-    /// Higher thresholds so shutter taps aren't eaten by collapse.
+    /// Balanced thresholds — expandable again, but shutter taps still win.
     private var bottomDeckSwipe: some Gesture {
-        DragGesture(minimumDistance: 24, coordinateSpace: .local)
+        DragGesture(minimumDistance: 12, coordinateSpace: .local)
             .onChanged { value in
                 let dy = value.translation.height
                 let dx = value.translation.width
-                // Require clearly vertical intent
-                guard abs(dy) > abs(dx) * 1.1 else { return }
+                guard abs(dy) > abs(dx) * 0.85 else { return }
                 if bottomCollapsed {
                     // Pull up (negative) to peek expand
                     bottomDeckDrag = min(0, max(dy, -160))
@@ -1110,21 +1136,20 @@ struct ContentView: View {
                 let dy = value.translation.height
                 let dx = value.translation.width
                 let predicted = value.predictedEndTranslation.height
-                // Only trust prediction after a real vertical drag past threshold.
                 let effective: CGFloat = {
-                    guard abs(dy) > 20, abs(predicted) > abs(dy) else { return dy }
+                    guard abs(dy) > 14, abs(predicted) > abs(dy) else { return dy }
                     return predicted
                 }()
 
                 let committedDrag = bottomDeckDrag
                 withAnimation(deckCollapseSpring) {
                     bottomDeckDrag = 0
-                    guard abs(effective) > abs(dx) * 1.05 else { return }
+                    guard abs(effective) > abs(dx) * 0.75 else { return }
                     if bottomCollapsed {
-                        if effective < -44 || committedDrag < -36 {
+                        if effective < -28 || committedDrag < -24 {
                             bottomCollapsed = false
                         }
-                    } else if effective > 48 || committedDrag > 40 {
+                    } else if effective > 32 || committedDrag > 28 {
                         bottomCollapsed = true
                     }
                 }

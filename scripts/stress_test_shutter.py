@@ -262,7 +262,9 @@ def test_source_guards() -> None:
     check("bottomDeckPullGap", "bottomDeckPullGap" in content)
     check("comic fallback", "func applyToon" in (ROOT / "LensFXEngine.swift").read_text())
     check("film grain bake", "func applyFilmGrain" in cam)
-    check("cinestill preview bloom", "bloom.radius = 3.2" in cam or "bloom.intensity = 0.22" in cam)
+    # Preview intentionally skips CineStill bloom (perf); still bake keeps it.
+    check("cinestill still bloom", "case .cinestill800:" in cam and "bloom.intensity = 0.3" in cam)
+    check("preview bloom skipped", "Preview skips bloom" in cam)
 
 
 # ── Landscape layout invariants ─────────────────────────────────────────────

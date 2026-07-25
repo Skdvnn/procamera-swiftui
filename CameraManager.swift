@@ -74,7 +74,8 @@ class CameraManager: NSObject, ObservableObject {
     // Live preview filtering
     @Published var filteredPreviewImage: CIImage?
     private var lastPreviewFrameTime: CFAbsoluteTime = 0
-    private let previewFrameInterval: CFAbsoluteTime = 1.0 / 30.0  // 30fps max
+    /// Cap live FX preview — 20fps keeps Liquid/film from locking the main thread.
+    private let previewFrameInterval: CFAbsoluteTime = 1.0 / 20.0
 
     // Live histogram - real luminance bins computed from preview frames
     @Published var histogramBins: [Float] = []
@@ -1203,12 +1204,8 @@ class CameraManager: NSObject, ObservableObject {
             tempTint.targetNeutral = CIVector(x: 5200, y: 15)
             if let result = tempTint.outputImage { outputImage = result }
 
-            // Light halation so preview matches still bake (cheaper than full still bloom).
-            let bloom = CIFilter.bloom()
-            bloom.inputImage = outputImage
-            bloom.radius = 3.2
-            bloom.intensity = 0.22
-            if let result = bloom.outputImage { outputImage = result }
+            // Preview skips bloom — CIBloom every frame freezes the finder.
+            // Still bake keeps the full CineStill halation.
 
         case .velvia50:
             let colorControls = CIFilter.colorControls()
@@ -1538,7 +1535,8 @@ class CameraManager: NSObject, ObservableObject {
     // Cap live preview frames at ~1280px on the long edge; the viewfinder is
     // much smaller than sensor resolution and filters cost per-pixel
     private func downscaledForPreview(_ image: CIImage) -> CIImage {
-        downscaled(image, longEdge: 1280)
+        // 960 long-edge is enough for the finder and much cheaper under FX.
+        downscaled(image, longEdge: 960)
     }
 
     // MARK: - Live Histogram
