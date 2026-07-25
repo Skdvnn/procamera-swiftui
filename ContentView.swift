@@ -444,8 +444,14 @@ struct ContentView: View {
             let viewfinderToControlsSpacing: CGFloat = CollapsedChrome.viewfinderToDeckGap
 
             ZStack(alignment: .top) {
-                // Diamond/crosshatch texture background like Leica camera grip
-                LeicaVulcaniteTexture(scale: 20, intensity: 0.8).ignoresSafeArea()
+                // Non-Metal grip texture — stitchable vulcaniteTexture in this tree
+                // MetadataCache-crashes when film/FX pickers insert (device EXC_BAD_ACCESS).
+                ZStack {
+                    Color(white: 0.075)
+                    ControlsGrain()
+                }
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
 
                 VStack(spacing: 0) {
                     // TOP: Analog Display Panel — FOCUS/EV when compact
@@ -668,10 +674,12 @@ struct ContentView: View {
                         nightAssistDismissedUntil = Date().addingTimeInterval(300)
                     }
                 )
+                .animation(ShutterMotion.chrome, value: statusToast)
+                .animation(ShutterMotion.chrome, value: nightAssistVisible)
             }
             .ignoresSafeArea()
-            .animation(ShutterMotion.chrome, value: statusToast)
-            .animation(ShutterMotion.chrome, value: nightAssistVisible)
+            // NEVER attach .animation to this ZStack — it owns Metal preview + shutter.
+            // Toast/night chrome animate inside FinderStatusOverlays only.
             .onReceive(LiveExposureBus.shared.$iso) { _ in evaluateNightAssist() }
             .onReceive(LiveExposureBus.shared.$shutterLabel) { _ in evaluateNightAssist() }
             .onChange(of: camera.isManualExposure) { _, manual in
@@ -3077,16 +3085,9 @@ private struct ShutterButtonChrome: View {
                 )
                 .frame(width: outer, height: outer)
                 .overlay {
+                    // Solid matte fill — no stitchable Metal (picker insert crash).
                     Circle()
-                        .fill(Color(red: 0.26, green: 0.27, blue: 0.29))
-                        .colorEffect(
-                            ShaderLibrary.metallicSurface(
-                                .float2(Float(outer), Float(outer)),
-                                .float(0.75),
-                                .float2(0.28, 0.22)
-                            )
-                        )
-                        .clipShape(Circle())
+                        .fill(Color(red: 0.26, green: 0.27, blue: 0.29).opacity(0.55))
                         .allowsHitTesting(false)
                 }
                 .overlay {
@@ -3135,16 +3136,19 @@ private struct ShutterButtonChrome: View {
 
             ZStack {
                 Circle()
-                    .fill(Color(red: 0.24, green: 0.25, blue: 0.27))
-                    .frame(width: face, height: face)
-                    .colorEffect(
-                        ShaderLibrary.metallicSurface(
-                            .float2(Float(face), Float(face)),
-                            .float(0.70),
-                            .float2(0.32, 0.28)
+                    .fill(
+                        RadialGradient(
+                            colors: [
+                                Color(red: 0.32, green: 0.33, blue: 0.35),
+                                Color(red: 0.22, green: 0.23, blue: 0.25),
+                                Color(red: 0.18, green: 0.19, blue: 0.21)
+                            ],
+                            center: UnitPoint(x: 0.38, y: 0.32),
+                            startRadius: 0,
+                            endRadius: face * 0.72
                         )
                     )
-                    .clipShape(Circle())
+                    .frame(width: face, height: face)
 
                 // Soft sheen only — no plusLighter chrome hotspot (reads blue on press)
                 Circle()
@@ -3262,9 +3266,11 @@ private struct ShutterButtonChrome: View {
                 }
             }
         }
-        // Larger hit target without growing Metal layers.
+        // Larger hit target. Kill inherited animations — any animation walking
+        // this chrome used to MetadataCache-crash when film/FX menus opened.
         .frame(width: outer + hitPad, height: outer + hitPad)
         .contentShape(Circle())
+        .transaction { $0.animation = nil }
     }
 }
 

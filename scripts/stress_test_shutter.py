@@ -534,6 +534,13 @@ def test_source_guards() -> None:
     check("shutter no press brightness", "No brightness shift" in content)
     check("shutter matte collar", "matte steel, not chrome" in content)
     check("metal shader no cool blue", "Neutral steel cast" in (ROOT / "Shaders.metal").read_text())
+    # Build 55 — hard film crash fix
+    check("no vulcanite Metal on camera", "LeicaVulcaniteTexture(scale: 20" not in content)
+    check("no metallicSurface on shutter", "ShaderLibrary.metallicSurface" not in content)
+    check("picker overlays not ZStack siblings", "overlay(alignment: .topTrailing)" in (ROOT / "ViewfinderOverlay.swift").read_text())
+    check("picker animation hard kill", ".transaction { $0.animation = nil }" in (ROOT / "ViewfinderOverlay.swift").read_text())
+    check("toggleMenu film", "toggleMenu(.film)" in (ROOT / "ViewfinderOverlay.swift").read_text())
+
     check("info bar L overlay hit", 'Text("L")' in content and "frame(width: 44, height: 36)" in content)
 
 
@@ -616,11 +623,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 54", m is not None and int(ver) >= 54, ver)
+    check("Info.plist build >= 55", m is not None and int(ver) >= 55, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 54+", any(v >= 54 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 55+", any(v >= 55 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

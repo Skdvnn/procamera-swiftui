@@ -102,14 +102,15 @@ struct ViewfinderOverlay: View {
     var onApplyShootMode: ((ShootMode) -> Void)? = nil
     /// Called when user picks a FILM stock directly (not via SCENE) — clears SCENE highlight.
     var onFilmApplied: (() -> Void)? = nil
-    @ObservedObject var lookStore: LookRecipeStore = .shared
+    @ObservedObject private var lookStore = LookRecipeStore.shared
     @State private var showFilmMenu = false
     @State private var showFXMenu = false
     @State private var showRecipeMenu = false
 
     var body: some View {
-        // ZStack (not a hit-blocking Color.clear root): empty space passes
-        // taps to the shutter dock underneath (this view sits at zIndex 40).
+        // Empty space passes taps to shutter. Pickers are overlays with
+        // animation hard-killed — ZStack inserts next to Metal stitchables
+        // were EXC_BAD_ACCESS / MetadataCache crashes on device.
         ZStack(alignment: .topTrailing) {
             GeometryReader { geo in
                 ZStack {
@@ -136,9 +137,7 @@ struct ViewfinderOverlay: View {
                 HStack(alignment: .top) {
                     VStack(spacing: 8) {
                         chromeButton {
-                            showFilmMenu = false
-                            showFXMenu = false
-                            showRecipeMenu = false
+                            closeAllMenus()
                             aspectRatio = aspectRatio.next
                         } label: {
                             Text(aspectRatio.label)
@@ -153,7 +152,6 @@ struct ViewfinderOverlay: View {
                                 .font(.system(size: 12, weight: .medium))
                                 .foregroundColor(.white.opacity(0.85))
                         }
-
                     }
                     .padding(16)
 
@@ -161,13 +159,7 @@ struct ViewfinderOverlay: View {
 
                     VStack(spacing: 8) {
                         chromeButton {
-                            var t = Transaction()
-                            t.disablesAnimations = true
-                            withTransaction(t) {
-                                showFXMenu = false
-                                showRecipeMenu = false
-                                showFilmMenu.toggle()
-                            }
+                            toggleMenu(.film)
                         } label: {
                             Image(systemName: "film")
                                 .font(.system(size: 13, weight: .medium))
@@ -177,13 +169,7 @@ struct ViewfinderOverlay: View {
                         }
 
                         chromeButton {
-                            var t = Transaction()
-                            t.disablesAnimations = true
-                            withTransaction(t) {
-                                showFilmMenu = false
-                                showRecipeMenu = false
-                                showFXMenu.toggle()
-                            }
+                            toggleMenu(.fx)
                         } label: {
                             Image(systemName: "water.waves")
                                 .font(.system(size: 13, weight: .medium))
@@ -195,13 +181,7 @@ struct ViewfinderOverlay: View {
                         }
 
                         chromeButton {
-                            var t = Transaction()
-                            t.disablesAnimations = true
-                            withTransaction(t) {
-                                showFilmMenu = false
-                                showFXMenu = false
-                                showRecipeMenu.toggle()
-                            }
+                            toggleMenu(.looks)
                         } label: {
                             Image(systemName: "bookmark.fill")
                                 .font(.system(size: 12, weight: .medium))
@@ -214,56 +194,96 @@ struct ViewfinderOverlay: View {
                 }
                 Spacer().allowsHitTesting(false)
             }
-
+        }
+        .overlay {
             if showFilmMenu || showFXMenu || showRecipeMenu {
                 Color.clear
                     .contentShape(Rectangle())
-                    .onTapGesture {
-                        var t = Transaction()
-                        t.disablesAnimations = true
-                        withTransaction(t) {
-                            showFilmMenu = false
-                            showFXMenu = false
-                            showRecipeMenu = false
-                        }
-                    }
-                    // Behind the chrome button columns so film/FX buttons still work.
-                    .zIndex(-1)
+                    .onTapGesture { closeAllMenus() }
             }
-
-            if showFilmMenu {
-                LeicaFilmPicker(
-                    selectedFilter: $filmFilter,
-                    isPresented: $showFilmMenu,
-                    shootMode: shootMode,
-                    onApplyShootMode: onApplyShootMode,
-                    onSaveLook: { onSaveLook?() },
-                    onFilmApplied: onFilmApplied
-                )
-                                .padding(.trailing, compactChrome ? 10 : 16)
-                .padding(.top, compactChrome ? 48 : 100)
+        }
+        .overlay(alignment: .topTrailing) {
+            Group {
+                if showFilmMenu {
+                    LeicaFilmPicker(
+                        selectedFilter: $filmFilter,
+                        isPresented: $showFilmMenu,
+                        shootMode: shootMode,
+                        onApplyShootMode: onApplyShootMode,
+                        onSaveLook: { onSaveLook?() },
+                        onFilmApplied: onFilmApplied
+                    )
+                    .padding(.trailing, compactChrome ? 10 : 16)
+                    .padding(.top, compactChrome ? 48 : 100)
+                }
             }
-
-            if showFXMenu {
-                LensFXPicker(
-                    selectedFX: $lensFX,
-                    focusPeaking: $focusPeaking,
-                    isPresented: $showFXMenu
-                )
-                                .padding(.trailing, compactChrome ? 10 : 16)
-                .padding(.top, compactChrome ? 72 : 140)
+            .transaction { $0.animation = nil }
+        }
+        .overlay(alignment: .topTrailing) {
+            Group {
+                if showFXMenu {
+                    LensFXPicker(
+                        selectedFX: $lensFX,
+                        focusPeaking: $focusPeaking,
+                        isPresented: $showFXMenu
+                    )
+                    .padding(.trailing, compactChrome ? 10 : 16)
+                    .padding(.top, compactChrome ? 72 : 140)
+                }
             }
+            .transaction { $0.animation = nil }
+        }
+        .overlay(alignment: .topTrailing) {
+            Group {
+                if showRecipeMenu {
+                    LookRecipePicker(
+                        store: lookStore,
+                        filmFilter: $filmFilter,
+                        lensFX: $lensFX,
+                        isPresented: $showRecipeMenu,
+                        onSaveCurrent: { onSaveLook?() }
+                    )
+                    .padding(.trailing, compactChrome ? 10 : 16)
+                    .padding(.top, compactChrome ? 96 : 180)
+                }
+            }
+            .transaction { $0.animation = nil }
+        }
+        .transaction { $0.animation = nil }
+    }
 
-            if showRecipeMenu {
-                LookRecipePicker(
-                    store: lookStore,
-                    filmFilter: $filmFilter,
-                    lensFX: $lensFX,
-                    isPresented: $showRecipeMenu,
-                    onSaveCurrent: { onSaveLook?() }
-                )
-                                .padding(.trailing, compactChrome ? 10 : 16)
-                .padding(.top, compactChrome ? 96 : 180)
+    private enum ChromeMenu { case film, fx, looks }
+
+    private func closeAllMenus() {
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            showFilmMenu = false
+            showFXMenu = false
+            showRecipeMenu = false
+        }
+    }
+
+    private func toggleMenu(_ menu: ChromeMenu) {
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            switch menu {
+            case .film:
+                let open = !showFilmMenu
+                showFXMenu = false
+                showRecipeMenu = false
+                showFilmMenu = open
+            case .fx:
+                let open = !showFXMenu
+                showFilmMenu = false
+                showRecipeMenu = false
+                showFXMenu = open
+            case .looks:
+                let open = !showRecipeMenu
+                showFilmMenu = false
+                showFXMenu = false
+                showRecipeMenu = open
             }
         }
     }
