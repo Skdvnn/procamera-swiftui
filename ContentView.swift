@@ -288,8 +288,6 @@ struct ContentView: View {
     @State private var aspectRatio: AspectRatioMode = .full
     @State private var filmFilter: FilmFilterMode = .none
     @State private var lensFX: LensFXMode = .none
-    /// Film / FX / looks — presented OUT of the Metal viewfinder tree.
-    @State private var chromePicker: ChromePickerMenu? = nil
     @State private var finderIsLandscape = false
     @State private var captureFormat: CaptureFormat = .heic
     @State private var topCollapsed = false
@@ -354,6 +352,7 @@ struct ContentView: View {
         .id(colorScheme)  // Force redraw on color scheme change
         .onAppear(perform: handleAppear)
         .onDisappear {
+            ChromePickerGate.dismiss()
             volumeShutter.stop()
             ShutterDeepLinkCenter.endReceiving()
             cancelTimerCountdown()
@@ -428,46 +427,35 @@ struct ContentView: View {
                 }
             )
         }
-        // HARD isolation: pickers live in a separate presentation host.
-        // In-tree overlays next to MTKView still MetadataCache-crashed on device.
-        .fullScreenCover(item: $chromePicker) { menu in
-            ChromePickerCover(
-                menu: menu,
-                filmFilter: $filmFilter,
-                lensFX: $lensFX,
-                focusPeaking: $focusPeaking,
-                shootMode: ShootMode(rawValue: shootModeRaw),
-                onApplyShootMode: { applyShootMode($0) },
-                onSaveLook: {
-                    LookRecipeStore.shared.saveCurrent(film: filmFilter, lensFX: lensFX)
-                    Haptics.medium()
-                },
-                onFilmApplied: { shootModeRaw = "auto" },
-                compactChrome: finderIsLandscape,
-                onDismiss: {
-                    var t = Transaction()
-                    t.disablesAnimations = true
-                    withTransaction(t) { chromePicker = nil }
-                }
-            )
-            .presentationBackground(.clear)
-            .transaction { $0.animation = nil }
-        }
         .onChange(of: bottomCollapsed) { _, _ in
-            if chromePicker != nil {
-                var t = Transaction()
-                t.disablesAnimations = true
-                withTransaction(t) { chromePicker = nil }
-            }
+            // Collapse/expand must not leave a UIKit picker orphaned over the finder.
+            ChromePickerGate.dismiss()
+        }
+        .onChange(of: showPhotoBook) { _, open in
+            if open { ChromePickerGate.dismiss() }
+        }
+        .onChange(of: showSettings) { _, open in
+            if open { ChromePickerGate.dismiss() }
         }
     }
 
+    /// UIKit overFullScreen — does NOT flip ContentView @State, so the Metal
+    /// finder tree is not AttributeGraph-invalidated on open (device crash fix).
     private func toggleChromePicker(_ menu: ChromePickerMenu) {
-        var t = Transaction()
-        t.disablesAnimations = true
-        withTransaction(t) {
-            chromePicker = (chromePicker == menu) ? nil : menu
-        }
+        ChromePickerGate.toggle(
+            menu,
+            filmFilter: $filmFilter,
+            lensFX: $lensFX,
+            focusPeaking: $focusPeaking,
+            shootMode: ShootMode(rawValue: shootModeRaw),
+            onApplyShootMode: { applyShootMode($0) },
+            onSaveLook: {
+                LookRecipeStore.shared.saveCurrent(film: filmFilter, lensFX: lensFX)
+                Haptics.medium()
+            },
+            onFilmApplied: { shootModeRaw = "auto" },
+            compactChrome: finderIsLandscape
+        )
     }
 
     /// Split out of `body` so the Swift type-checker can finish (CI archive).
@@ -635,7 +623,6 @@ struct ContentView: View {
                             filmFilter: $filmFilter,
                             lensFX: $lensFX,
                             focusPeaking: $focusPeaking,
-                            activePicker: chromePicker,
                             compactChrome: isLandscape,
                             onFlipCamera: {
                                 Haptics.click()

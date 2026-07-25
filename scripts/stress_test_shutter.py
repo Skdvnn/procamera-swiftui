@@ -535,11 +535,6 @@ def test_source_guards() -> None:
     # Build 55 — hard film crash fix
     check("no vulcanite Metal on camera", "LeicaVulcaniteTexture(scale: 20" not in content)
     check("no metallicSurface on shutter", "ShaderLibrary.metallicSurface" not in content)
-    check("pickers out of Metal tree", "fullScreenCover(item: $chromePicker)" in content)
-    check("ChromePickerCover host", "struct ChromePickerCover" in (ROOT / "ViewfinderOverlay.swift").read_text())
-    check("overlay chrome no local pickers", "LeicaFilmPicker(" not in (ROOT / "ViewfinderOverlay.swift").read_text().split("struct ChromePickerCover")[0])
-    check("onTogglePicker film", "onTogglePicker?(.film)" in (ROOT / "ViewfinderOverlay.swift").read_text())
-
     check("info bar L overlay hit", 'Text("L")' in content and "frame(width: 44, height: 36)" in content)
 
     # Build 56 — black finder freeze + tight ModeControl
@@ -551,8 +546,6 @@ def test_source_guards() -> None:
     check("preview restore on draw fail", "noteDrawFailure" in preview)
     check("preview scheduleMetalDraw fallback", "restoreCleanPreview()" in preview and "scheduleMetalDraw" in preview)
     check("live preview fail streak", "livePreviewFailStreak" in cam)
-    check("close chrome picker on collapse", "chromePicker = nil" in content and "onChange(of: bottomCollapsed)" in content)
-    check("presentationBackground clear", "presentationBackground(.clear)" in content)
     check("polish flash wing 88", ".frame(width: 88)" in content and "ModeControl(icon: \"gearshape\"" in content)
     check("tight mode wing 112", ".frame(width: 112, height: 48, alignment: .trailing)" in content)
     check("ModeControl column 26", ".frame(width: 26, height: 48)" in content)
@@ -571,9 +564,22 @@ def test_source_guards() -> None:
     check("CloudBooks no vulcanite Metal", "LeicaVulcaniteTexture" not in (ROOT / "CloudBooks.swift").read_text())
     check("didFinish clears pending RAW", "pendingRawData = nil" in cam[cam.find("didFinishCaptureFor"):cam.find("didFinishCaptureFor")+800])
 
-    # Build 58 — pickers fully out of Metal viewfinder tree
-    check("ChromePickerMenu enum", "enum ChromePickerMenu" in (ROOT / "ViewfinderOverlay.swift").read_text())
-    check("toggleChromePicker helper", "func toggleChromePicker" in content)
+    # Build 58/59 — pickers NEVER in Metal tree; UIKit gate (no ContentView @State)
+    chrome_pre = vf.split("struct ChromePickerCover")[0]
+    check("ChromePickerMenu enum", "enum ChromePickerMenu" in vf)
+    check("ChromePickerGate UIKit", "enum ChromePickerGate" in vf and "UIHostingController" in vf)
+    check("overFullScreen presentation", "modalPresentationStyle = .overFullScreen" in vf)
+    check("ChromePickerCover host", "struct ChromePickerCover" in vf)
+    check("overlay chrome no local pickers", "LeicaFilmPicker(" not in chrome_pre)
+    check("overlay chrome no FX picker", "LensFXPicker(" not in chrome_pre)
+    check("overlay chrome no looks picker", "LookRecipePicker(" not in chrome_pre)
+    check("no ContentView chromePicker state", "chromePicker" not in content)
+    check("no fullScreenCover chromePicker", "fullScreenCover(item: $chromePicker)" not in content)
+    check("toggle uses ChromePickerGate", "ChromePickerGate.toggle(" in content)
+    check("dismiss on collapse", "ChromePickerGate.dismiss()" in content and "onChange(of: bottomCollapsed)" in content)
+    check("onTogglePicker film", "onTogglePicker?(.film)" in vf)
+    check("no LookRecipeStore observe on chrome", "@ObservedObject private var lookStore" not in chrome_pre)
+    check("no activePicker on overlay", "activePicker" not in chrome_pre)
 
 
 
@@ -655,11 +661,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 58", m is not None and int(ver) >= 58, ver)
+    check("Info.plist build >= 59", m is not None and int(ver) >= 59, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 58+", any(v >= 58 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 59+", any(v >= 59 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

@@ -85,11 +85,105 @@ private struct SeededGenerator: RandomNumberGenerator {
     }
 }
 
-/// Film / FX / looks menus — owned by ContentView and presented in a
-/// separate fullScreenCover so they never insert into the Metal viewfinder tree.
+/// Film / FX / looks menus.
 enum ChromePickerMenu: String, Identifiable, CaseIterable {
     case film, fx, looks
     var id: String { rawValue }
+}
+
+/// UIKit presentation gate — opening a picker MUST NOT mutate ContentView
+/// `@State`. SwiftUI `fullScreenCover` still re-evaluated the Metal finder
+/// tree (builds 54–58 MetadataCache / EXC_BAD_ACCESS on device).
+@MainActor
+enum ChromePickerGate {
+    private static weak var host: UIViewController?
+    private static var currentMenu: ChromePickerMenu?
+
+    static var isPresented: Bool { host != nil }
+
+    static func dismiss() {
+        let hc = host
+        host = nil
+        currentMenu = nil
+        hc?.dismiss(animated: false)
+    }
+
+    static func toggle(
+        _ menu: ChromePickerMenu,
+        filmFilter: Binding<FilmFilterMode>,
+        lensFX: Binding<LensFXMode>,
+        focusPeaking: Binding<Bool>,
+        shootMode: ShootMode?,
+        onApplyShootMode: ((ShootMode) -> Void)?,
+        onSaveLook: (() -> Void)?,
+        onFilmApplied: (() -> Void)?,
+        compactChrome: Bool
+    ) {
+        if currentMenu == menu, host != nil {
+            dismiss()
+            return
+        }
+        if host != nil { dismiss() }
+        present(
+            menu,
+            filmFilter: filmFilter,
+            lensFX: lensFX,
+            focusPeaking: focusPeaking,
+            shootMode: shootMode,
+            onApplyShootMode: onApplyShootMode,
+            onSaveLook: onSaveLook,
+            onFilmApplied: onFilmApplied,
+            compactChrome: compactChrome
+        )
+    }
+
+    private static func present(
+        _ menu: ChromePickerMenu,
+        filmFilter: Binding<FilmFilterMode>,
+        lensFX: Binding<LensFXMode>,
+        focusPeaking: Binding<Bool>,
+        shootMode: ShootMode?,
+        onApplyShootMode: ((ShootMode) -> Void)?,
+        onSaveLook: (() -> Void)?,
+        onFilmApplied: (() -> Void)?,
+        compactChrome: Bool
+    ) {
+        guard let presenter = topPresenter() else { return }
+        let cover = ChromePickerCover(
+            menu: menu,
+            filmFilter: filmFilter,
+            lensFX: lensFX,
+            focusPeaking: focusPeaking,
+            shootMode: shootMode,
+            onApplyShootMode: onApplyShootMode,
+            onSaveLook: onSaveLook,
+            onFilmApplied: onFilmApplied,
+            compactChrome: compactChrome,
+            onDismiss: { dismiss() }
+        )
+        let hc = UIHostingController(rootView: cover)
+        hc.modalPresentationStyle = .overFullScreen
+        hc.modalTransitionStyle = .crossDissolve
+        hc.view.backgroundColor = .clear
+        hc.view.isOpaque = false
+        host = hc
+        currentMenu = menu
+        presenter.present(hc, animated: false)
+    }
+
+    private static func topPresenter() -> UIViewController? {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let active = scenes.first(where: { $0.activationState == .foregroundActive })
+        let window = active?.windows.first(where: \.isKeyWindow)
+            ?? scenes.flatMap(\.windows).first(where: \.isKeyWindow)
+        var top = window?.rootViewController
+        while let presented = top?.presentedViewController {
+            // Don't climb through our own host if somehow nested.
+            if presented === host { break }
+            top = presented
+        }
+        return top
+    }
 }
 
 // MARK: - Viewfinder Overlay (matches Figma design)
@@ -99,19 +193,17 @@ struct ViewfinderOverlay: View {
     @Binding var filmFilter: FilmFilterMode
     @Binding var lensFX: LensFXMode
     @Binding var focusPeaking: Bool
-    /// Which chrome picker ContentView currently has open (highlight only).
-    var activePicker: ChromePickerMenu? = nil
     /// Landscape: tuck chrome padding.
     var compactChrome: Bool = false
     var onFlipCamera: (() -> Void)? = nil
-    /// Tap film / FX / looks — ContentView presents the picker out-of-tree.
+    /// Tap film / FX / looks — ContentView presents via UIKit (no @State flip).
     var onTogglePicker: ((ChromePickerMenu) -> Void)? = nil
-    @ObservedObject private var lookStore = LookRecipeStore.shared
 
     var body: some View {
-        // Chrome ONLY — pickers are presented by ContentView via fullScreenCover.
-        // Inserting LeicaFilmPicker here next to FilteredCameraPreview / MTKView
-        // MetadataCache-crashed on device even with animation killed (builds 54–57).
+        // Chrome ONLY — pickers are UIKit-presented (ChromePickerGate).
+        // Never insert picker views next to FilteredCameraPreview / MTKView.
+        // Never @ObservedObject LookRecipeStore here — that invalidated the
+        // Metal-adjacent tree when recipes changed.
         ZStack(alignment: .topTrailing) {
             GeometryReader { geo in
                 ZStack {
@@ -163,7 +255,7 @@ struct ViewfinderOverlay: View {
                         } label: {
                             Image(systemName: "film")
                                 .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(activePicker == .film || filmFilter != .none
+                                .foregroundColor(filmFilter != .none
                                                  ? Color(red: 1.0, green: 0.85, blue: 0.35)
                                                  : .white.opacity(0.8))
                         }
@@ -173,8 +265,8 @@ struct ViewfinderOverlay: View {
                         } label: {
                             Image(systemName: "water.waves")
                                 .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(activePicker == .fx || lensFX != .none || focusPeaking
-                                                 ? (focusPeaking && lensFX == .none && activePicker != .fx
+                                .foregroundColor(lensFX != .none || focusPeaking
+                                                 ? (focusPeaking && lensFX == .none
                                                     ? Color(red: 0.35, green: 0.95, blue: 0.45)
                                                     : Color(red: 0.55, green: 0.88, blue: 0.95))
                                                  : .white.opacity(0.8))
@@ -185,7 +277,8 @@ struct ViewfinderOverlay: View {
                         } label: {
                             Image(systemName: "bookmark.fill")
                                 .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(activePicker == .looks || !lookStore.recipes.isEmpty
+                                // Non-observing read — avoid LookRecipeStore invalidating Metal tree.
+                                .foregroundColor(!LookRecipeStore.shared.recipes.isEmpty
                                                  ? Color(red: 1.0, green: 0.75, blue: 0.45)
                                                  : .white.opacity(0.8))
                         }
@@ -982,8 +1075,8 @@ struct LookRecipePicker: View {
     }
 }
 
-// MARK: - Out-of-tree chrome picker host (fullScreenCover)
-/// Presented from ContentView — NEVER as a sibling of FilteredCameraPreview.
+// MARK: - Out-of-tree chrome picker host (UIKit overFullScreen)
+/// Presented by ChromePickerGate — NEVER as a sibling of FilteredCameraPreview.
 struct ChromePickerCover: View {
     let menu: ChromePickerMenu
     @Binding var filmFilter: FilmFilterMode
