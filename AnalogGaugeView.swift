@@ -124,17 +124,33 @@ struct FocusDial: View {
 
 // MARK: - Shutter Speed Dial (premium Leica/Nikon style)
 struct ShutterSpeedDial: View {
-    @Binding var value: Int  // Index into shutter speeds array
+    /// Binding is the **CameraManager / ContentView shutterSpeedIndex** (0=4″ … 14=1/4000).
+    @Binding var value: Int
     let onChanged: (Int) -> Void
 
-    // Shutter speeds: 1/4000 to 1/15 (index 0-7)
-    private let speeds = ["4k", "2k", "1k", "500", "250", "125", "60", "30"]
+    // Dial ticks (fast → slow) mapped onto the 15-stop capture table.
+    private let dialLabels = ["4k", "2k", "1k", "500", "250", "125", "60", "30"]
+    private let cameraIndices = [14, 13, 12, 11, 10, 9, 8, 7]
     private let marks: [(String, Float)] = [
-        ("4k", 0.0), ("2k", 0.143), ("1k", 0.286), ("500", 0.429), ("250", 0.571), ("125", 0.714), ("60", 0.857), ("30", 1.0)
+        ("4k", 0.0), ("2k", 0.143), ("1k", 0.286), ("500", 0.429),
+        ("250", 0.571), ("125", 0.714), ("60", 0.857), ("30", 1.0)
     ]
 
+    private var dialPosition: Int {
+        var best = 0
+        var bestDist = Int.max
+        for (i, camIdx) in cameraIndices.enumerated() {
+            let d = abs(camIdx - value)
+            if d < bestDist {
+                bestDist = d
+                best = i
+            }
+        }
+        return best
+    }
+
     private var normalizedValue: Float {
-        return Float(value) / Float(speeds.count - 1)
+        Float(dialPosition) / Float(max(dialLabels.count - 1, 1))
     }
 
     var body: some View {
@@ -219,12 +235,12 @@ struct ShutterSpeedDial: View {
                         if angle < 0 { angle += 360 }
                         if angle > 300 { angle = angle > 330 ? 0 : 300 }
                         let normalized = Float(min(max(angle / 300, 0), 1))
-                        // Find closest shutter speed index
-                        let newIndex = Int(round(normalized * Float(speeds.count - 1)))
-                        let clampedIndex = max(0, min(speeds.count - 1, newIndex))
-                        if clampedIndex != value {
-                            value = clampedIndex
-                            onChanged(clampedIndex)
+                        let dialIdx = Int(round(normalized * Float(dialLabels.count - 1)))
+                        let clampedDial = max(0, min(dialLabels.count - 1, dialIdx))
+                        let camIdx = cameraIndices[clampedDial]
+                        if camIdx != value {
+                            value = camIdx
+                            onChanged(camIdx)
                             Haptics.light()
                         }
                     }

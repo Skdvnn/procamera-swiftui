@@ -263,7 +263,7 @@ def test_source_guards() -> None:
         "collapsed dock swipe + shutter z-order",
         "collapsedBottomOverlay" in content
         and ".simultaneousGesture(bottomDeckSwipe)" in content
-        and "Above histogram so shutter" in content,
+        and "Above histogram + viewfinder chrome" in content,
     )
     check("comic fallback", "func applyToon" in (ROOT / "LensFXEngine.swift").read_text())
     check("film grain bake", "func applyFilmGrain" in cam)
@@ -276,6 +276,19 @@ def test_source_guards() -> None:
     check("cached grain texture", "enum CachedGrainTexture" in (ROOT / "ViewfinderOverlay.swift").read_text())
     check("no Street chip overlay", "cycleShootMode" not in content)
     check("scenes in film dock", "sectionLabel(\"SCENE\")" in (ROOT / "ViewfinderOverlay.swift").read_text())
+    check("shutter dial maps camera indices", "cameraIndices = [14, 13, 12, 11, 10, 9, 8, 7]" in (ROOT / "AnalogGaugeView.swift").read_text())
+    check("dial calls setShutterSpeed", "onShutterSpeedChanged" in content and "camera.setShutterSpeed(index: idx)" in content)
+    import re as _re_film
+    _film_branch = _re_film.search(
+        r"case \.film:(.*?)syncCaptureContextToSystem", content, _re_film.S
+    )
+    check(
+        "film scene keeps manual exposure",
+        _film_branch is not None and "camera.returnToAuto()" not in _film_branch.group(1),
+    )
+    check("shortcut not double-posted at launch", "Cold-start shortcuts are handled in FingerTipSceneDelegate only" in (ROOT / "ProCameraApp.swift").read_text())
+    check("capture serialized", "if photoCompletionHandler != nil" in cam)
+    check("look deep link clears FX", "lensFX = .none" in content and "Always apply both" in content)
 
 
 # ── Landscape layout invariants ─────────────────────────────────────────────

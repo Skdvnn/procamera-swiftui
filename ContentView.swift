@@ -225,13 +225,6 @@ struct ContentView: View {
     @State private var showPhotoBook = false
     @State private var showingCleanCompare = false
 
-    private var shootModeBinding: Binding<ShootMode> {
-        Binding(
-            get: { ShootMode(rawValue: shootModeRaw) ?? .street },
-            set: { shootModeRaw = $0.rawValue }
-        )
-    }
-
     private var defaultFilmBinding: Binding<FilmFilterMode> {
         Binding(
             get: { FilmFilterMode(rawValue: defaultFilmRaw) ?? .none },
@@ -276,9 +269,10 @@ struct ContentView: View {
             let safeTop = geo.safeAreaInsets.top
             let safeBottom = geo.safeAreaInsets.bottom
             let isLandscape = geo.size.width > geo.size.height
-            // Landscape: keep chrome compact so the finder stays the frame.
+            // Landscape: keep the top dial compact. Bottom deck can expand —
+            // trapping it collapsed made swipe-up feel broken.
             let effectiveTopCollapsed = topCollapsed || isLandscape
-            let effectiveBottomCollapsed = bottomCollapsed || isLandscape
+            let effectiveBottomCollapsed = bottomCollapsed
 
             // Layout measurements — top collapse keeps FOCUS/EV strip as the hero
             let topPanelHeight: CGFloat = effectiveTopCollapsed ? (isLandscape ? 44 : 52) : 110
@@ -309,12 +303,9 @@ struct ContentView: View {
                             camera.setExposure(val)
                         },
                         onShutterSpeedChanged: { idx in
-                            // Adjust exposure based on shutter speed change
-                            // Higher index = faster shutter = less light = darker
-                            let baseIndex = 4  // 1/250 as neutral
-                            let evAdjust = Float(idx - baseIndex) * 0.5
-                            exposureValue = max(-2, min(2, evAdjust))
-                            camera.setExposure(exposureValue)
+                            // idx is the real 15-stop table index (dial maps 4k…30 → 14…7).
+                            shutterSpeedIndex = idx
+                            camera.setShutterSpeed(index: idx)
                         },
                         onTimerTap: {
                             Haptics.click()
@@ -392,11 +383,12 @@ struct ContentView: View {
                                         removal: .opacity.combined(with: .offset(y: 16))
                                     )
                                 )
-                                // Above histogram so shutter / deck win taps + swipes.
-                                .zIndex(3)
+                                // Above histogram + viewfinder chrome so shutter wins taps.
+                                .zIndex(10)
                         }
 
-                        // Film / Lens FX / aspect ALWAYS above fade + histogram so they stay tappable
+                        // Chrome above histogram, BELOW shutter dock — corner
+                        // buttons stay tappable; empty space can't cover shutter.
                         ViewfinderOverlay(
                             showGrid: showGrid,
                             aspectRatio: $aspectRatio,
@@ -416,7 +408,7 @@ struct ContentView: View {
                             onApplyShootMode: { applyShootMode($0) }
                         )
                         .padding(.horizontal, effectiveBottomCollapsed ? 6 : DS.pageMargin)
-                        .zIndex(40)
+                        .zIndex(5)
 
                         if showLevel {
                             HorizonLevelIndicator()
@@ -583,7 +575,6 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showSettings) {
             ShutterSettingsSheet(
-                shootMode: shootModeBinding,
                 showGrid: $showGrid,
                 focusPeaking: $focusPeaking,
                 zebraEnabled: $zebraEnabled,
@@ -591,7 +582,6 @@ struct ContentView: View {
                 captureFormat: $captureFormat,
                 defaultFilm: defaultFilmBinding,
                 naturalCapture: $naturalCapture,
-                onApplyMode: { applyShootMode($0) },
                 onDismiss: {
                     captureFormatRaw = captureFormat.rawValue
                     showSettings = false
@@ -646,8 +636,6 @@ struct ContentView: View {
             isoValue = 400
             camera.setShutterSpeed(index: 10)
             camera.setISO(400)
-            // Keep the fast shutter/ISO — do NOT immediately returnToAuto()
-            // (that wiped the Street preset and made the chip feel dead).
             isLocked = false
             camera.setAEAFLocked(false)
         case .night:
@@ -658,6 +646,9 @@ struct ContentView: View {
             isoValue = 1600
             camera.setShutterSpeed(index: 2)
             camera.setISO(1600)
+            // Always clear Studio lock when entering Night.
+            isLocked = false
+            camera.setAEAFLocked(false)
         case .studio:
             showGrid = true
             focusPeaking = true
@@ -677,10 +668,11 @@ struct ContentView: View {
             lensFX = .none
             shutterSpeedIndex = 8 // 1/60
             isoValue = 400
+            // Keep 1/60 + ISO 400 — do not call return-to-auto (it wiped the preset).
             camera.setShutterSpeed(index: 8)
             camera.setISO(400)
-            camera.returnToAuto()
             isLocked = false
+            camera.setAEAFLocked(false)
         }
         syncCaptureContextToSystem()
         Haptics.medium()
@@ -698,6 +690,9 @@ struct ContentView: View {
         isLocked = false
         isManualFocusEnabled = false
         exposureValue = 0
+        // Neutral readouts so the glass bar doesn't keep stale manual numbers.
+        shutterSpeedIndex = 9 // 1/125
+        isoValue = 400
         camera.returnToAuto()
     }
 
@@ -714,17 +709,22 @@ struct ContentView: View {
             showPhotoBook = true
         case .look(let filmName, let fxName):
             showPhotoBook = false
+            // Always apply both — film-only widgets used to leave a stale FX on.
             if let filmName,
                let film = FilmFilterMode.allCases.first(where: {
                    $0.name.compare(filmName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
                }) {
                 filmFilter = film
+            } else if filmName == nil {
+                // keep current film
             }
             if let fxName,
                let fx = LensFXMode.allCases.first(where: {
                    $0.name.compare(fxName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
                }) {
                 lensFX = fx
+            } else {
+                lensFX = .none
             }
         case .timer(let seconds):
             timerSeconds = [0, 3, 10].contains(seconds) ? seconds : 3
@@ -1216,6 +1216,7 @@ struct ContentView: View {
                 Spacer()
 
                 FormatTogglePill(format: $captureFormat) { newFormat in
+                    captureFormatRaw = newFormat.rawValue
                     switch newFormat {
                     case .heic: camera.captureFormat = .heic
                     case .jpeg: camera.captureFormat = .jpeg

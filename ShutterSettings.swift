@@ -39,7 +39,6 @@ enum ShootMode: String, CaseIterable, Identifiable {
 // MARK: - Settings sheet
 
 struct ShutterSettingsSheet: View {
-    @Binding var shootMode: ShootMode
     @Binding var showGrid: Bool
     @Binding var focusPeaking: Bool
     @Binding var zebraEnabled: Bool
@@ -47,46 +46,12 @@ struct ShutterSettingsSheet: View {
     @Binding var captureFormat: CaptureFormat
     @Binding var defaultFilm: FilmFilterMode
     @Binding var naturalCapture: Bool
-    var onApplyMode: (ShootMode) -> Void
     var onDismiss: () -> Void
 
     var body: some View {
         NavigationStack {
             List {
-                Section {
-                    ForEach(ShootMode.allCases) { mode in
-                        Button {
-                            Haptics.click()
-                            shootMode = mode
-                            onApplyMode(mode)
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: mode.icon)
-                                    .frame(width: 22)
-                                    .foregroundStyle(shootMode == mode
-                                                     ? Color(red: 1.0, green: 0.85, blue: 0.35)
-                                                     : .primary)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(mode.title)
-                                        .font(.system(size: 15, weight: .semibold))
-                                        .foregroundStyle(.primary)
-                                    Text(mode.blurb)
-                                        .font(.system(size: 11, design: .monospaced))
-                                        .foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                if shootMode == mode {
-                                    Image(systemName: "checkmark")
-                                        .foregroundStyle(Color(red: 1.0, green: 0.85, blue: 0.35))
-                                }
-                            }
-                        }
-                    }
-                } header: {
-                    Text("Shoot mode")
-                } footer: {
-                    Text("Presets tweak shutter, ISO, peaking, and grid — not fake aperture modes.")
-                }
+                // Scene presets: viewfinder film button → SCENE section.
 
                 Section {
                     Toggle("Natural capture", isOn: $naturalCapture)

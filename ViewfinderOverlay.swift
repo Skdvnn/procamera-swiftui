@@ -105,127 +105,124 @@ struct ViewfinderOverlay: View {
     @State private var showRecipeMenu = false
 
     var body: some View {
-        // Decorative layer never steals focus/EV/shutter; chrome is corner overlays only.
-        // Color.clear (no contentShape) lets taps fall through to the shutter dock.
-        Color.clear
-            .overlay {
-                GeometryReader { geo in
-                    ZStack {
-                        // Grain only when a film stock is active — matches still bake.
-                        if filmFilter != .none {
-                            FilmGrainOverlay()
-                                .opacity(0.32)
-                        }
-
-                        if lensFX == .vhs {
-                            ScanlineShaderOverlay()
-                        }
-
-                        CenterFocusBrackets()
-                            .position(x: geo.size.width / 2, y: geo.size.height / 2)
-
-                        if showGrid {
-                            GridLines()
-                        }
-
-                        if aspectRatio != .full {
-                            AspectRatioMask(mode: aspectRatio, size: geo.size)
-                        }
+        // ZStack (not a hit-blocking Color.clear root): empty space passes
+        // taps to the shutter dock underneath (this view sits at zIndex 40).
+        ZStack(alignment: .topTrailing) {
+            GeometryReader { geo in
+                ZStack {
+                    if filmFilter != .none {
+                        FilmGrainOverlay()
+                            .opacity(0.32)
                     }
-                }
-                .allowsHitTesting(false)
-            }
-        .overlay(alignment: .topLeading) {
-            VStack(spacing: 8) {
-                chromeButton {
-                    showFilmMenu = false
-                    showFXMenu = false
-                    showRecipeMenu = false
-                    aspectRatio = aspectRatio.next
-                } label: {
-                    Text(aspectRatio.label)
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.9))
-                }
-
-                chromeButton {
-                    onFlipCamera?()
-                } label: {
-                    Image(systemName: "arrow.triangle.2.circlepath.camera")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(.white.opacity(0.85))
-                }
-
-                chromeButton {
-                    var t = Transaction()
-                    t.disablesAnimations = true
-                    withTransaction(t) {
-                        focusPeaking.toggle()
+                    if lensFX == .vhs {
+                        ScanlineShaderOverlay()
                     }
-                } label: {
-                    Image(systemName: "plus.viewfinder")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(focusPeaking
-                                         ? Color(red: 0.35, green: 0.95, blue: 0.45)
-                                         : .white.opacity(0.8))
+                    CenterFocusBrackets()
+                        .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                    if showGrid {
+                        GridLines()
+                    }
+                    if aspectRatio != .full {
+                        AspectRatioMask(mode: aspectRatio, size: geo.size)
+                    }
                 }
             }
-            .padding(16)
-        }
-        .overlay(alignment: .topTrailing) {
-            VStack(spacing: 8) {
-                chromeButton {
-                    // Instant toggle — never animate over Metal camera chrome.
-                    var t = Transaction()
-                    t.disablesAnimations = true
-                    withTransaction(t) {
-                        showFXMenu = false
-                        showRecipeMenu = false
-                        showFilmMenu.toggle()
-                    }
-                } label: {
-                    Image(systemName: "film")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(showFilmMenu || filmFilter != .none
-                                         ? Color(red: 1.0, green: 0.85, blue: 0.35)
-                                         : .white.opacity(0.8))
-                }
+            .allowsHitTesting(false)
 
-                chromeButton {
-                    var t = Transaction()
-                    t.disablesAnimations = true
-                    withTransaction(t) {
-                        showFilmMenu = false
-                        showRecipeMenu = false
-                        showFXMenu.toggle()
-                    }
-                } label: {
-                    Image(systemName: "water.waves")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundColor(showFXMenu || lensFX != .none
-                                         ? Color(red: 0.55, green: 0.88, blue: 0.95)
-                                         : .white.opacity(0.8))
-                }
+            VStack {
+                HStack(alignment: .top) {
+                    VStack(spacing: 8) {
+                        chromeButton {
+                            showFilmMenu = false
+                            showFXMenu = false
+                            showRecipeMenu = false
+                            aspectRatio = aspectRatio.next
+                        } label: {
+                            Text(aspectRatio.label)
+                                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.9))
+                        }
 
-                chromeButton {
-                    var t = Transaction()
-                    t.disablesAnimations = true
-                    withTransaction(t) {
-                        showFilmMenu = false
-                        showFXMenu = false
-                        showRecipeMenu.toggle()
+                        chromeButton {
+                            onFlipCamera?()
+                        } label: {
+                            Image(systemName: "arrow.triangle.2.circlepath.camera")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(.white.opacity(0.85))
+                        }
+
+                        chromeButton {
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) {
+                                focusPeaking.toggle()
+                            }
+                        } label: {
+                            Image(systemName: "plus.viewfinder")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(focusPeaking
+                                                 ? Color(red: 0.35, green: 0.95, blue: 0.45)
+                                                 : .white.opacity(0.8))
+                        }
                     }
-                } label: {
-                    Image(systemName: "bookmark.fill")
-                        .font(.system(size: 12, weight: .medium))
-                        .foregroundColor(showRecipeMenu || !lookStore.recipes.isEmpty
-                                         ? Color(red: 1.0, green: 0.75, blue: 0.45)
-                                         : .white.opacity(0.8))
+                    .padding(16)
+
+                    Spacer().allowsHitTesting(false)
+
+                    VStack(spacing: 8) {
+                        chromeButton {
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) {
+                                showFXMenu = false
+                                showRecipeMenu = false
+                                showFilmMenu.toggle()
+                            }
+                        } label: {
+                            Image(systemName: "film")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(showFilmMenu || filmFilter != .none
+                                                 ? Color(red: 1.0, green: 0.85, blue: 0.35)
+                                                 : .white.opacity(0.8))
+                        }
+
+                        chromeButton {
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) {
+                                showFilmMenu = false
+                                showRecipeMenu = false
+                                showFXMenu.toggle()
+                            }
+                        } label: {
+                            Image(systemName: "water.waves")
+                                .font(.system(size: 13, weight: .medium))
+                                .foregroundColor(showFXMenu || lensFX != .none
+                                                 ? Color(red: 0.55, green: 0.88, blue: 0.95)
+                                                 : .white.opacity(0.8))
+                        }
+
+                        chromeButton {
+                            var t = Transaction()
+                            t.disablesAnimations = true
+                            withTransaction(t) {
+                                showFilmMenu = false
+                                showFXMenu = false
+                                showRecipeMenu.toggle()
+                            }
+                        } label: {
+                            Image(systemName: "bookmark.fill")
+                                .font(.system(size: 12, weight: .medium))
+                                .foregroundColor(showRecipeMenu || !lookStore.recipes.isEmpty
+                                                 ? Color(red: 1.0, green: 0.75, blue: 0.45)
+                                                 : .white.opacity(0.8))
+                        }
+                    }
+                    .padding(16)
                 }
+                Spacer().allowsHitTesting(false)
             }
-            .padding(16)
-        }
-        .overlay {
+
             if showFilmMenu || showFXMenu || showRecipeMenu {
                 Color.clear
                     .contentShape(Rectangle())
@@ -239,8 +236,7 @@ struct ViewfinderOverlay: View {
                         }
                     }
             }
-        }
-        .overlay(alignment: .topTrailing) {
+
             if showFilmMenu {
                 LeicaFilmPicker(
                     selectedFilter: $filmFilter,
@@ -252,8 +248,7 @@ struct ViewfinderOverlay: View {
                 .padding(.trailing, compactChrome ? 10 : 16)
                 .padding(.top, compactChrome ? 48 : 100)
             }
-        }
-        .overlay(alignment: .topTrailing) {
+
             if showFXMenu {
                 LensFXPicker(
                     selectedFX: $lensFX,
@@ -262,8 +257,7 @@ struct ViewfinderOverlay: View {
                 .padding(.trailing, compactChrome ? 10 : 16)
                 .padding(.top, compactChrome ? 72 : 140)
             }
-        }
-        .overlay(alignment: .topTrailing) {
+
             if showRecipeMenu {
                 LookRecipePicker(
                     store: lookStore,

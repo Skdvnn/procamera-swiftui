@@ -1651,6 +1651,13 @@ class CameraManager: NSObject, ObservableObject {
         morphTouch: MorphTouchState? = nil,
         completion: @escaping (UIImage?) -> Void
     ) {
+        // Serialize — a second shutter while bake is in-flight used to overwrite
+        // photoCompletionHandler and drop / mis-route the first still.
+        if photoCompletionHandler != nil {
+            DispatchQueue.main.async { completion(nil) }
+            return
+        }
+
         // Freeze the selections at shutter time. The user can change controls
         // while AVFoundation is delivering the still.
         let captureFilmFilter = filmFilter ?? selectedFilmFilter
