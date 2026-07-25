@@ -1690,13 +1690,16 @@ struct CullSessionView: View {
         }
 
         let albumName = session.title
-        PhotosLibraryService.exportKeepers(albumName: albumName, assetLocalIdentifiers: keeperIDs) { _ in
+        PhotosLibraryService.exportKeepers(albumName: albumName, assetLocalIdentifiers: keeperIDs) { albumOK in
+            let albumFailed = !albumOK && !keeperIDs.isEmpty
             if !keepers.isEmpty, let book = store.createBook(title: albumName) {
                 for shot in keepers { store.add(shot, to: book) }
             }
 
             if deleteRejects {
-                finishMessage = "Deleting rejects…"
+                finishMessage = albumFailed
+                    ? "Album export failed — deleting rejects…"
+                    : "Deleting rejects…"
                 let rejectAssetIDs: [String] = rejects.compactMap { shot in
                     PhotosLibraryService.resolveAsset(
                         preferredID: shot.photosAssetLocalIdentifier,
@@ -1705,12 +1708,21 @@ struct CullSessionView: View {
                 }
                 PhotosLibraryService.deleteAssets(localIdentifiers: rejectAssetIDs) { success in
                     guard success else {
-                        finishMessage = "Photos delete failed — local frames kept."
+                        finishMessage = albumFailed
+                            ? "Album export + Photos delete failed — local frames kept."
+                            : "Photos delete failed — local frames kept."
                         isFinishing = false
                         return
                     }
                     for shot in rejects { store.delete(shot) }
                     marks.clear(shotIDs: rejects.map(\.id) + keepers.map(\.id))
+                    isFinishing = false
+                    onFinished()
+                    dismiss()
+                }
+            } else if albumFailed {
+                finishMessage = "Album export failed — keepers in Field Book"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) {
                     isFinishing = false
                     onFinished()
                     dismiss()

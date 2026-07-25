@@ -639,6 +639,11 @@ struct ContentView: View {
         .onChange(of: camera.maxISO) { _, maxISO in
             clampISOToDevice(maxISO: maxISO)
         }
+        .onChange(of: camera.captureNote) { _, note in
+            guard let note else { return }
+            showStatusToast(note)
+            camera.captureNote = nil
+        }
         .onChange(of: camera.isAEAFLocked) { _, locked in
             isLocked = locked
         }
