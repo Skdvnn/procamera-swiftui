@@ -423,12 +423,20 @@ struct HorizontalExposureMeter: View {
     let value: Float // -2 to +2
     let iso: Int
     var isoIsAuto: Bool = false
+    /// Live / dial shutter label (e.g. "1/125") shown under ISO while AUTO.
+    var shutterLabel: String = ""
+    var shutterIsAuto: Bool = false
 
     // Major marks at full stops, minor marks at 1/3 stops
     private let majorMarks = ["-2", "-1", "0", "+1", "+2"]
 
+    private var shutterReadout: String {
+        if shutterLabel.isEmpty || shutterLabel == "AUTO" { return "—" }
+        return shutterLabel
+    }
+
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             // Meter scale - larger and more detailed
             ZStack {
                 // Dark background panel
@@ -487,24 +495,41 @@ struct HorizontalExposureMeter: View {
             }
             .frame(width: 120, height: 36)
 
-            // ISO display - cleaner
-            HStack(spacing: 4) {
-                Text("ISO")
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.5))
-                if isoIsAuto {
-                    HStack(spacing: 2) {
-                        Text("A")
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
-                            .foregroundColor(.white.opacity(0.45))
-                        Text(iso > 0 ? "\(iso)" : "—")
+            // ISO + live shutter (AUTO) — both honest sensor readouts
+            VStack(spacing: 2) {
+                HStack(spacing: 4) {
+                    Text("ISO")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.5))
+                    if isoIsAuto {
+                        HStack(spacing: 2) {
+                            Text("A")
+                                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.45))
+                            Text(iso > 0 ? "\(iso)" : "—")
+                                .font(.system(size: 13, weight: .bold, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.8))
+                        }
+                    } else {
+                        Text("\(iso)")
                             .font(.system(size: 13, weight: .bold, design: .monospaced))
                             .foregroundColor(.white.opacity(0.8))
                     }
-                } else {
-                    Text("\(iso)")
-                        .font(.system(size: 13, weight: .bold, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.8))
+                }
+                if shutterIsAuto || !shutterLabel.isEmpty {
+                    HStack(spacing: 3) {
+                        Text("S")
+                            .font(.system(size: 8, weight: .medium, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.45))
+                        if shutterIsAuto {
+                            Text("A")
+                                .font(.system(size: 8, weight: .bold, design: .monospaced))
+                                .foregroundColor(.white.opacity(0.4))
+                        }
+                        Text(shutterReadout)
+                            .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                            .foregroundColor(.white.opacity(0.72))
+                    }
                 }
             }
         }
@@ -520,6 +545,8 @@ struct CenterDisplay: View {
     let timerSeconds: Int
     let iso: Int
     var isoIsAuto: Bool = false
+    var shutterLabel: String = ""
+    var shutterIsAuto: Bool = false
     let flashMode: String
     let macroEnabled: Bool
     let isAutoFocus: Bool
@@ -529,7 +556,13 @@ struct CenterDisplay: View {
 
     var body: some View {
         // Just the horizontal exposure meter, centered between gauges
-        HorizontalExposureMeter(value: exposureValue, iso: iso, isoIsAuto: isoIsAuto)
+        HorizontalExposureMeter(
+            value: exposureValue,
+            iso: iso,
+            isoIsAuto: isoIsAuto,
+            shutterLabel: shutterLabel,
+            shutterIsAuto: shutterIsAuto
+        )
     }
 }
 
@@ -562,6 +595,8 @@ struct AnalogDisplayPanel: View {
     let timerSeconds: Int
     let iso: Int
     var isoIsAuto: Bool = false
+    var shutterLabel: String = ""
+    var shutterIsAuto: Bool = false
     let flashMode: String
     let macroEnabled: Bool
     let isAutoFocus: Bool
@@ -623,6 +658,8 @@ struct AnalogDisplayPanel: View {
                         timerSeconds: timerSeconds,
                         iso: iso,
                         isoIsAuto: isoIsAuto,
+                        shutterLabel: shutterLabel,
+                        shutterIsAuto: shutterIsAuto,
                         flashMode: flashMode,
                         macroEnabled: macroEnabled,
                         isAutoFocus: isAutoFocus,

@@ -7,6 +7,7 @@ enum ShutterDeepLink: Equatable {
     case openCamera
     case capture
     case darkroom
+    case fieldBook
     case look(film: String?, fx: String?)
     case timer(seconds: Int)
     case peaking(Bool)
@@ -31,6 +32,8 @@ enum ShutterDeepLink: Equatable {
             return .capture
         case "darkroom", "cull", "library":
             return .darkroom
+        case "fieldbook", "books", "book":
+            return .fieldBook
         case "look", "recipe":
             return .look(film: q("film"), fx: q("fx"))
         case "timer":
@@ -52,6 +55,8 @@ enum ShutterDeepLink: Equatable {
             return URL(string: "shuttercam://capture")!
         case .darkroom:
             return URL(string: "shuttercam://darkroom")!
+        case .fieldBook:
+            return URL(string: "shuttercam://fieldbook")!
         case .look(let film, let fx):
             var c = URLComponents(string: "shuttercam://look")!
             var items: [URLQueryItem] = []
@@ -72,6 +77,7 @@ enum ShutterDeepLink: Equatable {
 extension Notification.Name {
     static let shutterDeepLink = Notification.Name("shutter.deeplink")
     static let shutterHardwareShutter = Notification.Name("shutter.hardwareShutter")
+    static let shutterOpenFieldBook = Notification.Name("shutter.openFieldBook")
 }
 
 /// Posts deep links immediately once a subscriber is ready; otherwise queues them

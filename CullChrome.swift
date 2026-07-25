@@ -145,6 +145,8 @@ struct EdgePeekFrames: View {
 
 // MARK: - Compare (two frames, synced zoom)
 
+// MARK: - Compare (two frames, synced zoom)
+
 struct CompareFramesView: View {
     let store: GalleryStore
     let left: ShotMetadata
@@ -172,11 +174,24 @@ struct CompareFramesView: View {
                             .font(.system(size: 9, weight: .bold, design: .monospaced))
                             .tracking(2.5)
                             .foregroundColor(CullPalette.amber.opacity(0.75))
-                        Text("Pinch both · tap one to keep")
+                        Text("Pinch both · double-tap reset · tap one to keep")
                             .font(.system(size: 11, weight: .medium, design: .serif))
                             .foregroundColor(.white.opacity(0.7))
                     }
                     Spacer()
+                    Button(action: onDismiss) {
+                        Text("SKIP")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .tracking(1.2)
+                            .foregroundColor(.white.opacity(0.55))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 2)
+                                    .stroke(CullPalette.hairline, lineWidth: 0.6)
+                            )
+                    }
+                    .accessibilityLabel("Skip compare without marking")
                 }
                 .padding(.horizontal, 16)
                 .padding(.top, 12)
@@ -230,6 +245,15 @@ struct CompareFramesView: View {
                     }
             )
         )
+        .onTapGesture(count: 2) {
+            withAnimation(CullMotion.flick) {
+                scale = 1
+                lastScale = 1
+                offset = .zero
+                lastOffset = .zero
+            }
+            Haptics.light()
+        }
     }
 
     private func pane(shot: ShotMetadata, promote: @escaping () -> Void, label: String) -> some View {
@@ -243,11 +267,17 @@ struct CompareFramesView: View {
                         .scaleEffect(scale)
                         .offset(offset)
                 }
-                Text(label)
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                    .foregroundColor(CullPalette.amber)
-                    .padding(8)
-                    .background(Color.black.opacity(0.45))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(label)
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                        .foregroundColor(CullPalette.amber)
+                    Text(metaLine(for: shot))
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.7))
+                        .lineLimit(2)
+                }
+                .padding(8)
+                .background(Color.black.opacity(0.5))
             }
             .clipShape(Rectangle())
             .overlay(
@@ -257,6 +287,22 @@ struct CompareFramesView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Keep frame \(label)")
+    }
+
+    private func metaLine(for shot: ShotMetadata) -> String {
+        var parts: [String] = []
+        parts.append("ISO \(shot.iso)")
+        parts.append(shot.shutter)
+        if shot.aperture > 0 {
+            parts.append(String(format: "ƒ%.1f", shot.aperture))
+        }
+        if shot.filmFilter != "None", !shot.filmFilter.isEmpty {
+            parts.append(shot.filmFilter)
+        }
+        if shot.lensFX != "None", !shot.lensFX.isEmpty {
+            parts.append(shot.lensFX)
+        }
+        return parts.joined(separator: " · ")
     }
 }
 

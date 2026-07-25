@@ -1,6 +1,44 @@
 import AppIntents
 import Foundation
 
+// MARK: - Shortcut parameter enums
+
+enum ShutterFilmLookEntity: String, AppEnum {
+    case portra400 = "Portra 400"
+    case ektar100 = "Ektar 100"
+    case kodakGold = "Kodak Gold"
+    case triX400 = "Tri-X 400"
+    case velvia50 = "Velvia 50"
+    case cinestill800 = "CineStill 800T"
+    case instant = "Instant"
+    case none = "None"
+
+    static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "Film")
+    static var caseDisplayRepresentations: [ShutterFilmLookEntity: DisplayRepresentation] = [
+        .portra400: "Portra 400",
+        .ektar100: "Ektar 100",
+        .kodakGold: "Kodak Gold",
+        .triX400: "Tri-X 400",
+        .velvia50: "Velvia 50",
+        .cinestill800: "CineStill 800T",
+        .instant: "Instant",
+        .none: "None"
+    ]
+}
+
+enum ShutterTimerSecondsEntity: Int, AppEnum {
+    case off = 0
+    case three = 3
+    case ten = 10
+
+    static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "Timer")
+    static var caseDisplayRepresentations: [ShutterTimerSecondsEntity: DisplayRepresentation] = [
+        .off: "Off",
+        .three: "3 seconds",
+        .ten: "10 seconds"
+    ]
+}
+
 // MARK: - Shortcuts / Siri App Intents (main app)
 
 struct OpenShutterCamIntent: AppIntent {
@@ -39,20 +77,33 @@ struct OpenDarkroomIntent: AppIntent {
     }
 }
 
+struct OpenFieldBookIntent: AppIntent {
+    static var title: LocalizedStringResource = "Open Field Book"
+    static var description = IntentDescription("Open the Field Book shelf in Shutter.")
+    static var openAppWhenRun: Bool = true
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        ShutterDeepLinkCenter.post(.fieldBook)
+        return .result()
+    }
+}
+
 struct ApplyShutterLookIntent: AppIntent {
     static var title: LocalizedStringResource = "Apply Shutter Look"
     static var description = IntentDescription("Apply a film stock and optional Lens FX.")
     static var openAppWhenRun: Bool = true
 
     @Parameter(title: "Film")
-    var film: String?
+    var film: ShutterFilmLookEntity?
 
     @Parameter(title: "Lens FX")
     var lensFX: String?
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        ShutterDeepLinkCenter.post(.look(film: film, fx: lensFX))
+        let filmName = film.flatMap { $0 == .none ? nil : $0.rawValue }
+        ShutterDeepLinkCenter.post(.look(film: filmName, fx: lensFX))
         return .result()
     }
 }
@@ -63,11 +114,11 @@ struct SetShutterTimerIntent: AppIntent {
     static var openAppWhenRun: Bool = true
 
     @Parameter(title: "Seconds")
-    var seconds: Int
+    var seconds: ShutterTimerSecondsEntity
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        ShutterDeepLinkCenter.post(.timer(seconds: seconds))
+        ShutterDeepLinkCenter.post(.timer(seconds: seconds.rawValue))
         return .result()
     }
 }
@@ -101,6 +152,15 @@ struct ShutterAppShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "Darkroom",
             systemImageName: "square.stack.3d.up"
+        )
+        AppShortcut(
+            intent: OpenFieldBookIntent(),
+            phrases: [
+                "Open \(.applicationName) field book",
+                "Show \(.applicationName) books"
+            ],
+            shortTitle: "Field Book",
+            systemImageName: "book.closed"
         )
         AppShortcut(
             intent: ApplyShutterLookIntent(),

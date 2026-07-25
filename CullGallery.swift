@@ -1,6 +1,7 @@
 import SwiftUI
 import Photos
 import AVFoundation
+import CoreLocation
 
 // MARK: - Motion (page-turn cull — no springs, no bounce)
 
@@ -492,6 +493,9 @@ struct CullLibraryView: View {
             withAnimation(CullMotion.settle) { appeared = true }
         }
         .onChange(of: store.shots) { _, _ in rebuildSessions() }
+        .onReceive(NotificationCenter.default.publisher(for: .shutterOpenFieldBook)) { _ in
+            showFieldBooks = true
+        }
         .fullScreenCover(item: $route) { r in
             CullSessionView(
                 store: store,
@@ -638,6 +642,19 @@ struct CullLibraryView: View {
 
     private func rebuildSessions() {
         sessions = SessionClusterer.cluster(store.shots)
+        // Wire dead reverse-geocode path → place-named session titles.
+        for session in sessions {
+            guard let coord = session.mapCoordinate else { continue }
+            let location = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+            SessionTitle.refine(session: session, location: location) { title in
+                DispatchQueue.main.async {
+                    guard let idx = sessions.firstIndex(where: { $0.id == session.id }) else { return }
+                    if sessions[idx].title != title {
+                        sessions[idx].title = title
+                    }
+                }
+            }
+        }
     }
 
     private func open(_ session: ShootSession, at index: Int) {
@@ -702,6 +719,14 @@ struct SessionContactSheet: View {
 
     private var compareReady: Bool { selectedForCompare.count == 2 }
 
+    /// Leading place fragment from a refined title ("Ocean Beach — Aug 14, morning").
+    private func placeLabel(from title: String) -> String? {
+        let parts = title.split(separator: "—", maxSplits: 1, omittingEmptySubsequences: true)
+        guard parts.count == 2 else { return nil }
+        let place = parts[0].trimmingCharacters(in: .whitespaces)
+        return place.isEmpty ? nil : place
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             // Sheet header
@@ -737,7 +762,10 @@ struct SessionContactSheet: View {
                     .padding(.top, 4)
 
                     if let coord = session.mapCoordinate {
-                        SessionMapChip(coordinate: coord)
+                        SessionMapChip(
+                            coordinate: coord,
+                            placeLabel: placeLabel(from: session.title)
+                        )
                             .padding(.top, 8)
                             .padding(.trailing, 8)
                     }
@@ -1100,8 +1128,12 @@ struct CullSessionView: View {
             get: { !shareKeeperItems.isEmpty },
             set: { if !$0 { shareKeeperItems = [] } }
         )) {
-            ShareSheet(items: shareKeeperItems)
-                .preferredColorScheme(.dark)
+            ShareSheet(
+                items: shareKeeperItems,
+                subject: "Shutter · \(doneAlbumName)",
+                onComplete: { shareKeeperItems = [] }
+            )
+            .preferredColorScheme(.dark)
         }
         .sheet(isPresented: $showFinishDone) {
             FinishDoneSheet(
@@ -1115,7 +1147,11 @@ struct CullSessionView: View {
                     dismiss()
                 },
                 onShareKeepers: {
-                    shareKeeperImages()
+                    // Dismiss done sheet first so share isn't nested underneath.
+                    showFinishDone = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        shareKeeperImages()
+                    }
                 },
                 onOpenPhotos: {
                     PhotosLibraryService.openPhotosApp()
@@ -1789,7 +1825,8 @@ struct CullSessionView: View {
     private func shareKeeperImages() {
         let images: [UIImage] = doneKeeperShots.compactMap { store.image(for: $0) ?? store.thumbnail(for: $0) }
         guard !images.isEmpty else { return }
-        shareKeeperItems = images
+        let urls = KeeperSharePackager.jpegFileURLs(from: images)
+        shareKeeperItems = urls.isEmpty ? images : urls
     }
 
     private func exportProofPDF() {
@@ -1847,7 +1884,7 @@ struct FinishDoneSheet: View {
                     Button(action: onShareKeepers) {
                         finishActionRow(
                             title: "SHARE KEEPERS",
-                            subtitle: "System share sheet of keeper frames",
+                            subtitle: "JPEG files via system share sheet",
                             accent: false
                         )
                     }

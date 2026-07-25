@@ -52,6 +52,8 @@ def parse_deeplink(url: str):
         return ("capture",)
     if route in ("darkroom", "cull", "library"):
         return ("darkroom",)
+    if route in ("fieldbook", "books", "book"):
+        return ("fieldBook",)
     if route in ("look", "recipe"):
         return ("look", q.get("film"), q.get("fx"))
     if route == "timer":
@@ -85,6 +87,8 @@ def test_deeplinks() -> None:
         ("shuttercam://capture", ("capture",)),
         ("procamera://shutter", ("capture",)),
         ("shuttercam://darkroom", ("darkroom",)),
+        ("shuttercam://fieldbook", ("fieldBook",)),
+        ("shuttercam://books", ("fieldBook",)),
         ("shuttercam://look?film=Portra%20400&fx=Liquid", ("look", "Portra 400", "Liquid")),
         ("shuttercam://look?film=Tri-X%20400", ("look", "Tri-X 400", None)),
         ("shuttercam://timer?seconds=10", ("timer", 10)),
@@ -299,6 +303,25 @@ def test_source_guards() -> None:
     check("open Photos helper", "func openPhotosApp" in (ROOT / "ShootCull.swift").read_text())
     check("contact loupe on long-press", "Long-press opens loupe" in (ROOT / "CullGallery.swift").read_text())
     check("shortcuts for look+timer", "ApplyShutterLookIntent()" in (ROOT / "ShutterAppIntents.swift").read_text() and "SetShutterTimerIntent()" in (ROOT / "ShutterAppIntents.swift").read_text())
+    # Build 48 — Auto Night, burst, share/compare/map, widgets, Field Book intent
+    gauge = (ROOT / "AnalogGaugeView.swift").read_text()
+    cull = (ROOT / "CullGallery.swift").read_text()
+    chrome = (ROOT / "CullChrome.swift").read_text()
+    proof = (ROOT / "ProofExport.swift").read_text()
+    intents = (ROOT / "ShutterAppIntents.swift").read_text()
+    check("live shutter on top meter", "shutterIsAuto" in gauge and "shutterLabel: displayShutterLabel" in content)
+    check("Auto Night assist chip", "evaluateNightAssist" in content and "TAP FOR NIGHT" in content)
+    check("hold-to-burst shutter", "beginBurstHold" in content and "onBurstStart" in content and "Hold for burst" in content)
+    check("widget timeline reload", "WidgetCenter.shared.reloadAllTimelines" in content)
+    check("keeper JPEG share packager", "KeeperSharePackager" in proof and "jpegFileURLs" in cull)
+    check("finish share dismisses first", "Dismiss done sheet first" in cull)
+    check("compare EXIF + skip + reset", "metaLine(for:" in chrome and "SKIP" in chrome and "double-tap reset" in chrome)
+    check("session title refine wired", "SessionTitle.refine" in cull)
+    check("map chip opens Maps", "openInMaps" in proof)
+    check("Field Book deep link", "case fieldBook" in deep and "shutterOpenFieldBook" in deep)
+    check("Field Book intent", "OpenFieldBookIntent" in intents)
+    check("film AppEnum for Shortcuts", "enum ShutterFilmLookEntity" in intents)
+    check("timer AppEnum for Shortcuts", "enum ShutterTimerSecondsEntity" in intents)
     check("bake failure note", "bakeLooksForCapture" in cam and "captureNote" in cam and "captureNote" in content)
     check("album export failure surfaced", "Album export failed — keepers in Field Book" in (ROOT / "CullGallery.swift").read_text())
     check("comic fallback", "func applyToon" in (ROOT / "LensFXEngine.swift").read_text())
@@ -468,10 +491,10 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 47", m is not None and int(ver) >= 45, ver)
+    check("Info.plist build >= 48", m is not None and int(ver) >= 48, ver)
     import re as _re
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 47+", any(v >= 45 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 48+", any(v >= 48 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

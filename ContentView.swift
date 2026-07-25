@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import AVFoundation
+import WidgetKit
 
 struct Haptics {
     static func light() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
@@ -218,6 +219,17 @@ struct ContentView: View {
     @State private var statusToastWork: DispatchWorkItem?
     /// Suppresses "Capture failed" toast when the user aborted LE.
     @State private var expectingLECancel = false
+    /// Soft Auto Night assist — opt-in chip when AUTO is hunting in the dark.
+    @State private var nightAssistVisible = false
+    @State private var nightAssistDarkStreak = 0
+    @State private var nightAssistDismissedUntil: Date?
+    @AppStorage("cam.nightAssist") private var nightAssistEnabled = true
+    /// Hold-to-burst: finger still down after long-press threshold.
+    @State private var isBurstHolding = false
+    /// Suppresses the Button tap that fires when a long-press burst ends.
+    @State private var burstConsumedTap = false
+    @State private var burstCaptured = 0
+    private let burstMaxFrames = 6
     @State private var showFocusPoint = false
     @State private var focusPoint: CGPoint = .zero
     /// EV captured when the focus reticle appeared — vertical drag offsets from this.
@@ -320,6 +332,8 @@ struct ContentView: View {
                         iso: displayISO,
                         flashMode: flashModeLabel(camera.flashMode),
                         isoIsAuto: !camera.isManualExposure,
+                        shutterLabel: displayShutterLabel,
+                        shutterIsAuto: !camera.isManualExposure,
                         macroEnabled: macroEnabled,
                         isAutoFocus: !isManualFocusEnabled,
                         compact: effectiveTopCollapsed,
@@ -517,6 +531,45 @@ struct ContentView: View {
                         .zIndex(50)
                 }
 
+                if nightAssistVisible {
+                    HStack(spacing: 10) {
+                        Button {
+                            nightAssistVisible = false
+                            nightAssistDismissedUntil = Date().addingTimeInterval(180)
+                            applyShootMode(.night)
+                            showStatusToast("Night · 1″ · ISO 1600")
+                        } label: {
+                            HStack(spacing: 8) {
+                                Text("LOW LIGHT")
+                                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                    .tracking(1.2)
+                                Text("·")
+                                    .foregroundColor(.white.opacity(0.35))
+                                Text("TAP FOR NIGHT")
+                                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            }
+                            .foregroundColor(Color(red: 1.0, green: 0.78, blue: 0.35))
+                        }
+                        Button {
+                            nightAssistVisible = false
+                            nightAssistDismissedUntil = Date().addingTimeInterval(300)
+                        } label: {
+                            Image(systemName: "xmark")
+                                .font(.system(size: 10, weight: .bold))
+                                .foregroundColor(.white.opacity(0.45))
+                                .frame(width: 22, height: 22)
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(Color.black.opacity(0.78)))
+                    .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.6))
+                    .padding(.top, safeTop + (statusToast == nil ? 8 : 44))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .zIndex(51)
+                }
+
                 // Camera permission / session errors — never leave a silent black finder.
                 if let err = camera.error {
                     CameraPermissionOverlay(message: err.localizedDescription ?? "Camera unavailable") {
@@ -529,6 +582,17 @@ struct ContentView: View {
             }
             .ignoresSafeArea()
             .animation(ShutterMotion.chrome, value: statusToast)
+            .animation(ShutterMotion.chrome, value: nightAssistVisible)
+            .onChange(of: camera.liveISO) { _, _ in
+                evaluateNightAssist()
+            }
+            .onChange(of: camera.liveShutterLabel) { _, _ in
+                evaluateNightAssist()
+            }
+            .onChange(of: camera.isManualExposure) { _, manual in
+                if manual { nightAssistVisible = false; nightAssistDarkStreak = 0 }
+                else { evaluateNightAssist() }
+            }
             .onChange(of: isLandscape) { _, landscape in
                 // Landscape uses compact chrome; remember portrait expanded state separately.
                 if landscape {
@@ -758,6 +822,139 @@ struct ContentView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: work)
     }
 
+    /// Soft Auto Night — suggest manual Night when AUTO is clearly dark.
+    /// Opt-in chip only (never auto-applies 1″ LE mid-shoot).
+    private func evaluateNightAssist() {
+        guard nightAssistEnabled else {
+            nightAssistVisible = false
+            nightAssistDarkStreak = 0
+            return
+        }
+        guard !camera.isManualExposure else {
+            nightAssistVisible = false
+            nightAssistDarkStreak = 0
+            return
+        }
+        if ShootMode(rawValue: shootModeRaw) == .night {
+            nightAssistVisible = false
+            return
+        }
+        if let until = nightAssistDismissedUntil, Date() < until {
+            nightAssistVisible = false
+            return
+        }
+        let dark = isLowLightAUTO(
+            iso: camera.liveISO,
+            shutterLabel: camera.liveShutterLabel
+        )
+        if dark {
+            nightAssistDarkStreak += 1
+        } else {
+            nightAssistDarkStreak = 0
+            if nightAssistVisible {
+                withAnimation(ShutterMotion.chrome) { nightAssistVisible = false }
+            }
+            return
+        }
+        // ~3 samples at 0.4s probe ≈ 1.2s of stable dark before prompting.
+        if nightAssistDarkStreak >= 3, !nightAssistVisible {
+            withAnimation(ShutterMotion.chrome) { nightAssistVisible = true }
+        }
+    }
+
+    private func isLowLightAUTO(iso: Float, shutterLabel: String) -> Bool {
+        if iso >= 1000 { return true }
+        guard let seconds = Self.parseShutterSeconds(shutterLabel) else { return false }
+        // AE slower than ~1/30 in AUTO → scene is dark enough for Night assist.
+        return seconds >= (1.0 / 30.0) - 0.0005
+    }
+
+    private static func parseShutterSeconds(_ label: String) -> Double? {
+        let t = label.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty, t != "AUTO" else { return nil }
+        if t.hasSuffix("\"") {
+            return Double(t.dropLast())
+        }
+        if t.hasPrefix("1/") {
+            let denom = Double(t.dropFirst(2)) ?? 0
+            guard denom > 0 else { return nil }
+            return 1.0 / denom
+        }
+        return Double(t)
+    }
+
+    private func beginBurstHold() {
+        guard !isCapturing else { return }
+        guard !camera.isLongExposureCapturing else { return }
+        guard timerWorkItem == nil, timerCountdown == 0 else { return }
+        // Manual LE indices — hold is cancel, not burst.
+        if camera.isManualExposure && shutterSpeedIndex <= 3 { return }
+        burstConsumedTap = true
+        isBurstHolding = true
+        burstCaptured = 0
+        fireBurstFrame()
+    }
+
+    private func endBurstHold() {
+        isBurstHolding = false
+        if burstCaptured > 1 {
+            showStatusToast("Burst · \(burstCaptured)")
+        }
+    }
+
+    private func fireBurstFrame() {
+        guard isBurstHolding, burstCaptured < burstMaxFrames else {
+            isBurstHolding = false
+            if burstCaptured > 1 {
+                showStatusToast("Burst · \(burstCaptured)")
+            }
+            return
+        }
+        guard !isCapturing else { return }
+        isCapturing = true
+        syncCaptureControlsToCamera()
+        let shutterFilm = cameraFilmFilter(from: filmFilter)
+        let shutterFX = lensFX
+        let morphTouch = shutterFX.isTouchReactive
+            ? LensFXEngine.shared.snapshotForCapture()
+            : nil
+        if burstCaptured == 0 {
+            Haptics.heavy()
+            showFlash = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.07) { showFlash = false }
+        } else {
+            Haptics.light()
+        }
+        camera.capturePhoto(
+            filmFilter: shutterFilm,
+            lensFX: shutterFX,
+            morphTouch: morphTouch
+        ) { img in
+            isCapturing = false
+            if let img {
+                finishCapturedImage(img)
+                burstCaptured += 1
+                if isBurstHolding && burstCaptured < burstMaxFrames {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
+                        fireBurstFrame()
+                    }
+                } else {
+                    isBurstHolding = false
+                    if burstCaptured > 1 {
+                        showStatusToast("Burst · \(burstCaptured)")
+                    }
+                }
+            } else {
+                isBurstHolding = false
+                if burstCaptured == 0 {
+                    showStatusToast("Capture failed")
+                } else if burstCaptured > 1 {
+                    showStatusToast("Burst · \(burstCaptured)")
+                }
+            }
+        }
+    }
+
     private func clampISOToDevice(maxISO: Float = 0) {
         let cap = maxISO > 0 ? maxISO : camera.maxISO
         guard cap > 0 else { return }
@@ -869,6 +1066,12 @@ struct ContentView: View {
             }
         case .darkroom:
             showPhotoBook = true
+        case .fieldBook:
+            showPhotoBook = true
+            // CullLibraryView listens and opens the Field Book shelf.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                NotificationCenter.default.post(name: .shutterOpenFieldBook, object: nil)
+            }
         case .look(let filmName, let fxName):
             showPhotoBook = false
             // Always apply both — film-only widgets used to leave a stale FX on.
@@ -925,6 +1128,8 @@ struct ContentView: View {
             }
         }
         ShutterAppGroup.defaults.set(Array(encoded.prefix(4)), forKey: "widget.lookNames")
+        // Refresh Lock / Home widgets immediately (Release / TestFlight App Group).
+        WidgetCenter.shared.reloadAllTimelines()
         if #available(iOS 18.0, *) {
             Task {
                 try? await ShutterCameraCaptureIntent.updateAppContext(ctx)
@@ -1325,14 +1530,21 @@ struct ContentView: View {
             Spacer(minLength: 8)
 
             ShutterButton(
-                isBusy: isCapturing,
+                isBusy: isCapturing && !isBurstHolding,
                 timerCountdown: timerCountdown,
                 longExposureProgress: camera.isLongExposureCapturing
                     ? camera.longExposureProgress
                     : nil,
                 allowCancelWhileBusy: camera.isLongExposureCapturing,
-                compact: compact
+                compact: compact,
+                onBurstStart: { beginBurstHold() },
+                onBurstEnd: { endBurstHold() }
             ) {
+                if burstConsumedTap {
+                    burstConsumedTap = false
+                    endBurstHold()
+                    return
+                }
                 handleCapture()
             }
             .zIndex(2)
@@ -1480,13 +1692,20 @@ struct ContentView: View {
                 Spacer(minLength: 8)
 
                 ShutterButton(
-                    isBusy: isCapturing,
+                    isBusy: isCapturing && !isBurstHolding,
                     timerCountdown: timerCountdown,
                     longExposureProgress: camera.isLongExposureCapturing
                         ? camera.longExposureProgress
                         : nil,
-                    allowCancelWhileBusy: camera.isLongExposureCapturing
+                    allowCancelWhileBusy: camera.isLongExposureCapturing,
+                    onBurstStart: { beginBurstHold() },
+                    onBurstEnd: { endBurstHold() }
                 ) {
+                    if burstConsumedTap {
+                        burstConsumedTap = false
+                        endBurstHold()
+                        return
+                    }
                     handleCapture()
                 }
                 .zIndex(2)
@@ -2516,7 +2735,12 @@ struct ShutterButton: View {
     var allowCancelWhileBusy: Bool = false
     /// Landscape / short deck — slightly smaller chrome.
     var compact: Bool = false
+    /// Hold past threshold → burst (optional).
+    var onBurstStart: (() -> Void)? = nil
+    var onBurstEnd: (() -> Void)? = nil
     let action: () -> Void
+
+    @GestureState private var burstPressing = false
 
     private var isTimerArmed: Bool { timerCountdown > 0 }
     private var canCancel: Bool { isTimerArmed || allowCancelWhileBusy }
@@ -2535,11 +2759,26 @@ struct ShutterButton: View {
         .buttonStyle(ShutterPressStyle(armed: canCancel))
         // Busy blocks re-entry; timer/LE cancel stays tappable.
         .disabled(isBusy && !canCancel)
+        .simultaneousGesture(
+            LongPressGesture(minimumDuration: 0.38)
+                .updating($burstPressing) { current, state, _ in
+                    state = current
+                }
+        )
+        .onChange(of: burstPressing) { _, pressing in
+            guard onBurstStart != nil else { return }
+            if pressing {
+                onBurstStart?()
+            } else {
+                onBurstEnd?()
+            }
+        }
         .accessibilityLabel(
             isTimerArmed ? "Cancel timer"
                 : allowCancelWhileBusy ? "Cancel long exposure"
                 : "Shutter"
         )
+        .accessibilityHint(onBurstStart == nil ? "" : "Hold for burst")
     }
 }
 
