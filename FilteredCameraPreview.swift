@@ -128,8 +128,9 @@ struct FilteredCameraPreview: UIViewRepresentable {
                   let view = gestureRecognizer.view else {
                 return true
             }
+            // Bottom ~32% belongs to SwiftUI chrome (histogram / shutter / swipe).
             let y = touch.location(in: view).y
-            return y < view.bounds.height * 0.78
+            return y < view.bounds.height * 0.68
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {

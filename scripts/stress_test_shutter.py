@@ -259,7 +259,12 @@ def test_source_guards() -> None:
     check("ContentView endReceiving", "endReceiving()" in content)
     check("landscape orientations in plist", "UIInterfaceOrientationLandscapeLeft" in (ROOT / "Info.plist").read_text())
     check("shutter ButtonStyle", "ShutterPressStyle" in content)
-    check("bottomDeckPullGap", "bottomDeckPullGap" in content)
+    check(
+        "collapsed dock swipe + shutter z-order",
+        "collapsedBottomOverlay" in content
+        and ".simultaneousGesture(bottomDeckSwipe)" in content
+        and "Above histogram so shutter" in content,
+    )
     check("comic fallback", "func applyToon" in (ROOT / "LensFXEngine.swift").read_text())
     check("film grain bake", "func applyFilmGrain" in cam)
     # Preview intentionally skips CineStill bloom (perf); still bake keeps it.

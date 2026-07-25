@@ -347,20 +347,9 @@ struct ContentView: View {
                             .padding(.horizontal, effectiveBottomCollapsed ? 6 : DS.pageMargin)
 
                         if effectiveBottomCollapsed {
-                            collapsedBottomOverlay(safeBottom: safeBottom, compact: isLandscape)
-                                // Fill the finder and pin chrome to the bottom edge —
-                                // without this the shutter can float mid-frame.
-                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                                .transition(
-                                    .asymmetric(
-                                        insertion: .opacity.combined(with: .offset(y: 14)),
-                                        removal: .opacity.combined(with: .offset(y: 16))
-                                    )
-                                )
-                                .zIndex(1)
-
-                            // Glass histogram ON TOP of the fade, ABOVE the shutter deck —
-                            // bottom-aligned overlay only (not a full-frame VStack hit sink).
+                            // Histogram BELOW shutter in z-order. Never put contentShape
+                            // on the bottom-padded frame — that invisible pad sat on top
+                            // of the shutter and ate every tap.
                             RefractiveGlassInfoBar(
                                 iso: isoValue,
                                 shutterSpeed: shutterSpeeds[shutterSpeedIndex],
@@ -378,14 +367,13 @@ struct ContentView: View {
                                 onReturnToAuto: { returnToAuto() }
                             )
                             .padding(.horizontal, isLandscape ? 10 : 14)
+                            .simultaneousGesture(bottomDeckSwipe)
                             .padding(.bottom, CollapsedChrome.histogramBottomPad(
                                 safeBottom: safeBottom,
                                 deckHeight: isLandscape
                                     ? CollapsedChrome.landscapeDeckHeight
                                     : CollapsedChrome.deckHeight
                             ))
-                            .contentShape(Rectangle())
-                            .simultaneousGesture(bottomDeckSwipe)
                             .transition(
                                 .asymmetric(
                                     insertion: .opacity.combined(with: .offset(y: 10)),
@@ -393,6 +381,19 @@ struct ContentView: View {
                                 )
                             )
                             .zIndex(2)
+
+                            collapsedBottomOverlay(safeBottom: safeBottom, compact: isLandscape)
+                                // Fill the finder and pin chrome to the bottom edge —
+                                // without this the shutter can float mid-frame.
+                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                                .transition(
+                                    .asymmetric(
+                                        insertion: .opacity.combined(with: .offset(y: 14)),
+                                        removal: .opacity.combined(with: .offset(y: 16))
+                                    )
+                                )
+                                // Above histogram so shutter / deck win taps + swipes.
+                                .zIndex(3)
                         }
 
                         // Film / Lens FX / aspect ALWAYS above fade + histogram so they stay tappable
@@ -426,8 +427,8 @@ struct ContentView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .layoutPriority(1)
-                    // Chip as overlay so it does NOT expand into a full-screen hit sink
-                    // (a maxWidth/maxHeight Button was eating shutter taps + deck swipes).
+                    // Chip as overlay. Use offset (not outer padding) — padding on a
+                    // Button expands its hit box and was covering the shutter again.
                     .overlay(alignment: .bottomLeading) {
                         Button {
                             Haptics.click()
@@ -442,8 +443,11 @@ struct ContentView: View {
                                 .background(Capsule().fill(Color.black.opacity(0.45)))
                         }
                         .buttonStyle(.plain)
-                        .padding(.leading, effectiveBottomCollapsed ? 20 : 24)
-                        .padding(.bottom, effectiveBottomCollapsed ? 100 : 16)
+                        .fixedSize()
+                        .offset(
+                            x: effectiveBottomCollapsed ? 20 : 24,
+                            y: effectiveBottomCollapsed ? -100 : -16
+                        )
                     }
 
                     if !effectiveBottomCollapsed {
@@ -1006,9 +1010,8 @@ struct ContentView: View {
                         .padding(.horizontal, 8)
                         // Keep clear of the viewfinder bottom edge / swipe strip so it
                         // never reads as overlapping the expanded shutter row below.
-                        .padding(.bottom, CollapsedChrome.expandedHistogramBottomPad)
-                        .contentShape(Rectangle())
                         .simultaneousGesture(bottomDeckSwipe)
+                        .padding(.bottom, CollapsedChrome.expandedHistogramBottomPad)
                     }
                     .zIndex(5)
                 }
@@ -1113,11 +1116,11 @@ struct ContentView: View {
 
     /// Bottom deck: swipe down collapses, swipe up expands.
     private var bottomDeckSwipe: some Gesture {
-        DragGesture(minimumDistance: 10, coordinateSpace: .local)
+        DragGesture(minimumDistance: 8, coordinateSpace: .local)
             .onChanged { value in
                 let dy = value.translation.height
                 let dx = value.translation.width
-                guard abs(dy) > abs(dx) * 0.7 else { return }
+                guard abs(dy) > abs(dx) * 0.55 else { return }
                 // Use visible collapsed state (landscape forces compact chrome).
                 let collapsed = bottomCollapsed
                 if collapsed {
@@ -1131,19 +1134,20 @@ struct ContentView: View {
                 let dx = value.translation.width
                 let predicted = value.predictedEndTranslation.height
                 let effective: CGFloat = {
-                    guard abs(dy) > 10, abs(predicted) > abs(dy) else { return dy }
+                    guard abs(dy) > 8, abs(predicted) > abs(dy) else { return dy }
                     return predicted
                 }()
 
                 let committedDrag = bottomDeckDrag
                 withAnimation(deckCollapseSpring) {
                     bottomDeckDrag = 0
-                    guard abs(effective) > abs(dx) * 0.65 else { return }
+                    guard abs(effective) > abs(dx) * 0.5 else { return }
                     if bottomCollapsed {
-                        if effective < -20 || committedDrag < -18 {
+                        // Swipe up (negative) expands out of fullscreen finder.
+                        if effective < -14 || committedDrag < -12 {
                             bottomCollapsed = false
                         }
-                    } else if effective > 24 || committedDrag > 22 {
+                    } else if effective > 18 || committedDrag > 16 {
                         bottomCollapsed = true
                     }
                 }

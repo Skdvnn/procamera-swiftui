@@ -58,34 +58,36 @@ struct ViewfinderOverlay: View {
     @State private var showRecipeMenu = false
 
     var body: some View {
-        // Decorative layer never steals focus/EV; chrome is corner overlays only.
-        ZStack {
-            GeometryReader { geo in
-                ZStack {
-                    // Grain only when a film stock is active — matches still bake.
-                    if filmFilter != .none {
-                        FilmGrainOverlay()
-                            .opacity(0.32)
-                    }
+        // Decorative layer never steals focus/EV/shutter; chrome is corner overlays only.
+        // Color.clear (no contentShape) lets taps fall through to the shutter dock.
+        Color.clear
+            .overlay {
+                GeometryReader { geo in
+                    ZStack {
+                        // Grain only when a film stock is active — matches still bake.
+                        if filmFilter != .none {
+                            FilmGrainOverlay()
+                                .opacity(0.32)
+                        }
 
-                    if lensFX == .vhs {
-                        ScanlineShaderOverlay()
-                    }
+                        if lensFX == .vhs {
+                            ScanlineShaderOverlay()
+                        }
 
-                    CenterFocusBrackets()
-                        .position(x: geo.size.width / 2, y: geo.size.height / 2)
+                        CenterFocusBrackets()
+                            .position(x: geo.size.width / 2, y: geo.size.height / 2)
 
-                    if showGrid {
-                        GridLines()
-                    }
+                        if showGrid {
+                            GridLines()
+                        }
 
-                    if aspectRatio != .full {
-                        AspectRatioMask(mode: aspectRatio, size: geo.size)
+                        if aspectRatio != .full {
+                            AspectRatioMask(mode: aspectRatio, size: geo.size)
+                        }
                     }
                 }
+                .allowsHitTesting(false)
             }
-            .allowsHitTesting(false)
-        }
         .overlay(alignment: .topLeading) {
             VStack(spacing: 8) {
                 chromeButton {
