@@ -383,7 +383,7 @@ def test_source_guards() -> None:
     check("ShutterMotion curves", "enum ShutterMotion" in content and "static let deck" in content)
     check("no VStack deck .animation on Metal tree", ".animation(deckCollapseSpring" not in content)
     check("Metal preview freezes animation", ".transaction { $0.animation = nil }" in content)
-    check("picker local entrance", "struct PickerEntrance" in (ROOT / "ViewfinderOverlay.swift").read_text())
+    check("no picker entrance over Metal", "struct PickerEntrance" not in (ROOT / "ViewfinderOverlay.swift").read_text())
     check("deck uses ShutterMotion", "withAnimation(ShutterMotion.deck)" in content)
     check("flash opacity wash", "opacity(showFlash ? 0.92 : 0)" in content)
     check("scrub no bounce spring", "withAnimation(ShutterMotion.scrub)" in content)
@@ -494,7 +494,7 @@ def test_source_guards() -> None:
     check("CloudKit found lock", "NSLock()" in (ROOT / "CloudBooks.swift").read_text() and "found.append" in (ROOT / "CloudBooks.swift").read_text())
     check("thumb cache limits", "thumbCache.countLimit" in (ROOT / "PhotoBook.swift").read_text())
     check("loupeSessionActive still present", "loupeSessionActive" in (ROOT / "CullGallery.swift").read_text())
-    check("ModeControl 44pt target", "minWidth: 44, minHeight: 44" in content)
+    check("ModeControl tight column", "frame(width: 36, height: 48)" in content)
 
     # Build 53 — full-surface fixes
     check("timer generation cancel", "timerGeneration" in content and "runCountdown(expected:" in content)
@@ -509,7 +509,7 @@ def test_source_guards() -> None:
     check("STACK accumulate autoreleasepool", "autoreleasepool" in cam[cam.find("accumulationFrame"):cam.find("accumulationFrame")+500] or "autoreleasepool" in cam)
     check("clearStickyTouch API", "func clearStickyTouch" in (ROOT / "LensFXEngine.swift").read_text())
     check("Night chip not full-width hit", ".frame(maxWidth: .infinity" not in content.split("if nightAssistVisible")[1].split("if let cameraError")[0])
-    check("ModeControl minWidth 200", "minWidth: 200" in content)
+    check("ModeControl wing 160", ".frame(width: 160, height: 48, alignment: .trailing)" in content)
     check("FinishDone onDismiss handled", "handledFinishDone" in (ROOT / "CullGallery.swift").read_text())
     check("loupeSessionActive cleared only by cull drag", "Keep loupeSessionActive" in (ROOT / "CullGallery.swift").read_text() or "only cull drag onEnded clears" in (ROOT / "CullGallery.swift").read_text())
     check("contact loupeArmed", "loupedShotID" in (ROOT / "CullGallery.swift").read_text())
@@ -524,6 +524,18 @@ def test_source_guards() -> None:
     check("volume prime ignoring", "ignoring = true" in (ROOT / "LookRecipes.swift").read_text())
     check("dial highPriorityGesture", "highPriorityGesture" in (ROOT / "AnalogGaugeView.swift").read_text())
     check("burst nil retries raised", "burstMaxNilRetries = 60" in content)
+
+    # Build 54 — layout polish + crash fix
+    check("peaking in FX picker", "peakingRow" in (ROOT / "ViewfinderOverlay.swift").read_text() and "PEAKING" in (ROOT / "ViewfinderOverlay.swift").read_text())
+    check("no peaking chrome toggle", "plus.viewfinder" not in (ROOT / "ViewfinderOverlay.swift").read_text())
+    check("format wing balance", ".frame(width: 160, alignment: .leading)" in content)
+    check("scrubber white majors only", "yellow is reserved for the center indicator" in content)
+    check("scrubber value spring", "scaleEffect(isScrolling ? 1.12" in content)
+    check("shutter no press brightness", "No brightness shift" in content)
+    check("shutter matte collar", "matte steel, not chrome" in content)
+    check("metal shader no cool blue", "Neutral steel cast" in (ROOT / "Shaders.metal").read_text())
+    check("info bar L overlay hit", 'Text("L")' in content and "frame(width: 44, height: 36)" in content)
+
 
 
 
@@ -604,11 +616,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 53", m is not None and int(ver) >= 53, ver)
+    check("Info.plist build >= 54", m is not None and int(ver) >= 54, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 53+", any(v >= 53 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 54+", any(v >= 54 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

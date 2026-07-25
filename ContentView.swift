@@ -1644,15 +1644,18 @@ struct ContentView: View {
 
             Spacer().frame(height: 6)
 
-            // ROW 3: Flash | Format | Mode icons+buttons
+            // ROW 3: Flash | Format (centered on shutter) | Mode icons
             HStack(alignment: .center, spacing: 0) {
-                FlashButtonPill(flashMode: camera.flashMode) {
-                    Haptics.click()
-                    camera.cycleFlash()
+                HStack {
+                    FlashButtonPill(flashMode: camera.flashMode) {
+                        Haptics.click()
+                        camera.cycleFlash()
+                    }
+                    Spacer(minLength: 0)
                 }
-                .frame(width: 88)
+                .frame(width: 160, alignment: .leading)
 
-                Spacer()
+                Spacer(minLength: 0)
 
                 FormatTogglePill(format: $captureFormat) { newFormat in
                     captureFormatRaw = newFormat.rawValue
@@ -1663,9 +1666,9 @@ struct ContentView: View {
                     }
                 }
 
-                Spacer()
+                Spacer(minLength: 0)
 
-                HStack(spacing: 8) {
+                HStack(spacing: 4) {
                     ModeControl(icon: "gearshape", isActive: showSettings) {
                         Haptics.click()
                         showSettings = true
@@ -1694,7 +1697,7 @@ struct ContentView: View {
                         showGrid.toggle()
                     }
                 }
-                .frame(minWidth: 200, minHeight: 48)
+                .frame(width: 160, height: 48, alignment: .trailing)
             }
             .padding(.horizontal, DS.pageMargin)
             .contentShape(Rectangle())
@@ -2200,8 +2203,11 @@ struct RefractiveGlassInfoBar: View {
                                     .fill(isLocked ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white)
                             )
                             .foregroundColor(.black)
-                            .frame(minWidth: 44, minHeight: 36)
-                            .contentShape(Rectangle())
+                            .overlay {
+                                Color.clear
+                                    .frame(width: 44, height: 36)
+                                    .contentShape(Rectangle())
+                            }
                     }
                     .buttonStyle(.plain)
                     Text(aspectLabel)
@@ -2237,8 +2243,11 @@ struct RefractiveGlassInfoBar: View {
                                     .stroke(isManualExposure ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white, lineWidth: 0.5)
                             )
                             .foregroundColor(isManualExposure ? Color(red: 1.0, green: 0.85, blue: 0.35) : .white)
-                            .frame(minWidth: 44, minHeight: 36)
-                            .contentShape(Rectangle())
+                            .overlay {
+                                Color.clear
+                                    .frame(width: 44, height: 36)
+                                    .contentShape(Rectangle())
+                            }
                     }
                     .buttonStyle(.plain)
                     Text(isManualExposure ? "ISO \(iso)" : "ISO \(iso)·A")
@@ -2250,7 +2259,7 @@ struct RefractiveGlassInfoBar: View {
             .foregroundColor(.white)
         }
         .padding(.horizontal, 10)
-        .padding(.vertical, 8)
+        .padding(.vertical, 6)
         .background(
             ZStack {
                 RoundedRectangle(cornerRadius: 8)
@@ -2437,7 +2446,7 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                     .stroke(Color(hex: "444444"), lineWidth: 0.5)
                     .padding(2)
 
-                // Tick marks — yellow majors when active
+                // Tick marks — white only; yellow is reserved for the center indicator
                 Canvas { ctx, size in
                     let usableWidth = size.width - 24
                     let spacing = usableWidth / CGFloat(max(tickCount - 1, 1))
@@ -2450,10 +2459,10 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                         let isMajor = i % 4 == 0
                         let h: CGFloat = isMajor ? 5 : 3
                         let rect = CGRect(x: x - 0.5, y: size.height - h - 4, width: 1, height: h)
-                        let color: Color = isMajor
-                            ? yellow.opacity(isScrolling ? 0.75 : 0.4)
-                            : Color.white.opacity(0.12)
-                        ctx.fill(Path(rect), with: .color(color))
+                        ctx.fill(
+                            Path(rect),
+                            with: .color(.white.opacity(isMajor ? 0.25 : 0.1))
+                        )
                     }
 
                     let indicatorHeight: CGFloat = isScrolling ? 14 : 10
@@ -2493,7 +2502,10 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                         Text(title(selection))
                             .font(.system(size: 12, weight: .bold, design: .monospaced))
                             .foregroundColor(isScrolling ? DS.accent : .white)
+                            .scaleEffect(isScrolling ? 1.12 : 1.0)
                             .contentTransition(.numericText())
+                            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: selection)
+                            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isScrolling)
 
                         if let suffix {
                             Text(suffix)
@@ -3001,10 +3013,10 @@ private struct ShutterPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             // SwiftUI travel only — Metal shader args stay constant.
+            // No brightness shift — that turned cool steel cyan/blue on press.
             .scaleEffect(configuration.isPressed ? 0.955 : 1.0)
             .offset(y: configuration.isPressed ? 1.2 : 0)
-            .brightness(configuration.isPressed ? -0.055 : 0)
-            .opacity(configuration.isPressed ? 0.96 : 1)
+            .opacity(configuration.isPressed ? 0.92 : 1)
             .shadow(
                 color: Color.black.opacity(configuration.isPressed ? 0.32 : 0.58),
                 radius: configuration.isPressed ? 1.5 : 5.5,
@@ -3048,18 +3060,17 @@ private struct ShutterButtonChrome: View {
 
     var body: some View {
         ZStack {
-            // Knurled collar
+            // Knurled collar — matte steel, not chrome
             Circle()
                 .fill(
                     AngularGradient(
                         colors: [
-                            Color(red: 0.52, green: 0.54, blue: 0.58),
-                            Color(red: 0.18, green: 0.19, blue: 0.22),
-                            Color(red: 0.46, green: 0.48, blue: 0.52),
-                            Color(red: 0.14, green: 0.15, blue: 0.18),
-                            Color(red: 0.50, green: 0.52, blue: 0.56),
-                            Color(red: 0.20, green: 0.21, blue: 0.24),
-                            Color(red: 0.52, green: 0.54, blue: 0.58)
+                            Color(red: 0.34, green: 0.35, blue: 0.37),
+                            Color(red: 0.20, green: 0.21, blue: 0.23),
+                            Color(red: 0.30, green: 0.31, blue: 0.33),
+                            Color(red: 0.17, green: 0.18, blue: 0.19),
+                            Color(red: 0.32, green: 0.33, blue: 0.35),
+                            Color(red: 0.34, green: 0.35, blue: 0.37)
                         ],
                         center: .center
                     )
@@ -3067,12 +3078,12 @@ private struct ShutterButtonChrome: View {
                 .frame(width: outer, height: outer)
                 .overlay {
                     Circle()
-                        .fill(Color(red: 0.33, green: 0.35, blue: 0.39))
+                        .fill(Color(red: 0.26, green: 0.27, blue: 0.29))
                         .colorEffect(
                             ShaderLibrary.metallicSurface(
                                 .float2(Float(outer), Float(outer)),
-                                .float(1.0),
-                                .float2(0.26, 0.14)
+                                .float(0.75),
+                                .float2(0.28, 0.22)
                             )
                         )
                         .clipShape(Circle())
@@ -3083,14 +3094,14 @@ private struct ShutterButtonChrome: View {
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.62),
-                                    Color.white.opacity(0.08),
-                                    Color.black.opacity(0.75)
+                                    Color.white.opacity(0.22),
+                                    Color.white.opacity(0.04),
+                                    Color.black.opacity(0.65)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
-                            lineWidth: compact ? 1.15 : 1.4
+                            lineWidth: compact ? 1.1 : 1.2
                         )
                 }
                 .overlay {
@@ -3124,52 +3135,35 @@ private struct ShutterButtonChrome: View {
 
             ZStack {
                 Circle()
-                    .fill(Color(red: 0.30, green: 0.32, blue: 0.36))
+                    .fill(Color(red: 0.24, green: 0.25, blue: 0.27))
                     .frame(width: face, height: face)
                     .colorEffect(
                         ShaderLibrary.metallicSurface(
                             .float2(Float(face), Float(face)),
-                            .float(0.95),
-                            .float2(0.28, 0.20)
+                            .float(0.70),
+                            .float2(0.32, 0.28)
                         )
                     )
                     .clipShape(Circle())
 
+                // Soft sheen only — no plusLighter chrome hotspot (reads blue on press)
                 Circle()
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.28),
-                                Color.clear,
-                                Color.black.opacity(0.24)
-                            ],
-                            startPoint: UnitPoint(x: 0.22, y: 0.12),
-                            endPoint: UnitPoint(x: 0.85, y: 0.92)
-                        )
-                    )
-                    .frame(width: face, height: face)
-                    .blendMode(.softLight)
-
-                Ellipse()
                     .fill(
                         RadialGradient(
                             colors: [
-                                Color.white.opacity(0.18),
+                                Color.white.opacity(isBusy ? 0.03 : 0.08),
                                 Color.clear
                             ],
-                            center: UnitPoint(x: 0.35, y: 0.28),
+                            center: UnitPoint(x: 0.34, y: 0.30),
                             startRadius: 0,
-                            endRadius: face * 0.3
+                            endRadius: face * 0.5
                         )
                     )
-                    .frame(width: face * 0.6, height: face * 0.37)
-                    .offset(x: -face * 0.07, y: -face * 0.13)
-                    .blendMode(.plusLighter)
-                    .opacity(isBusy ? 0.25 : 0.55)
+                    .frame(width: face, height: face)
 
                 ForEach(0..<4, id: \.self) { i in
                     Circle()
-                        .stroke(Color.white.opacity(0.05), lineWidth: 0.55)
+                        .stroke(Color.white.opacity(0.035), lineWidth: 0.55)
                         .frame(
                             width: face - 10 - CGFloat(i) * (face * 0.15),
                             height: face - 10 - CGFloat(i) * (face * 0.15)
@@ -3180,14 +3174,14 @@ private struct ShutterButtonChrome: View {
                     .stroke(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(0.34),
+                                Color.white.opacity(0.16),
                                 Color.clear,
-                                Color.black.opacity(0.48)
+                                Color.black.opacity(0.45)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         ),
-                        lineWidth: 1
+                        lineWidth: 0.9
                     )
                     .frame(width: face - 2, height: face - 2)
 
@@ -3403,11 +3397,11 @@ struct ModeControl: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 8) {
+            VStack(spacing: 6) {
                 ModeIcon(icon: icon, isActive: isActive)
                 ModeButtonChrome(isActive: isActive)
             }
-            .frame(minWidth: 44, minHeight: 44)
+            .frame(width: 36, height: 48)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

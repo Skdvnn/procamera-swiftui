@@ -154,19 +154,6 @@ struct ViewfinderOverlay: View {
                                 .foregroundColor(.white.opacity(0.85))
                         }
 
-                        chromeButton {
-                            var t = Transaction()
-                            t.disablesAnimations = true
-                            withTransaction(t) {
-                                focusPeaking.toggle()
-                            }
-                        } label: {
-                            Image(systemName: "plus.viewfinder")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(focusPeaking
-                                                 ? Color(red: 0.35, green: 0.95, blue: 0.45)
-                                                 : .white.opacity(0.8))
-                        }
                     }
                     .padding(16)
 
@@ -200,8 +187,10 @@ struct ViewfinderOverlay: View {
                         } label: {
                             Image(systemName: "water.waves")
                                 .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(showFXMenu || lensFX != .none
-                                                 ? Color(red: 0.55, green: 0.88, blue: 0.95)
+                                .foregroundColor(showFXMenu || lensFX != .none || focusPeaking
+                                                 ? (focusPeaking && lensFX == .none && !showFXMenu
+                                                    ? Color(red: 0.35, green: 0.95, blue: 0.45)
+                                                    : Color(red: 0.55, green: 0.88, blue: 0.95))
                                                  : .white.opacity(0.8))
                         }
 
@@ -251,18 +240,17 @@ struct ViewfinderOverlay: View {
                     onSaveLook: { onSaveLook?() },
                     onFilmApplied: onFilmApplied
                 )
-                .modifier(PickerEntrance())
-                .padding(.trailing, compactChrome ? 10 : 16)
+                                .padding(.trailing, compactChrome ? 10 : 16)
                 .padding(.top, compactChrome ? 48 : 100)
             }
 
             if showFXMenu {
                 LensFXPicker(
                     selectedFX: $lensFX,
+                    focusPeaking: $focusPeaking,
                     isPresented: $showFXMenu
                 )
-                .modifier(PickerEntrance())
-                .padding(.trailing, compactChrome ? 10 : 16)
+                                .padding(.trailing, compactChrome ? 10 : 16)
                 .padding(.top, compactChrome ? 72 : 140)
             }
 
@@ -274,27 +262,12 @@ struct ViewfinderOverlay: View {
                     isPresented: $showRecipeMenu,
                     onSaveCurrent: { onSaveLook?() }
                 )
-                .modifier(PickerEntrance())
-                .padding(.trailing, compactChrome ? 10 : 16)
+                                .padding(.trailing, compactChrome ? 10 : 16)
                 .padding(.top, compactChrome ? 96 : 180)
             }
         }
     }
 
-    /// Soft picker entrance scoped to the picker root — never `withAnimation` on
-    /// the overlay ZStack (that walks Metal shutter chrome).
-    private struct PickerEntrance: ViewModifier {
-        @State private var revealed = false
-
-        func body(content: Content) -> some View {
-            content
-                .opacity(revealed ? 1 : 0)
-                .offset(y: revealed ? 0 : -8)
-                .scaleEffect(revealed ? 1 : 0.98, anchor: .topTrailing)
-                .onAppear { revealed = true }
-                .animation(ShutterMotion.picker, value: revealed)
-        }
-    }
 
     private func chromeButton<Label: View>(
         action: @escaping () -> Void,
@@ -653,8 +626,7 @@ struct LeicaFilmPicker: View {
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
 
     var body: some View {
-        // Entrance motion lives on PickerEntrance (local opacity/offset only).
-        // Do not wrap apply/dismiss in withAnimation — that walks Metal chrome.
+        // No entrance animation — animating picker insert walks Metal shutter chrome.
         VStack(spacing: 0) {
             HStack {
                 Text("LOOKS")
@@ -848,9 +820,11 @@ private extension View {
 // MARK: - Lens FX Picker (warp shaders vs look shaders)
 struct LensFXPicker: View {
     @Binding var selectedFX: LensFXMode
+    @Binding var focusPeaking: Bool
     @Binding var isPresented: Bool
 
     private let accent = Color(red: 0.55, green: 0.88, blue: 0.95)
+    private let peakAccent = Color(red: 0.35, green: 0.95, blue: 0.45)
 
     /// Stable lists — avoid rebuilding ForEach identity every body pass.
     private static let warpCases: [LensFXMode] = LensFXMode.pickerCases.filter {
@@ -861,7 +835,7 @@ struct LensFXPicker: View {
     }
 
     var body: some View {
-        // Apply/dismiss stay transaction-frozen; entrance is PickerEntrance only.
+        // Apply/dismiss stay transaction-frozen — no entrance animation over Metal.
         VStack(spacing: 0) {
             HStack {
                 Text("LENS FX")
@@ -883,6 +857,9 @@ struct LensFXPicker: View {
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
+                    sectionHeader("AIDS")
+                    peakingRow
+
                     sectionHeader("WARP")
                     ForEach(Self.warpCases, id: \.self) { fx in
                         fxRow(fx)
@@ -912,6 +889,34 @@ struct LensFXPicker: View {
         .padding(.horizontal, 14)
         .padding(.top, 8)
         .padding(.bottom, 2)
+    }
+
+    private var peakingRow: some View {
+        Button(action: {
+            VFHaptics.click()
+            focusPeaking.toggle()
+        }) {
+            HStack(spacing: 8) {
+                Text(focusPeaking ? ">" : " ")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundColor(peakAccent)
+                    .frame(width: 12)
+
+                Text("PEAKING")
+                    .font(.system(size: 11, weight: focusPeaking ? .semibold : .regular, design: .monospaced))
+                    .foregroundColor(focusPeaking ? .white : .white.opacity(0.6))
+
+                Spacer()
+
+                Text(focusPeaking ? "ON" : "OFF")
+                    .font(.system(size: 9, weight: .regular, design: .monospaced))
+                    .foregroundColor(focusPeaking ? peakAccent : .white.opacity(0.3))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(focusPeaking ? Color.white.opacity(0.05) : Color.clear)
+        }
+        .buttonStyle(.plain)
     }
 
     private func fxRow(_ fx: LensFXMode) -> some View {
