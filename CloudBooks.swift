@@ -21,7 +21,13 @@ final class CloudBookManager: ObservableObject {
     @Published var isUploading = false
     @Published var lastError: String?
 
-    private var zoneReady = false
+    private let zoneLock = NSLock()
+    private var _zoneReady = false
+    private var zoneReady: Bool {
+        get { zoneLock.lock(); defer { zoneLock.unlock() }; return _zoneReady }
+        set { zoneLock.lock(); _zoneReady = newValue; zoneLock.unlock() }
+    }
+    private var uploadGeneration: Int = 0
 
     struct SharedBookRef: Identifiable, Equatable {
         let recordID: CKRecord.ID
@@ -110,6 +116,8 @@ final class CloudBookManager: ObservableObject {
         let shots = store.shots(in: book)
         guard !shots.isEmpty else { return }
 
+        uploadGeneration &+= 1
+        let gen = uploadGeneration
         DispatchQueue.main.async { self.isUploading = true }
 
         let bookRecord = CKRecord(recordType: "FieldBook", recordID: bookRecordID)
@@ -124,14 +132,16 @@ final class CloudBookManager: ObservableObject {
             return record
         }
 
-        uploadInChunks(records, to: privateDB, chunkSize: 4) {
+        uploadInChunks(records, to: privateDB, chunkSize: 4, generation: gen) {
             DispatchQueue.main.async { self.isUploading = false }
         }
     }
 
     private func uploadInChunks(_ records: [CKRecord], to database: CKDatabase,
-                                chunkSize: Int, completion: @escaping () -> Void) {
+                                chunkSize: Int, generation: Int, completion: @escaping () -> Void) {
         guard !records.isEmpty else { completion(); return }
+        // Stop if a newer upload superseded us.
+        guard generation == uploadGeneration else { completion(); return }
 
         let chunk = Array(records.prefix(chunkSize))
         let rest = Array(records.dropFirst(chunkSize))
@@ -140,14 +150,19 @@ final class CloudBookManager: ObservableObject {
         op.savePolicy = .ifServerRecordUnchanged
         op.qualityOfService = .userInitiated
         op.modifyRecordsResultBlock = { [weak self] result in
+            guard let self else { completion(); return }
             if case .failure(let error) = result {
-                // Existing records land here (server record unchanged policy) - fine.
-                // Surface anything that isn't a partial failure.
-                if let ckError = error as? CKError, ckError.code != .partialFailure {
-                    DispatchQueue.main.async { self?.lastError = error.localizedDescription }
+                if let ckError = error as? CKError {
+                    // Partial failures (existing records) are expected — continue.
+                    if ckError.code != .partialFailure {
+                        // Hard failure — surface and abort.
+                        DispatchQueue.main.async { self.lastError = error.localizedDescription }
+                        completion()
+                        return
+                    }
                 }
             }
-            self?.uploadInChunks(rest, to: database, chunkSize: chunkSize, completion: completion)
+            self.uploadInChunks(rest, to: database, chunkSize: chunkSize, generation: generation, completion: completion)
         }
         database.add(op)
     }
@@ -271,10 +286,9 @@ final class CloudBookManager: ObservableObject {
             focalLength: record["focalLength"] as? Int ?? 24
         )
 
-        // Read the asset immediately - CloudKit cleans up asset temp files
+        // Read the thumb asset only — never fall back to full image for list display.
         var thumb: UIImage?
-        if let asset = (record["thumb"] as? CKAsset) ?? (record["image"] as? CKAsset),
-           let url = asset.fileURL {
+        if let asset = record["thumb"] as? CKAsset, let url = asset.fileURL {
             thumb = UIImage(contentsOfFile: url.path)
         }
 

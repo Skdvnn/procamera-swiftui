@@ -93,7 +93,11 @@ final class FrameMarkStore: ObservableObject {
     private func load() {
         guard let data = try? Data(contentsOf: url),
               let list = try? JSONDecoder().decode([FrameMark].self, from: data) else { return }
-        marks = Dictionary(uniqueKeysWithValues: list.map { ($0.shotID, $0) })
+        // Use uniquingKeysWith to handle corrupt JSON with duplicate shot IDs —
+        // keep the most recently marked entry.
+        marks = Dictionary(list.map { ($0.shotID, $0) }, uniquingKeysWith: { lhs, rhs in
+            lhs.markedAt > rhs.markedAt ? lhs : rhs
+        })
     }
 }
 
@@ -278,9 +282,14 @@ enum PhotosLibraryService {
     }
 
     static func deleteAssets(localIdentifiers: [String], completion: @escaping (Bool) -> Void) {
+        guard !localIdentifiers.isEmpty else {
+            completion(true)
+            return
+        }
         let assets = PHAsset.fetchAssets(withLocalIdentifiers: localIdentifiers, options: nil)
         guard assets.count > 0 else {
-            completion(true)
+            // Stale identifiers — assets already gone; treat as success only if all were expected to exist.
+            completion(false)
             return
         }
         PHPhotoLibrary.shared().performChanges({

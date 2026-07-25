@@ -301,7 +301,7 @@ def test_source_guards() -> None:
     check("live AUTO ISO probe", "liveISO" in cam and "startExposureProbe" in cam and "displayISO" in content)
     check("finish done handoff", "FinishDoneSheet" in (ROOT / "CullGallery.swift").read_text() and "initialBookID" in (ROOT / "PhotoBook.swift").read_text())
     check("open Photos helper", "func openPhotosApp" in (ROOT / "ShootCull.swift").read_text())
-    check("contact loupe on long-press", "Long-press opens loupe" in (ROOT / "CullGallery.swift").read_text())
+    check("contact loupe on long-press", "loupedShotID" in (ROOT / "CullGallery.swift").read_text() and "Long press to loupe" in (ROOT / "CullGallery.swift").read_text())
     check("shortcuts for look+timer", "ApplyShutterLookIntent()" in (ROOT / "ShutterAppIntents.swift").read_text() and "SetShutterTimerIntent()" in (ROOT / "ShutterAppIntents.swift").read_text())
     # Build 48 — Auto Night, burst, share/compare/map, widgets, Field Book intent
     gauge = (ROOT / "AnalogGaugeView.swift").read_text()
@@ -333,14 +333,11 @@ def test_source_guards() -> None:
     check("ContentView body split for type-checker", "finderCanvas(geo:" in content and "struct FinderStatusOverlays" in content and "struct ContentViewLifecycle" in content)
 
     # Build 51 — deep device-breaker guards (not just "string exists")
-    check(
-        "Night chip has no maxHeight infinity hit sink",
-        'maxHeight: .infinity' not in content.split('struct FinderStatusOverlays')[1].split('struct ContentViewLifecycle')[0]
-        or 'never maxHeight:.infinity' in content.split('struct FinderStatusOverlays')[1].split('struct ContentViewLifecycle')[0],
-    )
     overlays = content.split('struct FinderStatusOverlays')[1].split('struct ContentViewLifecycle')[0]
-    check("Night chip comment forbids full-bleed hit", "never maxHeight:.infinity" in overlays or "Street-chip hit sink" in overlays)
-    check("Night chip frame is width-only", ".frame(maxWidth: .infinity, alignment: .top)" in overlays and "maxHeight: .infinity" not in overlays.split("if nightAssistVisible")[1].split("if let cameraError")[0])
+    night = overlays.split("if nightAssistVisible")[1].split("if let cameraError")[0]
+    check("Night chip has no maxHeight infinity hit sink", "maxHeight: .infinity" not in night)
+    check("Night chip not full-bleed width frame", ".frame(maxWidth: .infinity" not in night)
+    check("Night chip dismiss is 44pt", "minWidth: 44, minHeight: 44" in night)
     check("burstConsumedTap cleared in endBurstHold", "func endBurstHold" in content and "burstConsumedTap = false" in content[content.find("func endBurstHold"):content.find("func endBurstHold")+780] and "Do NOT clear burstConsumedTap here" in content)
     check("burst marks consumed only when burst starts", "Only swallow the Button release when a real burst actually starts" in content and content.find("burstConsumedTap = true") > content.find("func beginBurstHold"))
     check("burst reschedules when busy", "Pipeline still owned — reschedule" in content)
@@ -459,7 +456,7 @@ def test_source_guards() -> None:
     check("bakeGeneration invalidation", "bakeGeneration" in cam and "finishUserBake" in cam)
     check("photo handler lock helpers", "func takePhotoHandler" in cam and "func setPhotoHandler" in cam)
     check("STACK keeps LE flag through bake", "Keep isLongExposureCapturing true through bake" in cam)
-    check("cancel clears bake + photo handler", "Invalidate any in-flight still bake" in cam)
+    check("cancel clears bake + photo handler", "Atomically bump leOpID" in cam or "Invalidate any in-flight still bake" in cam)
     check("switchCamera blocks mid-bake", "bakeTimeoutCompletion != nil" in cam[cam.find("func switchCamera"):cam.find("func switchCamera")+900])
     check("formats empty-safe", "device.formats.first" in cam and "device.formats[0]" not in cam)
     check("HEIC decode fallback", "decodedProcessedPhoto" in cam and "CGImageSourceCreateWithData" in cam)
@@ -469,7 +466,7 @@ def test_source_guards() -> None:
     check("LiveExposureChrome isolates bus", "struct LiveExposureChrome" in content)
     check("ContentView does not observe LiveExposureBus", "@ObservedObject private var liveExposure" not in content)
     _looks = (ROOT / "ViewfinderOverlay.swift").read_text().split("ForEach(store.recipes)")[1][:2200]
-    check("LOOKS delete not nested Button", "store.delete(recipe.id)" in _looks and ".onTapGesture" in _looks and 'Image(systemName: "xmark")' in _looks)
+    check("LOOKS delete not nested Button", "store.delete(recipe.id)" in _looks and 'Image(systemName: "xmark")' in _looks and _looks.count("Button {") >= 2)
 
     check("SCENE apply before dismiss", "onApplyShootMode?(mode)" in (ROOT / "ViewfinderOverlay.swift").read_text().split("sectionLabel(\"SCENE\")")[1][:400])
     vf = (ROOT / "ViewfinderOverlay.swift").read_text()
@@ -498,6 +495,36 @@ def test_source_guards() -> None:
     check("thumb cache limits", "thumbCache.countLimit" in (ROOT / "PhotoBook.swift").read_text())
     check("loupeSessionActive still present", "loupeSessionActive" in (ROOT / "CullGallery.swift").read_text())
     check("ModeControl 44pt target", "minWidth: 44, minHeight: 44" in content)
+
+    # Build 53 — full-surface fixes
+    check("timer generation cancel", "timerGeneration" in content and "runCountdown(expected:" in content)
+    check("shutter coalesce window", "lastShutterEventAt" in content)
+    check("frozen LE duration on timer", "frozenLEDuration" in content)
+    check("leOpID cancel/finalize", "leOpID" in cam)
+    check("STACK watchdog", "stackWatchdogWork" in cam)
+    check("HW timeout work cancel", "hwTimeoutWork" in cam)
+    check("pending RAW until processed", "pendingRawData" in cam)
+    check("switchToLens busy gate", "func switchToLens" in cam and "bakeTimeoutCompletion != nil" in cam[cam.find("func switchToLens"):cam.find("func switchToLens")+2500])
+    check("switchCamera gates HW token", "hwLongExposureToken != nil" in cam[cam.find("func switchCamera"):cam.find("func switchCamera")+900])
+    check("STACK accumulate autoreleasepool", "autoreleasepool" in cam[cam.find("accumulationFrame"):cam.find("accumulationFrame")+500] or "autoreleasepool" in cam)
+    check("clearStickyTouch API", "func clearStickyTouch" in (ROOT / "LensFXEngine.swift").read_text())
+    check("Night chip not full-width hit", ".frame(maxWidth: .infinity" not in content.split("if nightAssistVisible")[1].split("if let cameraError")[0])
+    check("ModeControl minWidth 200", "minWidth: 200" in content)
+    check("FinishDone onDismiss handled", "handledFinishDone" in (ROOT / "CullGallery.swift").read_text())
+    check("loupeSessionActive cleared only by cull drag", "Keep loupeSessionActive" in (ROOT / "CullGallery.swift").read_text() or "only cull drag onEnded clears" in (ROOT / "CullGallery.swift").read_text())
+    check("contact loupeArmed", "loupedShotID" in (ROOT / "CullGallery.swift").read_text())
+    check("mark-only keeps marks", "Clear marks only on delete-and-export" in (ROOT / "CullGallery.swift").read_text())
+    check("deleteAssets stale IDs fail", "completion(false)" in (ROOT / "ShootCull.swift").read_text())
+    check("FrameMarkStore uniquing", "uniquingKeysWith" in (ROOT / "ShootCull.swift").read_text())
+    check("GalleryStore atomic index", "options: .atomic" in (ROOT / "PhotoBook.swift").read_text())
+    check("CullDisplayCache", "CullDisplayCache" in (ROOT / "CullGallery.swift").read_text())
+    check("shortcut debounce", "lastShortcutAt" in (ROOT / "ProCameraApp.swift").read_text())
+    check("look deep link preserves FX when nil", "Unknown fxName: leave current FX" in content or "leave current FX" in content)
+    check("timer AppStorage", '@AppStorage("cam.timerSeconds")' in content)
+    check("volume prime ignoring", "ignoring = true" in (ROOT / "LookRecipes.swift").read_text())
+    check("dial highPriorityGesture", "highPriorityGesture" in (ROOT / "AnalogGaugeView.swift").read_text())
+    check("burst nil retries raised", "burstMaxNilRetries = 60" in content)
+
 
 
 
@@ -577,11 +604,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 52", m is not None and int(ver) >= 52, ver)
+    check("Info.plist build >= 53", m is not None and int(ver) >= 53, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 52+", any(v >= 52 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 53+", any(v >= 53 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

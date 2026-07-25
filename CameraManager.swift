@@ -147,6 +147,14 @@ class CameraManager: NSObject, ObservableObject {
     private let photoStateLock = NSLock()
     /// Invalidates late HW-LE exposure callbacks after timeout/cancel.
     private var hwLongExposureToken: UUID?
+    /// Tracks the current LE operation; bumped on every new start and cancel to abort stale completions.
+    private var leOpID = UUID()
+    /// STACK watchdog: fires targetDuration+10 s after arm; finalizes or cancels if still running.
+    private var stackWatchdogWork: DispatchWorkItem?
+    /// HW LE timeout work item — stored so cancelLongExposure can suppress it.
+    private var hwTimeoutWork: DispatchWorkItem?
+    /// Held after RAW half arrives; saved only when processed half succeeds; discarded on failure.
+    private var pendingRawData: Data?
     /// Remembered WB / macro so lens+flip can reapply.
     private var lockedWhiteBalanceMode: Int = 0
     private var macroEnabledFlag = false
@@ -409,11 +417,11 @@ class CameraManager: NSObject, ObservableObject {
             self.bakeGeneration = UUID()
             let done = self.bakeTimeoutCompletion
             self.bakeTimeoutCompletion = nil
+            self.longExposureCompletion = nil
             self.photoStateLock.unlock()
             _ = self.takePhotoHandler()
             self.setBakingStill(false)
             self.isFinalizingLongExposure = false
-            self.longExposureCompletion = nil
             DispatchQueue.main.async {
                 self.isLongExposureCapturing = false
                 self.longExposureProgress = 0
@@ -642,12 +650,13 @@ class CameraManager: NSObject, ObservableObject {
         // and leaves ContentView isCapturing stuck true.
         let (_, _, _, _, _, baking) = currentPipelineSelection()
         if peekPhotoHandler() || baking || bakeTimeoutCompletion != nil
-            || isAccumulatingLongExposure || isLongExposureCapturing || isFinalizingLongExposure {
+            || isAccumulatingLongExposure || isFinalizingLongExposure || isLongExposureCapturing
+            || hwLongExposureToken != nil || longExposureCompletion != nil {
             DispatchQueue.main.async { completion(nil) }
             return
         }
         guard let device = videoDeviceInput?.device else {
-            completion(nil)
+            DispatchQueue.main.async { completion(nil) }
             return
         }
 
@@ -663,16 +672,20 @@ class CameraManager: NSObject, ObservableObject {
         longExposureInterfaceOrientation = Self.currentInterfaceOrientation()
         longExposureWasFront = (currentCamera == .front)
 
+        // Set synchronously before returning — ContentView reads this flag immediately.
+        isLongExposureCapturing = true
+        longExposureProgress = 0.0
+
         // Get device's actual max exposure duration
         let maxHardwareDuration = CMTimeGetSeconds(device.activeFormat.maxExposureDuration)
 
         // If hardware can handle it directly, use single capture
         if durationSeconds <= maxHardwareDuration {
-            DispatchQueue.main.async { self.longExposurePathLabel = "HW" }
+            longExposurePathLabel = "HW"
             captureSingleLongExposure(duration: durationSeconds, completion: completion)
         } else {
             // Use computational long exposure (frame averaging)
-            DispatchQueue.main.async { self.longExposurePathLabel = "STACK" }
+            longExposurePathLabel = "STACK"
             captureComputationalLongExposure(targetDuration: durationSeconds, completion: completion)
         }
     }
@@ -688,27 +701,37 @@ class CameraManager: NSObject, ObservableObject {
         let captureFX = longExposureLensFX
 
         // Token so a late exposure callback can't double-complete after timeout/cancel.
+        // Assign leOpID and all lock-protected LE state atomically.
         let hwToken = UUID()
+        let op = UUID()
+        photoStateLock.lock()
+        leOpID = op
         hwLongExposureToken = hwToken
         longExposureCompletion = completion
+        photoStateLock.unlock()
 
-        DispatchQueue.main.async {
-            self.isLongExposureCapturing = true
-            self.longExposureProgress = 0.0
-        }
+        // isLongExposureCapturing / progress already set synchronously in captureLongExposure.
 
         // If the custom-exposure callback never fires, don't leave the shutter stuck.
         let hwTimeout = DispatchWorkItem { [weak self] in
-            guard let self, self.hwLongExposureToken == hwToken else { return }
+            guard let self else { return }
+            self.photoStateLock.lock()
+            guard self.hwLongExposureToken == hwToken else {
+                self.photoStateLock.unlock()
+                return
+            }
             self.hwLongExposureToken = nil
             self.longExposureCompletion = nil
+            self.photoStateLock.unlock()
             print("HW long-exposure timeout — aborting")
+            self.hwTimeoutWork = nil
             self.restoreExposureAfterLongExposure()
             self.isLongExposureCapturing = false
             self.longExposureProgress = 0.0
             self.longExposurePathLabel = ""
             completion(nil)
         }
+        hwTimeoutWork = hwTimeout
         DispatchQueue.main.asyncAfter(deadline: .now() + duration + 8, execute: hwTimeout)
 
         sessionQueue.async {
@@ -720,10 +743,16 @@ class CameraManager: NSObject, ObservableObject {
                 device.setExposureModeCustom(duration: targetDuration, iso: targetISO) { _ in
                     // Now capture the photo
                     DispatchQueue.main.async {
-                        guard self.hwLongExposureToken == hwToken else { return }
-                        hwTimeout.cancel()
+                        self.photoStateLock.lock()
+                        guard self.hwLongExposureToken == hwToken else {
+                            self.photoStateLock.unlock()
+                            return
+                        }
                         self.hwLongExposureToken = nil
                         self.longExposureCompletion = nil
+                        self.photoStateLock.unlock()
+                        hwTimeout.cancel()
+                        self.hwTimeoutWork = nil
                         self.longExposureProgress = 1.0
                         self.capturePhoto(
                             filmFilter: captureFilm,
@@ -745,8 +774,11 @@ class CameraManager: NSObject, ObservableObject {
                 print("Error setting long exposure: \(error)")
                 DispatchQueue.main.async {
                     hwTimeout.cancel()
+                    self.hwTimeoutWork = nil
+                    self.photoStateLock.lock()
                     self.hwLongExposureToken = nil
                     self.longExposureCompletion = nil
+                    self.photoStateLock.unlock()
                     self.isLongExposureCapturing = false
                     self.longExposureProgress = 0.0
                     self.longExposurePathLabel = ""
@@ -767,10 +799,14 @@ class CameraManager: NSObject, ObservableObject {
         // Wall-clock target: stop when real time elapses, not after N frames at 30fps.
         // Per-frame exposure often uses hardware max (~1s), so a frame-count budget
         // made "4s" LE take minutes and feel stuck.
-        DispatchQueue.main.async {
-            self.isLongExposureCapturing = true
-            self.longExposureProgress = 0.0
-        }
+        // isLongExposureCapturing / progress already set synchronously in captureLongExposure.
+
+        // Assign leOpID and longExposureCompletion atomically.
+        let op = UUID()
+        photoStateLock.lock()
+        leOpID = op
+        longExposureCompletion = completion
+        photoStateLock.unlock()
 
         isFinalizingLongExposure = false
         isAccumulatingLongExposure = true
@@ -778,9 +814,29 @@ class CameraManager: NSObject, ObservableObject {
         longExposureFrameCount = 0
         longExposureStartTime = CFAbsoluteTimeGetCurrent()
         longExposureTargetDuration = max(targetDuration, 0.1)
-        longExposureCompletion = completion
         lastLEProgressPublish = 0
         lastLEProgressValue = -1
+
+        // STACK watchdog: if frames stop arriving (e.g. device sleep / interruption),
+        // finalize whatever we have rather than hanging forever.
+        stackWatchdogWork?.cancel()
+        let watchdog = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.photoStateLock.lock()
+            guard self.leOpID == op else {
+                self.photoStateLock.unlock()
+                return
+            }
+            self.photoStateLock.unlock()
+            print("STACK watchdog fired — finalizing or cancelling")
+            if self.isAccumulatingLongExposure {
+                self.finalizeLongExposure()
+            } else if !self.isFinalizingLongExposure {
+                self.cancelLongExposure()
+            }
+        }
+        stackWatchdogWork = watchdog
+        DispatchQueue.main.asyncAfter(deadline: .now() + longExposureTargetDuration + 10, execute: watchdog)
 
         // Set camera to max exposure per frame for best light gathering
         sessionQueue.async {
@@ -799,7 +855,11 @@ class CameraManager: NSObject, ObservableObject {
             } catch {
                 print("Error setting up computational long exposure: \(error)")
                 self.isAccumulatingLongExposure = false
+                self.photoStateLock.lock()
                 self.longExposureCompletion = nil
+                self.photoStateLock.unlock()
+                self.stackWatchdogWork?.cancel()
+                self.stackWatchdogWork = nil
                 self.restoreExposureAfterLongExposure()
                 DispatchQueue.main.async {
                     self.isLongExposureCapturing = false
@@ -819,21 +879,35 @@ class CameraManager: NSObject, ObservableObject {
         let hadBake = baking || bakeTimeoutCompletion != nil || peekPhotoHandler()
         guard hadHW || hadStack || isLongExposureCapturing || hadBake else { return }
 
-        // Invalidate any in-flight still bake kicked off by HW LE / STACK finalize.
+        // Atomically bump leOpID and bakeGeneration; drain lock-protected state.
+        photoStateLock.lock()
+        leOpID = UUID()
         bakeGeneration = UUID()
+        let bakeDone = bakeTimeoutCompletion
+        bakeTimeoutCompletion = nil
+        let completion = longExposureCompletion
+        longExposureCompletion = nil
         hwLongExposureToken = nil
+        let photoHandler = photoCompletionHandler
+        photoCompletionHandler = nil
+        photoStateLock.unlock()
+
+        // Suppress pending timeout / watchdog work items.
+        cancelBakeTimeout()
+        stackWatchdogWork?.cancel()
+        stackWatchdogWork = nil
+        hwTimeoutWork?.cancel()
+        hwTimeoutWork = nil
+
+        // Clear accumulation state (video-queue flags).
         isAccumulatingLongExposure = false
         isFinalizingLongExposure = false
         longExposureAccumulator = nil
         longExposureFrameCount = 0
         longExposureTargetDuration = 0
-        cancelBakeTimeout()
+
         setBakingStill(false)
-        _ = takePhotoHandler()
-        let bakeDone = bakeTimeoutCompletion
-        bakeTimeoutCompletion = nil
-        let completion = longExposureCompletion
-        longExposureCompletion = nil
+        _ = photoHandler  // already extracted above; discard silently
 
         restoreExposureAfterLongExposure()
 
@@ -974,7 +1048,8 @@ class CameraManager: NSObject, ObservableObject {
                 || self.bakeTimeoutCompletion != nil
                 || self.isAccumulatingLongExposure
                 || self.isFinalizingLongExposure
-                || self.isLongExposureCapturing {
+                || self.isLongExposureCapturing
+                || self.hwLongExposureToken != nil {
                 return
             }
 
@@ -1354,6 +1429,18 @@ class CameraManager: NSObject, ObservableObject {
 
         sessionQueue.async { [weak self] in
             guard let self = self else { return }
+
+            // Never tear down inputs mid-still / mid-LE — same gate as switchCamera.
+            let (_, _, _, _, _, baking) = self.currentPipelineSelection()
+            if self.peekPhotoHandler()
+                || baking
+                || self.bakeTimeoutCompletion != nil
+                || self.isAccumulatingLongExposure
+                || self.isFinalizingLongExposure
+                || self.isLongExposureCapturing
+                || self.hwLongExposureToken != nil {
+                return
+            }
 
             // If already on the right device, just adjust zoom — keep exposure as-is
             if let currentDevice = self.videoDeviceInput?.device,
@@ -2091,10 +2178,11 @@ class CameraManager: NSObject, ObservableObject {
         morphTouch: MorphTouchState? = nil,
         completion: @escaping (UIImage?) -> Void
     ) {
-        // Serialize: block mid-bake and STACK accumulation.
+        // Serialize: block mid-bake, STACK accumulation, and any in-flight LE.
         // Do NOT use isLongExposureCapturing — HW LE sets that before calling us.
         let (_, _, _, _, _, baking) = currentPipelineSelection()
-        if peekPhotoHandler() || baking || bakeTimeoutCompletion != nil || isAccumulatingLongExposure {
+        if peekPhotoHandler() || baking || bakeTimeoutCompletion != nil
+            || isAccumulatingLongExposure || isFinalizingLongExposure || hwLongExposureToken != nil {
             DispatchQueue.main.async { completion(nil) }
             return
         }
@@ -2104,8 +2192,8 @@ class CameraManager: NSObject, ObservableObject {
         let captureFilmFilter = filmFilter ?? selectedFilmFilter
         let captureLensFX = lensFX ?? selectedLensFX
         let captureTouch: MorphTouchState? = {
-            if let morphTouch { return morphTouch }
             guard captureLensFX.isTouchReactive else { return nil }
+            if let morphTouch { return morphTouch }
             return LensFXEngine.shared.snapshotForCapture()
         }()
         // Selected film/FX always bake into the processed companion (WYSIWYG).
@@ -2120,11 +2208,14 @@ class CameraManager: NSObject, ObservableObject {
         print("LensFX capture: fx=\(captureLensFX.name) film=\(captureFilmFilter) format=\(captureFormat) bake=\(needsFXBake) natural=\(naturalCaptureEnabled) touchForce=\(captureTouch?.force ?? 0)")
 
         let gen = UUID()
+        // Atomically record bakeGeneration and bakeTimeoutCompletion so cancel/timeout
+        // cannot race the bake registration.
+        photoStateLock.lock()
         bakeGeneration = gen
-        // Keep a timeout target even after the photo handler is taken for GPU bake.
         bakeTimeoutCompletion = { img in
             DispatchQueue.main.async { completion(img) }
         }
+        photoStateLock.unlock()
         setPhotoHandler { [weak self] image in
             guard let self else { return }
             guard self.bakeGeneration == gen else { return }
@@ -2201,11 +2292,13 @@ class CameraManager: NSObject, ObservableObject {
             self.sessionQueue.async {
                 guard self.session.isRunning else {
                     DispatchQueue.main.async {
+                        self.photoStateLock.lock()
                         self.bakeGeneration = UUID()
-                        self.cancelBakeTimeout()
-                        _ = self.takePhotoHandler()
                         let done = self.bakeTimeoutCompletion
                         self.bakeTimeoutCompletion = nil
+                        self.photoStateLock.unlock()
+                        self.cancelBakeTimeout()
+                        _ = self.takePhotoHandler()
                         self.setBakingStill(false)
                         done?(nil)
                     }
@@ -2289,26 +2382,50 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
     func photoOutput(_ output: AVCapturePhotoOutput, didFinishProcessingPhoto photo: AVCapturePhoto, error: Error?) {
         if let error = error {
             print("Photo capture error: \(error)")
-            // RAW half of a dual capture can fail independently; still wait for processed
-            if photo.isRawPhoto { return }
+            if photo.isRawPhoto {
+                // RAW half failed: discard any staged raw so we don't save a stale DNG
+                // if the processed half later succeeds.
+                photoStateLock.lock()
+                pendingRawData = nil
+                photoStateLock.unlock()
+                return
+            }
+            // Processed half failed: also discard any pending RAW.
+            photoStateLock.lock()
+            pendingRawData = nil
+            photoStateLock.unlock()
             let handler = takePhotoHandler()
             handler?(nil)
             return
         }
 
-        // RAW half of a dual capture — persist DNG, wait for processed preview
+        // RAW half of a dual capture — stage DNG; save only when processed succeeds.
         if photo.isRawPhoto {
-            if let rawData = photo.fileDataRepresentation() {
-                saveRawDataToPhotoLibrary(rawData)
-            }
+            photoStateLock.lock()
+            pendingRawData = photo.fileDataRepresentation()
+            photoStateLock.unlock()
             return
         }
 
+        // Processed half arrived — try to decode.
         let image = decodedProcessedPhoto(photo)
         let handler = takePhotoHandler()
         guard let image else {
+            // Processed failed: discard staged RAW without saving.
+            photoStateLock.lock()
+            pendingRawData = nil
+            photoStateLock.unlock()
             handler?(nil)
             return
+        }
+
+        // Success — save any staged RAW DNG now that we know the capture is good.
+        photoStateLock.lock()
+        let rawToSave = pendingRawData
+        pendingRawData = nil
+        photoStateLock.unlock()
+        if let rawToSave {
+            saveRawDataToPhotoLibrary(rawToSave)
         }
         handler?(image)
     }
@@ -2474,32 +2591,35 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
 
         // Materialize every frame — CVPixelBuffer is recycled when this callback returns.
-        // Lazy CIImage(cvPixelBuffer:) + rare flatten previously read freed memory.
-        let accumulationFrame = downscaled(ciImage, longEdge: 1280)
-        guard let ownedCG = ShutterRender.syncCI({
-            ciContext.createCGImage(accumulationFrame, from: accumulationFrame.extent)
-        }) else {
-            return
-        }
-        let ownedFrame = CIImage(cgImage: ownedCG)
-        longExposureFrameCount += 1
-        let n = Float(longExposureFrameCount)
-        if let acc = longExposureAccumulator, n > 1 {
-            let scaledOld = scaledCIImage(acc, scale: (n - 1) / n)
-            let scaledNew = scaledCIImage(ownedFrame, scale: 1 / n)
-            let blend = CIFilter.additionCompositing()
-            blend.inputImage = scaledNew
-            blend.backgroundImage = scaledOld
-            if let blended = blend.outputImage,
-               let flat = ShutterRender.syncCI({
-                   ciContext.createCGImage(blended, from: blended.extent)
-               }) {
-                longExposureAccumulator = CIImage(cgImage: flat)
+        // Autoreleasepool keeps intermediate CIImage / CGImage allocations from piling up
+        // across dozens of frames (GPU textures and CF objects are autorelease-heavy).
+        autoreleasepool {
+            let accumulationFrame = downscaled(ciImage, longEdge: 1280)
+            guard let ownedCG = ShutterRender.syncCI({
+                ciContext.createCGImage(accumulationFrame, from: accumulationFrame.extent)
+            }) else {
+                return
+            }
+            let ownedFrame = CIImage(cgImage: ownedCG)
+            longExposureFrameCount += 1
+            let n = Float(longExposureFrameCount)
+            if let acc = longExposureAccumulator, n > 1 {
+                let scaledOld = scaledCIImage(acc, scale: (n - 1) / n)
+                let scaledNew = scaledCIImage(ownedFrame, scale: 1 / n)
+                let blend = CIFilter.additionCompositing()
+                blend.inputImage = scaledNew
+                blend.backgroundImage = scaledOld
+                if let blended = blend.outputImage,
+                   let flat = ShutterRender.syncCI({
+                       ciContext.createCGImage(blended, from: blended.extent)
+                   }) {
+                    longExposureAccumulator = CIImage(cgImage: flat)
+                } else {
+                    longExposureAccumulator = ownedFrame
+                }
             } else {
                 longExposureAccumulator = ownedFrame
             }
-        } else {
-            longExposureAccumulator = ownedFrame
         }
 
         let progress = min(1.0, Float(elapsed / longExposureTargetDuration))
@@ -2514,10 +2634,19 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     }
 
     private func finalizeLongExposure() {
-        // Gate against repeated calls while the video queue is still delivering frames
+        // Capture current op under lock so we can validate it after bake.
+        photoStateLock.lock()
+        let op = leOpID
+        photoStateLock.unlock()
+
+        // Gate against repeated calls while the video queue is still delivering frames.
         guard isAccumulatingLongExposure, !isFinalizingLongExposure else { return }
         isFinalizingLongExposure = true
         isAccumulatingLongExposure = false
+
+        // Watchdog no longer needed — we are now finalizing.
+        stackWatchdogWork?.cancel()
+        stackWatchdogWork = nil
 
         // Keep isLongExposureCapturing true through bake so Cancel still works
         // and sessionBusy blocks competing captures until JPEG lands.
@@ -2529,15 +2658,21 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         // nil the accumulator first, so normalize always returned nil.
         let captureFilmFilter = longExposureFilmFilter
         let captureLensFX = longExposureLensFX
+        // Capture + clear morphTouch before touching longExposureCompletion under lock.
         let captureTouch = longExposureMorphTouch
+        longExposureMorphTouch = nil
+
+        // Drain lock-protected state atomically.
+        photoStateLock.lock()
         let completion = longExposureCompletion
         longExposureCompletion = nil
-        longExposureMorphTouch = nil
         let gen = UUID()
         bakeGeneration = gen
         bakeTimeoutCompletion = { img in
             DispatchQueue.main.async { completion?(img) }
         }
+        photoStateLock.unlock()
+
         setBakingStill(true)
         armBakeTimeout()
 
@@ -2551,7 +2686,15 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
+            // Abort if bakeGeneration was superseded (cancel/timeout won).
             guard self.bakeGeneration == gen else { return }
+            // Abort if leOpID was bumped (cancelLongExposure fired after we set isFinalizingLongExposure).
+            self.photoStateLock.lock()
+            guard self.leOpID == op else {
+                self.photoStateLock.unlock()
+                return
+            }
+            self.photoStateLock.unlock()
 
             let finalImage: UIImage?
             if let img = resultImage {

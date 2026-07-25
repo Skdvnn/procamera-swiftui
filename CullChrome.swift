@@ -297,7 +297,7 @@ struct CompareFramesView: View {
     private func pane(shot: ShotMetadata, label: String) -> some View {
         ZStack(alignment: .topLeading) {
             Color.black
-            if let img = store.image(for: shot) ?? store.thumbnail(for: shot) {
+            if let img = CullDisplayCache.shared.image(for: shot, store: store) {
                 Image(uiImage: img)
                     .resizable()
                     .aspectRatio(contentMode: .fit)

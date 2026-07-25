@@ -236,8 +236,12 @@ struct ContentView: View {
     /// Does not strip selected film/FX — those still bake WYSIWYG.
     @AppStorage("cam.naturalCapture") private var naturalCapture = true
     @State private var showSettings = false
-    @State private var timerSeconds = 0
+    @AppStorage("cam.timerSeconds") private var timerSeconds = 0
     @State private var timerCountdown = 0
+    @State private var timerGeneration = UUID()
+    @State private var frozenCaptureIsLE = false
+    @State private var frozenLEDuration: Double? = nil
+    @State private var lastShutterEventAt: CFAbsoluteTime = 0
     @State private var photoCount = 0
     @State private var lastCapturedImage: UIImage?
     @State private var showFlash = false
@@ -259,7 +263,7 @@ struct ContentView: View {
     @State private var burstCaptured = 0
     @State private var burstNilRetries = 0
     private let burstMaxFrames = 6
-    private let burstMaxNilRetries = 24
+    private let burstMaxNilRetries = 60
     @State private var showFocusPoint = false
     @State private var frozenMorphTouch: MorphTouchState? = nil
     @State private var focusPoint: CGPoint = .zero
@@ -350,6 +354,11 @@ struct ContentView: View {
             volumeShutter.stop()
             ShutterDeepLinkCenter.endReceiving()
             cancelTimerCountdown()
+            if camera.isLongExposureCapturing {
+                camera.cancelLongExposure()
+                isCapturing = false
+            }
+            isBurstHolding = false
         }
         .onReceive(NotificationCenter.default.publisher(for: .shutterDeepLink)) { note in
             if let link = note.userInfo?["link"] as? ShutterDeepLink {
@@ -382,7 +391,7 @@ struct ContentView: View {
             // Resync after Darkroom deletes / cull finish.
             photoCount = gallery.shots.count
             if let last = gallery.shots.last,
-               let img = gallery.thumbnail(for: last) ?? gallery.image(for: last) {
+               let img = gallery.thumbnail(for: last) {
                 lastCapturedImage = img
             } else {
                 lastCapturedImage = nil
@@ -459,6 +468,7 @@ struct ContentView: View {
                             isAutoFocus: !isManualFocusEnabled,
                             compact: effectiveTopCollapsed,
                             onFocusChanged: { val in
+                                guard !isLocked else { return }
                                 camera.setManualFocus(val)
                                 isManualFocusEnabled = true
                             },
@@ -591,7 +601,8 @@ struct ContentView: View {
                                 Haptics.medium()
                             },
                             shootMode: ShootMode(rawValue: shootModeRaw),
-                            onApplyShootMode: { applyShootMode($0) }
+                            onApplyShootMode: { applyShootMode($0) },
+                            onFilmApplied: { shootModeRaw = "auto" }
                         )
                         .padding(.horizontal, effectiveBottomCollapsed ? 6 : DS.pageMargin)
                         .zIndex(5)
@@ -652,6 +663,7 @@ struct ContentView: View {
                     cameraError: camera.error?.localizedDescription,
                     onApplyNight: { applyNightAssistFromChip() },
                     onDismissNight: {
+                        Haptics.click()
                         nightAssistVisible = false
                         nightAssistDismissedUntil = Date().addingTimeInterval(300)
                     }
@@ -691,7 +703,7 @@ struct ContentView: View {
         camera.focusPeakingEnabled = focusPeaking
         camera.zebraEnabled = zebraEnabled
         photoCount = gallery.shots.count
-        if let last = gallery.shots.last, let img = gallery.thumbnail(for: last) ?? gallery.image(for: last) {
+        if let last = gallery.shots.last, let img = gallery.thumbnail(for: last) {
             lastCapturedImage = img
         }
         apertureValue = camera.lensAperture
@@ -795,6 +807,7 @@ struct ContentView: View {
             if nightAssistVisible {
                 withAnimation(ShutterMotion.chrome) { nightAssistVisible = false }
             }
+            nightAssistDarkStreak = 0
             return
         }
         guard !camera.isManualExposure else {
@@ -1097,13 +1110,16 @@ struct ContentView: View {
             } else if filmName == nil {
                 // keep current film
             }
-            if let fxName,
-               let fx = LensFXMode.allCases.first(where: {
-                   $0.name.compare(fxName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
-               }) {
-                lensFX = fx
-            } else {
-                lensFX = .none
+            if let fxName {
+                if fxName.compare("None", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+                    || fxName == "—" || fxName.isEmpty {
+                    lensFX = .none
+                } else if let fx = LensFXMode.allCases.first(where: {
+                    $0.name.compare(fxName, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+                }) {
+                    lensFX = fx
+                }
+                // Unknown fxName: leave current FX (don't wipe a live look).
             }
         case .timer(let seconds):
             timerSeconds = [0, 3, 10].contains(seconds) ? seconds : 0
@@ -1580,7 +1596,9 @@ struct ContentView: View {
                 focalLength: $focalLength,
                 isoValue: $isoValue,
                 onFocalLengthChanged: { fl in
-                    camera.switchToLens(focalLength: fl)
+                    if !isCapturing && !camera.isLongExposureCapturing {
+                        camera.switchToLens(focalLength: fl)
+                    }
                     // Device zoom is often 1.0 on UW/tele — don't invent 0.5/5.0 for pinch.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                         zoomValue = camera.zoomFactor
@@ -1676,7 +1694,7 @@ struct ContentView: View {
                         showGrid.toggle()
                     }
                 }
-                .frame(width: 160, height: 48)
+                .frame(minWidth: 200, minHeight: 48)
             }
             .padding(.horizontal, DS.pageMargin)
             .contentShape(Rectangle())
@@ -1728,6 +1746,11 @@ struct ContentView: View {
     private func handleCapture() {
         // Volume / hardware must not steal the burst pipeline mid-hold.
         if isBurstHolding { return }
+        // Coalesce rapid shutter events (debounce 350 ms) unless cancelling.
+        let now = CFAbsoluteTimeGetCurrent()
+        let isCancel = camera.isLongExposureCapturing || timerWorkItem != nil || timerCountdown > 0
+        if !isCancel, now - lastShutterEventAt < 0.35 { return }
+        lastShutterEventAt = now
         // Abort in-flight long exposure (shutter stays enabled during LE).
         if camera.isLongExposureCapturing {
             Haptics.click()
@@ -1755,20 +1778,30 @@ struct ContentView: View {
             frozenMorphTouch = armFX.isTouchReactive
                 ? LensFXEngine.shared.snapshotForCapture()
                 : nil
-            runCountdown()
+            // Freeze LE intent so shutter-speed changes during countdown don't alter the shot.
+            let isLE = camera.isManualExposure && shutterSpeedIndex <= 3
+            frozenCaptureIsLE = isLE
+            frozenLEDuration = isLE ? [4.0, 2.0, 1.0, 0.5][shutterSpeedIndex] : nil
+            let gen = UUID()
+            timerGeneration = gen
+            runCountdown(expected: gen)
         } else {
             captureNow()
         }
     }
 
     private func cancelTimerCountdown() {
+        timerGeneration = UUID()
         timerWorkItem?.cancel()
         timerWorkItem = nil
         timerCountdown = 0
         frozenMorphTouch = nil
+        frozenCaptureIsLE = false
+        frozenLEDuration = nil
     }
 
-    private func runCountdown() {
+    private func runCountdown(expected: UUID) {
+        guard expected == timerGeneration else { return }
         guard timerCountdown > 0 else {
             timerWorkItem = nil
             captureNow()
@@ -1776,8 +1809,9 @@ struct ContentView: View {
         }
         Haptics.light()
         let work = DispatchWorkItem {
-            timerCountdown -= 1
-            runCountdown()
+            guard expected == self.timerGeneration else { return }
+            self.timerCountdown -= 1
+            self.runCountdown(expected: expected)
         }
         timerWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
@@ -1791,19 +1825,28 @@ struct ContentView: View {
         syncCaptureControlsToCamera()
         let shutterFilm = cameraFilmFilter(from: filmFilter)
         let shutterFX = lensFX
-        // Use frozen touch from timer arm if available, otherwise snapshot live state.
-        let morphTouch: MorphTouchState? = frozenMorphTouch ?? (shutterFX.isTouchReactive
-            ? LensFXEngine.shared.snapshotForCapture()
-            : nil)
+        // Only use morph touch if FX is still touch-reactive (may have changed during countdown).
+        let morphTouch: MorphTouchState? = {
+            guard shutterFX.isTouchReactive else { return nil }
+            return frozenMorphTouch ?? LensFXEngine.shared.snapshotForCapture()
+        }()
         frozenMorphTouch = nil
 
-        // LE only when manuals are live — AUTO must not inherit a stale Night index.
-        let isLongExposure = camera.isManualExposure && shutterSpeedIndex <= 3
+        // Use frozen LE intent if timer was armed; otherwise evaluate live.
+        let isLongExposure: Bool
+        let duration: Double?
+        if let d = frozenLEDuration {
+            isLongExposure = true
+            duration = d
+        } else {
+            // LE only when manuals are live — AUTO must not inherit a stale Night index.
+            isLongExposure = camera.isManualExposure && shutterSpeedIndex <= 3
+            duration = isLongExposure ? [4.0, 2.0, 1.0, 0.5][shutterSpeedIndex] : nil
+        }
+        frozenLEDuration = nil
+        frozenCaptureIsLE = false
 
-        if isLongExposure {
-            // Use computational long exposure for slow shutter speeds
-            let durations: [Double] = [4.0, 2.0, 1.0, 0.5]
-            let duration = durations[shutterSpeedIndex]
+        if isLongExposure, let duration = duration {
 
             isCapturing = true
             camera.captureLongExposure(
@@ -1948,6 +1991,8 @@ struct FinderStatusOverlays: View {
             }
 
             if nightAssistVisible {
+                // Chip is naturally sized — ZStack(alignment:.top) centers it horizontally.
+                // No frame(maxWidth:.infinity) so the transparent space never eats shutter taps.
                 HStack(spacing: 10) {
                     Button(action: onApplyNight) {
                         HStack(spacing: 8) {
@@ -1965,7 +2010,8 @@ struct FinderStatusOverlays: View {
                         Image(systemName: "xmark")
                             .font(.system(size: 10, weight: .bold))
                             .foregroundColor(.white.opacity(0.45))
-                            .frame(width: 22, height: 22)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .contentShape(Rectangle())
                     }
                 }
                 .padding(.horizontal, 12)
@@ -1973,8 +2019,6 @@ struct FinderStatusOverlays: View {
                 .background(Capsule().fill(Color.black.opacity(0.78)))
                 .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.6))
                 .padding(.top, safeTop + (toast == nil ? 8 : 44))
-                // Width only — never maxHeight:.infinity (that reintroduced the Street-chip hit sink).
-                .frame(maxWidth: .infinity, alignment: .top)
                 .transition(.opacity.combined(with: .move(edge: .top)))
                 .zIndex(51)
             }
@@ -2062,7 +2106,7 @@ private struct ContentViewLifecycle: ViewModifier {
                 withTransaction(t) {
                     camera.selectedLensFX = newFX
                     if !newFX.isTouchReactive {
-                        LensFXEngine.shared.setTouch(x: 0.5, y: 0.5, force: 0, velX: 0, velY: 0, active: false)
+                        LensFXEngine.shared.clearStickyTouch()
                     }
                 }
                 onSyncContext()
@@ -2156,6 +2200,8 @@ struct RefractiveGlassInfoBar: View {
                                     .fill(isLocked ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white)
                             )
                             .foregroundColor(.black)
+                            .frame(minWidth: 44, minHeight: 36)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     Text(aspectLabel)
@@ -2191,6 +2237,8 @@ struct RefractiveGlassInfoBar: View {
                                     .stroke(isManualExposure ? Color(red: 1.0, green: 0.85, blue: 0.35) : Color.white, lineWidth: 0.5)
                             )
                             .foregroundColor(isManualExposure ? Color(red: 1.0, green: 0.85, blue: 0.35) : .white)
+                            .frame(minWidth: 44, minHeight: 36)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                     Text(isManualExposure ? "ISO \(iso)" : "ISO \(iso)·A")
@@ -3690,6 +3738,8 @@ struct WBPill: View {
             }
             .frame(width: pillWidth, height: pillHeight)
         }
+        .frame(width: pillWidth, height: pillHeight + 4)
+        .contentShape(Rectangle())
         .buttonStyle(ProButtonStyle())
     }
 }

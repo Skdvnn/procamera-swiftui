@@ -55,6 +55,13 @@ final class GalleryStore: ObservableObject {
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         thumbCache.countLimit = 160
         thumbCache.totalCostLimit = 48 * 1024 * 1024
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.thumbCache.removeAllObjects()
+        }
         load()
     }
 
@@ -62,15 +69,19 @@ final class GalleryStore: ObservableObject {
 
     func add(image: UIImage, metadata: ShotMetadata) {
         // Write JPEG/thumb first so Darkroom never opens a blank frame.
+        // Only publish metadata if the JPEG write succeeded.
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self = self else { return }
 
-            if let data = image.jpegData(compressionQuality: 0.9) {
-                try? data.write(to: self.imageURL(for: metadata.id))
+            guard let data = image.jpegData(compressionQuality: 0.9) else { return }
+            do {
+                try data.write(to: self.imageURL(for: metadata.id), options: .atomic)
+            } catch {
+                return
             }
             if let thumb = Self.thumbnail(from: image, longEdge: 900),
                let thumbData = thumb.jpegData(compressionQuality: 0.8) {
-                try? thumbData.write(to: self.thumbURL(for: metadata.id))
+                try? thumbData.write(to: self.thumbURL(for: metadata.id), options: .atomic)
             }
             DispatchQueue.main.async {
                 self.shots.append(metadata)
@@ -129,16 +140,23 @@ final class GalleryStore: ObservableObject {
             thumbCache.setObject(disk, forKey: key, cost: cost)
             return disk
         }
-        // Never cache full-res under the thumb key (jetsam on contact sheets).
+        // Full-res fallback: downscale off the main thread and re-cache asynchronously.
+        // Return nil for now so the caller can show a placeholder while it generates.
         guard let full = image(for: shot) else { return nil }
         let maxEdge: CGFloat = 360
         let scale = min(1, maxEdge / max(full.size.width, full.size.height))
-        let size = CGSize(width: full.size.width * scale, height: full.size.height * scale)
-        let renderer = UIGraphicsImageRenderer(size: size)
-        let down = renderer.image { _ in full.draw(in: CGRect(origin: .zero, size: size)) }
-        let cost = Int(size.width * size.height * 4)
-        thumbCache.setObject(down, forKey: key, cost: cost)
-        return down
+        let targetSize = CGSize(width: full.size.width * scale, height: full.size.height * scale)
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let renderer = UIGraphicsImageRenderer(size: targetSize)
+            let down = renderer.image { _ in full.draw(in: CGRect(origin: .zero, size: targetSize)) }
+            let cost = Int(targetSize.width * targetSize.height * 4)
+            self.thumbCache.setObject(down, forKey: key, cost: cost)
+            if let thumbData = down.jpegData(compressionQuality: 0.8) {
+                try? thumbData.write(to: self.thumbURL(for: shot.id), options: .atomic)
+            }
+        }
+        return nil
     }
 
     // MARK: Books
@@ -233,13 +251,13 @@ final class GalleryStore: ObservableObject {
 
     private func saveIndex() {
         if let data = try? JSONEncoder().encode(shots) {
-            try? data.write(to: indexURL)
+            try? data.write(to: indexURL, options: .atomic)
         }
     }
 
     private func saveBooks() {
         if let data = try? JSONEncoder().encode(books) {
-            try? data.write(to: booksURL)
+            try? data.write(to: booksURL, options: .atomic)
         }
     }
 
@@ -435,6 +453,12 @@ struct LibraryView: View {
             route = .book(id)
         }
         .onChange(of: initialBookID) { _, _ in
+            guard !didApplyInitialBook, let id = initialBookID,
+                  store.books.contains(where: { $0.id == id }) else { return }
+            didApplyInitialBook = true
+            route = .book(id)
+        }
+        .onChange(of: store.books.count) { _, _ in
             guard !didApplyInitialBook, let id = initialBookID,
                   store.books.contains(where: { $0.id == id }) else { return }
             didApplyInitialBook = true
@@ -2103,6 +2127,7 @@ struct PrintPage: View {
                         endPoint: .top
                     )
                 )
+                .allowsHitTesting(false)
         }
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay(

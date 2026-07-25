@@ -223,6 +223,15 @@ final class LensFXEngine {
         touchLock.unlock()
     }
 
+    /// Clear sticky and live touch state when switching away from a touch-reactive FX.
+    func clearStickyTouch() {
+        touchLock.lock()
+        _stickyTouch = MorphTouchState()
+        stickyTouchTime = 0
+        _touch = MorphTouchState()
+        touchLock.unlock()
+    }
+
     /// Exponential settle after finger-up so the warp eases out naturally.
     func decayTouchIfNeeded(now: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()) {
         touchLock.lock()

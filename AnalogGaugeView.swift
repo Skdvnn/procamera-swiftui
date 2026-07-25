@@ -90,7 +90,7 @@ struct FocusDial: View {
             }
             .position(center)
             .contentShape(Circle().scale(1.3)) // Larger touch target
-            .gesture(
+            .highPriorityGesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { drag in
                         let vector = CGVector(dx: drag.location.x - center.x, dy: drag.location.y - center.y)
@@ -228,7 +228,7 @@ struct ShutterSpeedDial: View {
             }
             .position(center)
             .contentShape(Circle().scale(1.3))
-            .gesture(
+            .highPriorityGesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { drag in
                         let vector = CGVector(dx: drag.location.x - center.x, dy: drag.location.y - center.y)

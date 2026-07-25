@@ -167,6 +167,8 @@ struct DarkroomIconButton: View {
                             .stroke(Color.white.opacity(0.1), lineWidth: 0.6)
                     )
             )
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
     }
 }
 
@@ -529,7 +531,11 @@ struct CullLibraryView: View {
                     rebuildSessions()
                     if let bookID {
                         openBookID = bookID
-                        showFieldBooks = true
+                        // Dismiss cull first, then present Field Books with a delay
+                        // so cover sequencing doesn't race.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                            showFieldBooks = true
+                        }
                     }
                 }
             )
@@ -720,6 +726,8 @@ struct SessionContactSheet: View {
     var onCompare: ((ShotMetadata, ShotMetadata) -> Void)? = nil
 
     @State private var selectedForCompare: Set<UUID> = []
+    /// Tracks which shot just triggered a long-press loupe so the Button action is suppressed.
+    @State private var loupedShotID: UUID?
 
     private let columns = [
         GridItem(.flexible(), spacing: 0),
@@ -893,6 +901,11 @@ struct SessionContactSheet: View {
         let seed = strokeSeed(for: shot.id)
         let picked = selectedForCompare.contains(shot.id)
         return Button {
+            // Suppress tap that fires after a long-press (loupe arm).
+            if loupedShotID == shot.id {
+                loupedShotID = nil
+                return
+            }
             onOpenFrame(index)
         } label: {
             ZStack {
@@ -964,7 +977,8 @@ struct SessionContactSheet: View {
             LongPressGesture(minimumDuration: 0.35)
                 .onEnded { _ in
                     Haptics.medium()
-                    // Long-press opens loupe; compare stays on context menu / COMPARE chip.
+                    // Arm flag so the trailing Button tap doesn't open the frame.
+                    loupedShotID = shot.id
                     onLoupe?(shot)
                 }
         )
@@ -1007,6 +1021,38 @@ private struct ContactPressStyle: ButtonStyle {
     }
 }
 
+// MARK: - Cull display cache (avoid full-res decode every body pass)
+
+final class CullDisplayCache {
+    static let shared = CullDisplayCache()
+    private let cache = NSCache<NSString, UIImage>()
+
+    private init() {
+        cache.countLimit = 14
+        cache.totalCostLimit = 96 * 1024 * 1024
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.cache.removeAllObjects()
+        }
+    }
+
+    func image(for shot: ShotMetadata, store: GalleryStore) -> UIImage? {
+        let key = shot.id.uuidString as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        if let full = store.image(for: shot) {
+            let cost = Int(full.size.width * full.size.height * 4)
+            cache.setObject(full, forKey: key, cost: max(cost, 1))
+            return full
+        }
+        return store.thumbnail(for: shot)
+    }
+
+    func purge() { cache.removeAllObjects() }
+}
+
 // MARK: - Cull session
 
 struct CullSessionView: View {
@@ -1026,11 +1072,14 @@ struct CullSessionView: View {
     @State private var shareProofURL: URL?
     @State private var shareKeeperItems: [Any] = []
     @State private var showFinishDone = false
+    @State private var handledFinishDone = false
     @State private var doneBookID: UUID?
     @State private var doneAlbumName: String = ""
     @State private var doneKeeperShots: [ShotMetadata] = []
     /// Re-open FinishDone only after post-finish share (not mid-cull proof export).
     @State private var reopenFinishDoneAfterShare = false
+    /// Re-open FinishSession after a mid-cull proof share dismisses.
+    @State private var reopenFinishAfterShare = false
     /// Loupe drag must not commit keep/reject when the finger lifts.
     @State private var loupeSessionActive = false
     @State private var finishMessage: String?
@@ -1110,9 +1159,10 @@ struct CullSessionView: View {
                 .allowsHitTesting(loupeTouch == nil)
                 .animation(CullMotion.loupeOut, value: loupeTouch != nil)
 
-                // Mark flash stamp
+                // Mark flash stamp — never blocks gestures
                 if let flashMark {
                     MarkStampFlash(state: flashMark)
+                        .allowsHitTesting(false)
                         .id(markDrawKey)
                         .transition(.opacity)
                         .zIndex(30)
@@ -1150,6 +1200,11 @@ struct CullSessionView: View {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                         showFinishDone = true
                     }
+                } else if reopenFinishAfterShare {
+                    reopenFinishAfterShare = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        showFinish = true
+                    }
                 }
             } }
         )) {
@@ -1177,19 +1232,30 @@ struct CullSessionView: View {
             )
             .preferredColorScheme(.dark)
         }
-        .sheet(isPresented: $showFinishDone) {
+        .sheet(isPresented: $showFinishDone, onDismiss: {
+            if !handledFinishDone {
+                // Sheet was swiped/tapped away without a button action — treat as Done.
+                onFinished(nil)
+                dismiss()
+            }
+            handledFinishDone = false
+        }) {
             FinishDoneSheet(
                 albumName: doneAlbumName,
                 hasBook: doneBookID != nil,
                 keeperCount: doneKeeperShots.count,
                 onOpenBook: {
+                    handledFinishDone = true
                     showFinishDone = false
                     let id = doneBookID
-                    onFinished(id)
-                    dismiss()
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        onFinished(id)
+                        dismiss()
+                    }
                 },
                 onShareKeepers: {
                     // Dismiss done sheet first so share isn't nested underneath.
+                    handledFinishDone = true
                     showFinishDone = false
                     reopenFinishDoneAfterShare = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
@@ -1197,6 +1263,7 @@ struct CullSessionView: View {
                     }
                 },
                 onShareProof: {
+                    handledFinishDone = true
                     showFinishDone = false
                     reopenFinishDoneAfterShare = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
@@ -1207,6 +1274,7 @@ struct CullSessionView: View {
                     PhotosLibraryService.openPhotosApp()
                 },
                 onDone: {
+                    handledFinishDone = true
                     showFinishDone = false
                     onFinished(nil)
                     dismiss()
@@ -1491,11 +1559,13 @@ struct CullSessionView: View {
 
             if let loupeTouch, let loupeImage {
                 LoupeView(image: loupeImage, touch: loupeTouch, container: size)
+                    .allowsHitTesting(false)
                     .zIndex(20)
             } else if loupeLoading, let loupeTouch {
                 ProgressView()
                     .tint(CullPalette.amber)
                     .position(x: loupeTouch.x, y: max(60, loupeTouch.y - 90))
+                    .allowsHitTesting(false)
             }
         }
     }
@@ -1538,7 +1608,7 @@ struct CullSessionView: View {
             .simultaneousGesture(
                 loupeGesture(
                     in: size,
-                    fallback: store.image(for: shot) ?? store.thumbnail(for: shot) ?? UIImage()
+                    fallback: CullDisplayCache.shared.image(for: shot, store: store) ?? UIImage()
                 )
             )
             .onTapGesture(count: 2) { performUndo() }
@@ -1547,7 +1617,7 @@ struct CullSessionView: View {
     private func cullFrameImage(shot: ShotMetadata, size: CGSize, animatedMark: Bool) -> some View {
         let state = marks.state(for: shot.id)
         let seed = strokeSeed(for: shot.id)
-        let image = store.image(for: shot) ?? store.thumbnail(for: shot)
+        let image = CullDisplayCache.shared.image(for: shot, store: store)
 
         return Group {
             if let image {
@@ -1621,6 +1691,7 @@ struct CullSessionView: View {
             .onEnded { value in
                 // Loupe just ended (or still up) — never treat that pan as keep/reject.
                 if loupeSessionActive || loupeTouch != nil || isAdvancing {
+                    // Clear loupeSessionActive here (not in loupe onEnded) to avoid the race.
                     loupeSessionActive = false
                     withAnimation(CullMotion.flick) { dragOffset = .zero }
                     return
@@ -1666,10 +1737,11 @@ struct CullSessionView: View {
                     let point = drag?.location ?? CGPoint(x: size.width / 2, y: size.height / 2)
                     if loupeTouch == nil {
                         Haptics.light()
+                        dragOffset = .zero
                         loupeSessionActive = true
                         loupeLoading = true
                         loupeImage = fallback
-                        if let shot = current, let full = store.image(for: shot) {
+                        if let shot = current, let full = CullDisplayCache.shared.image(for: shot, store: store) {
                             loupeImage = full
                         }
                         loupeLoading = false
@@ -1688,10 +1760,7 @@ struct CullSessionView: View {
                     loupeImage = nil
                     loupeLoading = false
                 }
-                // Keep loupeSessionActive until cull drag onEnded can see it.
-                DispatchQueue.main.async {
-                    loupeSessionActive = false
-                }
+                // Keep loupeSessionActive — only cull drag onEnded clears it when rejecting the mark.
             }
     }
 
@@ -1837,7 +1906,10 @@ struct CullSessionView: View {
             }
 
             let complete: () -> Void = {
-                marks.clear(shotIDs: rejects.map(\.id) + keepers.map(\.id))
+                // Clear marks only on delete-and-export — mark-only leaves them for the user.
+                if deleteRejects {
+                    marks.clear(shotIDs: rejects.map(\.id) + keepers.map(\.id))
+                }
                 doneKeeperShots = keepers
                 doneBookID = createdBookID
                 doneAlbumName = albumName
@@ -1845,7 +1917,9 @@ struct CullSessionView: View {
                 if albumFailed {
                     finishMessage = "Album export failed — keepers in Field Book"
                 }
-                showFinishDone = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    showFinishDone = true
+                }
             }
 
             if deleteRejects {
@@ -1868,7 +1942,9 @@ struct CullSessionView: View {
                         doneBookID = createdBookID
                         doneAlbumName = albumName
                         isFinishing = false
-                        showFinishDone = true
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                            showFinishDone = true
+                        }
                         return
                     }
                     for shot in rejects { store.delete(shot) }
@@ -1916,6 +1992,8 @@ struct CullSessionView: View {
         let frames = keepers.isEmpty ? shots : keepers
         showFinish = false
         if let url = ProofPDFExporter.makePDF(title: session.title, shots: frames, store: store) {
+            // After the mid-cull proof share is dismissed, reopen the finish sheet.
+            reopenFinishAfterShare = true
             shareProofURL = url
         }
     }

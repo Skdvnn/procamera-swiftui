@@ -37,7 +37,11 @@ class FingerTipSceneDelegate: NSObject, UIWindowSceneDelegate {
     var window: UIWindow?
 
     /// Shared shortcut → deep-link mapping (app delegate + scene).
+    private static var lastShortcutAt: CFAbsoluteTime = 0
     static func postShortcut(_ item: UIApplicationShortcutItem) {
+        let now = CFAbsoluteTimeGetCurrent()
+        if now - lastShortcutAt < 0.5 { return }
+        lastShortcutAt = now
         switch item.type {
         case "com.skylardann.filmcam.capture":
             ShutterDeepLinkCenter.post(.capture)

@@ -107,7 +107,8 @@ final class VolumeShutterObserver: NSObject, ObservableObject {
             view.addSubview(volumeView)
         }
         try? AVAudioSession.sharedInstance().setActive(true)
-        // Prime away from 0%/100% so volume buttons keep producing deltas.
+        // Suppress the KVO callback that fires from priming the volume slider.
+        ignoring = true
         setVolumeSlider(0.5)
         lastVolume = AVAudioSession.sharedInstance().outputVolume
         if lastVolume < 0.05 || lastVolume > 0.95 {
@@ -118,6 +119,10 @@ final class VolumeShutterObserver: NSObject, ObservableObject {
             Task { @MainActor in
                 self.handleVolume(session.outputVolume)
             }
+        }
+        // Re-enable after the prime KVO fires (slight delay to absorb the callback).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.ignoring = false
         }
         startControllerListening()
     }

@@ -8,11 +8,11 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 52 phone test pack (no-bugs swarm: LE cancel/bake, film/FX hits, snappy finder):**
+**Build 53 phone test pack (full-surface fix pass — every control, capture, Darkroom path):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **52**.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **53**.
 
 **Note:** Cmd+R uses empty Debug entitlements — widgets / Lock Screen capture
 need a Release or TestFlight build with App Groups enabled in the developer

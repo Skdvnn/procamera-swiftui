@@ -100,6 +100,8 @@ struct ViewfinderOverlay: View {
     /// Nil when exposure is AUTO (no scene owns the dials).
     var shootMode: ShootMode? = nil
     var onApplyShootMode: ((ShootMode) -> Void)? = nil
+    /// Called when user picks a FILM stock directly (not via SCENE) — clears SCENE highlight.
+    var onFilmApplied: (() -> Void)? = nil
     @ObservedObject var lookStore: LookRecipeStore = .shared
     @State private var showFilmMenu = false
     @State private var showFXMenu = false
@@ -236,6 +238,8 @@ struct ViewfinderOverlay: View {
                             showRecipeMenu = false
                         }
                     }
+                    // Behind the chrome button columns so film/FX buttons still work.
+                    .zIndex(-1)
             }
 
             if showFilmMenu {
@@ -244,7 +248,8 @@ struct ViewfinderOverlay: View {
                     isPresented: $showFilmMenu,
                     shootMode: shootMode,
                     onApplyShootMode: onApplyShootMode,
-                    onSaveLook: { onSaveLook?() }
+                    onSaveLook: { onSaveLook?() },
+                    onFilmApplied: onFilmApplied
                 )
                 .modifier(PickerEntrance())
                 .padding(.trailing, compactChrome ? 10 : 16)
@@ -642,6 +647,8 @@ struct LeicaFilmPicker: View {
     var shootMode: ShootMode? = nil
     var onApplyShootMode: ((ShootMode) -> Void)? = nil
     var onSaveLook: (() -> Void)? = nil
+    /// Called when a film stock is directly applied (not via SCENE) — used to clear SCENE highlight.
+    var onFilmApplied: (() -> Void)? = nil
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
 
@@ -734,6 +741,8 @@ struct LeicaFilmPicker: View {
                             // Apply synchronously so volume/hardware shutter in the
                             // same turn cannot miss the look the user just tapped.
                             selectedFilter = filter
+                            // Clear SCENE highlight — user picked a film stock directly.
+                            onFilmApplied?()
                             var t = Transaction()
                             t.disablesAnimations = true
                             withTransaction(t) {
@@ -1012,15 +1021,17 @@ struct LookRecipePicker: View {
                                 }
                                 .buttonStyle(.plain)
 
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundColor(.white.opacity(0.35))
-                                    .frame(width: 28, height: 28)
-                                    .contentShape(Rectangle())
-                                    .onTapGesture {
-                                        VFHaptics.click()
-                                        store.delete(recipe.id)
-                                    }
+                                Button {
+                                    VFHaptics.click()
+                                    store.delete(recipe.id)
+                                } label: {
+                                    Image(systemName: "xmark")
+                                        .font(.system(size: 9, weight: .bold))
+                                        .foregroundColor(.white.opacity(0.35))
+                                        .frame(width: 28, height: 28)
+                                        .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
                             }
                             .padding(.horizontal, 12)
                             .padding(.vertical, 8)
