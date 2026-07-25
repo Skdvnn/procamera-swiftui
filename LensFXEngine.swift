@@ -308,7 +308,7 @@ final class LensFXEngine {
         case .pixel8:
             result = applyPixel8(to: image)
         case .toon:
-            result = applySimpleFilter(name: "CIComicEffect", to: image)
+            result = applyToon(to: image)
         case .mirror:
             result = applyMirror(to: image)
         case .negative:
@@ -931,6 +931,46 @@ final class LensFXEngine {
         let outExtent = output.extent
         if outExtent.isInfinite || outExtent.width < 1 || outExtent.height < 1 {
             return image
+        }
+        return output.cropped(to: extent)
+    }
+
+    /// Comic look with a real fallback when `CIComicEffect` is unavailable.
+    private func applyToon(to image: CIImage) -> CIImage {
+        let extent = image.extent
+        if let filter = CIFilter(name: "CIComicEffect") {
+            filter.setValue(image, forKey: kCIInputImageKey)
+            if let output = filter.outputImage {
+                let out = output.extent
+                if !out.isInfinite, out.width > 1, out.height > 1 {
+                    return output.cropped(to: extent)
+                }
+            }
+        }
+
+        // Fallback: posterize + ink edges so Comic never silently no-ops.
+        var output = image
+        let posterize = CIFilter.colorPosterize()
+        posterize.inputImage = output
+        posterize.levels = 6
+        if let result = posterize.outputImage { output = result }
+
+        let edges = CIFilter.edges()
+        edges.inputImage = image
+        edges.intensity = 1.4
+        if let edgeImage = edges.outputImage {
+            let mono = CIFilter.colorControls()
+            mono.inputImage = edgeImage
+            mono.saturation = 0
+            mono.contrast = 1.8
+            if let ink = mono.outputImage {
+                let multiply = CIFilter.multiplyCompositing()
+                multiply.inputImage = ink
+                multiply.backgroundImage = output
+                if let result = multiply.outputImage {
+                    output = result
+                }
+            }
         }
         return output.cropped(to: extent)
     }

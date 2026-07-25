@@ -319,7 +319,16 @@ class FilteredPreviewView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         previewLayer?.frame = bounds
-        metalView?.frame = bounds
+        guard let metalView else { return }
+        metalView.frame = bounds
+        // Explicit drawable size — first FX toggle used to hit a 0×0 layer.
+        if bounds.width > 1, bounds.height > 1 {
+            let scale = window?.screen.scale ?? UIScreen.main.scale
+            let size = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+            if metalView.drawableSize != size {
+                metalView.drawableSize = size
+            }
+        }
     }
 
     func updateFilteredImage(_ image: CIImage?) {
@@ -335,7 +344,7 @@ class FilteredPreviewView: UIView {
                 layoutIfNeeded()
                 metalView?.setNeedsLayout()
                 metalView?.layoutIfNeeded()
-                scheduleMetalDraw(attemptsLeft: 8)
+                scheduleMetalDraw(attemptsLeft: 10)
             } else {
                 metalView?.setNeedsDisplay()
             }
@@ -348,7 +357,7 @@ class FilteredPreviewView: UIView {
     /// Retries until MTKView has a non-zero drawable (avoids Metal crash on FX enable).
     private func scheduleMetalDraw(attemptsLeft: Int) {
         guard attemptsLeft > 0 else { return }
-        DispatchQueue.main.async { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
             guard let self, let metalView = self.metalView, !metalView.isHidden else { return }
             self.layoutIfNeeded()
             metalView.layoutIfNeeded()
@@ -379,22 +388,21 @@ extension FilteredPreviewView: MTKViewDelegate {
     }
 
     func draw(in view: MTKView) {
-        guard var ciImage = currentCIImage,
-              let commandBuffer = commandQueue?.makeCommandBuffer(),
-              let drawable = view.currentDrawable else {
-            return
-        }
-
-        // First frame after un-hiding the MTKView often has a 0×0 drawable —
-        // rendering into that crashes Metal when Lens FX/film filters turn on.
+        // Size-guard BEFORE currentDrawable — acquiring a 0×0 drawable has
+        // crashed Metal on the first film/FX toggle.
         let drawableSize = view.drawableSize
         guard drawableSize.width > 1, drawableSize.height > 1,
               view.bounds.width > 1, view.bounds.height > 1 else {
             return
         }
 
-        // Texture must match drawable size
-        guard drawable.texture.width > 1, drawable.texture.height > 1 else { return }
+        guard var ciImage = currentCIImage,
+              let commandBuffer = commandQueue?.makeCommandBuffer(),
+              let drawable = view.currentDrawable,
+              drawable.texture.width > 1,
+              drawable.texture.height > 1 else {
+            return
+        }
 
         // Video buffers are sensor-native (landscape). Map to the *interface*
         // orientation so portrait + landscape left/right all read upright.

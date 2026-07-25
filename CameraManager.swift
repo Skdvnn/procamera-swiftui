@@ -70,16 +70,10 @@ class CameraManager: NSObject, ObservableObject {
             }
         }
     }
-    /// When true (default with natural), skip baking film/FX into the processed companion.
-    /// Preview looks still apply; the saved JPEG/HEIC stays clean. RAW DNG is always clean.
-    @Published var bakeLooksIntoProcessed: Bool = false
-
     // Live preview filtering
     @Published var filteredPreviewImage: CIImage?
     private var lastPreviewFrameTime: CFAbsoluteTime = 0
     private let previewFrameInterval: CFAbsoluteTime = 1.0 / 30.0  // 30fps max
-    /// While true, skip live FX so the GPU can finish baking the still.
-    private var isBakingStill = false
 
     // Live histogram - real luminance bins computed from preview frames
     @Published var histogramBins: [Float] = []
@@ -92,6 +86,8 @@ class CameraManager: NSObject, ObservableObject {
     private var pipelinePeaking = false
     private var pipelineZebra = false
     private var pipelineBypassLooks = false
+    /// Skip live FX while a still bake owns the GPU (main / video / bake queues).
+    private var pipelineBakingStill = false
 
     // Remember the user's manual exposure so lens/format switches can re-apply it
     private var manualShutterIndex: Int?
@@ -348,10 +344,23 @@ class CameraManager: NSObject, ObservableObject {
         pipelineLock.unlock()
     }
 
-    private func currentPipelineSelection() -> (FilmFilter, LensFXMode, Bool, Bool, Bool) {
+    private func setBakingStill(_ baking: Bool) {
+        pipelineLock.lock()
+        pipelineBakingStill = baking
+        pipelineLock.unlock()
+    }
+
+    private func currentPipelineSelection() -> (FilmFilter, LensFXMode, Bool, Bool, Bool, Bool) {
         pipelineLock.lock()
         defer { pipelineLock.unlock() }
-        return (pipelineFilmFilter, pipelineLensFX, pipelinePeaking, pipelineZebra, pipelineBypassLooks)
+        return (
+            pipelineFilmFilter,
+            pipelineLensFX,
+            pipelinePeaking,
+            pipelineZebra,
+            pipelineBypassLooks,
+            pipelineBakingStill
+        )
     }
 
     /// Re-apply stored manual ISO/shutter after a lens or format change.
@@ -1404,12 +1413,57 @@ class CameraManager: NSObject, ObservableObject {
             outputImage = applyInstantFilmLook(to: outputImage, preview: false)
         }
 
-        // Render the filtered image (use outputImage.extent in case filter changed bounds)
-        guard let cgImage = ciContext.createCGImage(outputImage, from: outputImage.extent) else {
-            return image
+        // Same retry / software-fallback path as Lens FX — a single createCGImage
+        // can fail under live-camera GPU load and used to drop the film look silently.
+        if let rendered = renderCIImageSafely(outputImage, scale: image.scale) {
+            return rendered
         }
+        print("FilmFilter: bake failed for \(filmFilter) — saving unfiltered still")
+        return image
+    }
 
-        return UIImage(cgImage: cgImage, scale: image.scale, orientation: .up)
+    /// Finite-extent + downscale + software CIContext retries for still bakes.
+    private func renderCIImageSafely(_ image: CIImage, scale: CGFloat) -> UIImage? {
+        var working = image
+        let extent = working.extent
+        guard !extent.isInfinite,
+              extent.width > 1,
+              extent.height > 1,
+              extent.width.isFinite,
+              extent.height.isFinite else {
+            return nil
+        }
+        working = working.transformed(by: CGAffineTransform(
+            translationX: -working.extent.minX,
+            y: -working.extent.minY
+        ))
+
+        let dims: [CGFloat] = [4096, 3072, 2048, 1536]
+        let contexts: [CIContext] = [
+            ciContext,
+            CIContext(options: [.useSoftwareRenderer: true])
+        ]
+
+        for dim in dims {
+            var candidate = working
+            let longest = max(candidate.extent.width, candidate.extent.height)
+            if longest > dim {
+                let s = dim / longest
+                candidate = candidate.transformed(by: CGAffineTransform(scaleX: s, y: s))
+            }
+            for context in contexts {
+                if let cgImage = context.createCGImage(candidate, from: candidate.extent)
+                    ?? context.createCGImage(
+                        candidate,
+                        from: candidate.extent,
+                        format: .RGBA8,
+                        colorSpace: CGColorSpace(name: CGColorSpace.sRGB)
+                    ) {
+                    return UIImage(cgImage: cgImage, scale: scale, orientation: .up)
+                }
+            }
+        }
+        return nil
     }
 
     // Applies the new filter selection on the very next frame and drops any
@@ -1532,20 +1586,20 @@ class CameraManager: NSObject, ObservableObject {
             guard captureLensFX.isTouchReactive else { return nil }
             return LensFXEngine.shared.snapshotForCapture()
         }()
-        // Natural mode keeps the processed companion un-baked (preview looks stay live).
-        // RAW DNG is always clean via the separate raw callback.
-        let allowBake = bakeLooksIntoProcessed || !naturalCaptureEnabled
-        let needsFXBake = allowBake && (captureLensFX != .none || captureFilmFilter != .none)
+        // Selected film/FX always bake into the processed companion (WYSIWYG).
+        // Natural capture only reduces Apple ISP fusion — it does not strip looks.
+        // RAW DNG stays clean via the separate raw callback.
+        let needsFXBake = captureLensFX != .none || captureFilmFilter != .none
 
         if needsFXBake {
-            isBakingStill = true
+            setBakingStill(true)
         }
 
         print("LensFX capture: fx=\(captureLensFX.name) film=\(captureFilmFilter) format=\(captureFormat) bake=\(needsFXBake) natural=\(naturalCaptureEnabled) touchForce=\(captureTouch?.force ?? 0)")
 
         photoCompletionHandler = { [weak self] image in
             guard let self = self, let image = image else {
-                self?.isBakingStill = false
+                self?.setBakingStill(false)
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
@@ -1564,7 +1618,7 @@ class CameraManager: NSObject, ObservableObject {
                 } else {
                     filteredImage = image
                 }
-                self.isBakingStill = false
+                self.setBakingStill(false)
                 print("LensFX capture done: out=\(filteredImage.size) orient=\(filteredImage.imageOrientation.rawValue)")
 
                 DispatchQueue.main.async { completion(filteredImage) }
@@ -1691,7 +1745,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
 
         // Handle live preview processing (film filter and/or lens FX, not during long exposure)
-        let (filmFilter, lensFX, peaking, zebra, bypass) = currentPipelineSelection()
+        let (filmFilter, lensFX, peaking, zebra, bypass, bakingStill) = currentPipelineSelection()
         if bypass {
             DispatchQueue.main.async {
                 if self.filteredPreviewImage != nil {
@@ -1700,28 +1754,43 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             }
         } else {
         let wantsLiveProcessing = filmFilter != .none || lensFX != .none || peaking || zebra
-        if wantsLiveProcessing && !isLongExposureCapturing && !isBakingStill {
+        if wantsLiveProcessing && !isLongExposureCapturing && !bakingStill {
 
             let currentTime = CFAbsoluteTimeGetCurrent()
             if currentTime - lastPreviewFrameTime >= previewFrameInterval {
                 lastPreviewFrameTime = currentTime
 
-                // Downscale first: full-res sensor frames are far too heavy
-                // to run distortion filters on at preview frame rates
-                var processed = downscaledForPreview(ciImage)
-                processed = applyFilmFilter(to: processed, filter: filmFilter)
-                if lensFX != .none {
-                    processed = LensFXEngine.shared.apply(lensFX, to: processed, time: currentTime)
-                }
-                if peaking {
-                    processed = ViewfinderMonitor.applyFocusPeaking(to: processed)
-                }
-                if zebra {
-                    processed = ViewfinderMonitor.applyZebra(to: processed)
+                // Downscale + autoreleasepool: keep FX cheap and crash-resistant
+                // under GPU contention when toggling looks rapidly.
+                let processed: CIImage? = autoreleasepool {
+                    var frame = downscaledForPreview(ciImage)
+                    let extent = frame.extent
+                    guard !extent.isInfinite,
+                          extent.width > 1,
+                          extent.height > 1 else {
+                        return nil
+                    }
+                    frame = applyFilmFilter(to: frame, filter: filmFilter)
+                    if lensFX != .none {
+                        frame = LensFXEngine.shared.apply(lensFX, to: frame, time: currentTime)
+                    }
+                    if peaking {
+                        frame = ViewfinderMonitor.applyFocusPeaking(to: frame)
+                    }
+                    if zebra {
+                        frame = ViewfinderMonitor.applyZebra(to: frame)
+                    }
+                    let out = frame.extent
+                    guard !out.isInfinite, out.width > 1, out.height > 1 else {
+                        return nil
+                    }
+                    return frame
                 }
 
-                DispatchQueue.main.async {
-                    self.filteredPreviewImage = processed
+                if let processed {
+                    DispatchQueue.main.async {
+                        self.filteredPreviewImage = processed
+                    }
                 }
             }
         } else if !wantsLiveProcessing {
@@ -1794,7 +1863,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         let completion = longExposureCompletion
         longExposureCompletion = nil
         longExposureMorphTouch = nil
-        isBakingStill = true
+        setBakingStill(true)
 
         let resultImage = normalizeAccumulator()
 
@@ -1809,6 +1878,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
 
             let finalImage: UIImage?
             if let img = resultImage {
+                // Same WYSIWYG bake policy as normal capture.
                 finalImage = self.applyLensFX(
                     captureLensFX,
                     to: self.applyFilmFilter(captureFilmFilter, to: img),
@@ -1818,7 +1888,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 finalImage = nil
             }
 
-            self.isBakingStill = false
+            self.setBakingStill(false)
             self.isFinalizingLongExposure = false
 
             DispatchQueue.main.async {

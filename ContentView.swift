@@ -182,9 +182,8 @@ struct ContentView: View {
     @AppStorage("cam.defaultFilm") private var defaultFilmRaw: Int = FilmFilterMode.none.rawValue
     @AppStorage("cam.captureFormat") private var captureFormatRaw: String = CaptureFormat.heic.rawValue
     /// Default ON — minimize Apple computational photography (speed + Bayer RAW).
+    /// Does not strip selected film/FX — those still bake WYSIWYG.
     @AppStorage("cam.naturalCapture") private var naturalCapture = true
-    /// When natural is on, looks stay preview-only unless the user opts in.
-    @AppStorage("cam.bakeLooks") private var bakeLooksIntoProcessed = false
     @State private var showSettings = false
     @State private var timerSeconds = 0
     @State private var timerCountdown = 0
@@ -490,7 +489,6 @@ struct ContentView: View {
             }
             apertureValue = camera.lensAperture
             camera.naturalCaptureEnabled = naturalCapture
-            camera.bakeLooksIntoProcessed = bakeLooksIntoProcessed
             if let fmt = CaptureFormat(rawValue: captureFormatRaw) {
                 captureFormat = fmt
                 switch fmt {
@@ -539,9 +537,6 @@ struct ContentView: View {
         .onChange(of: naturalCapture) { _, on in
             camera.naturalCaptureEnabled = on
         }
-        .onChange(of: bakeLooksIntoProcessed) { _, on in
-            camera.bakeLooksIntoProcessed = on
-        }
         .onChange(of: camera.isAEAFLocked) { _, locked in
             isLocked = locked
         }
@@ -578,7 +573,6 @@ struct ContentView: View {
                 captureFormat: $captureFormat,
                 defaultFilm: defaultFilmBinding,
                 naturalCapture: $naturalCapture,
-                bakeLooksIntoProcessed: $bakeLooksIntoProcessed,
                 onApplyMode: { applyShootMode($0) },
                 onDismiss: {
                     captureFormatRaw = captureFormat.rawValue

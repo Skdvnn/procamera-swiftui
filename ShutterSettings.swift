@@ -47,7 +47,6 @@ struct ShutterSettingsSheet: View {
     @Binding var captureFormat: CaptureFormat
     @Binding var defaultFilm: FilmFilterMode
     @Binding var naturalCapture: Bool
-    @Binding var bakeLooksIntoProcessed: Bool
     var onApplyMode: (ShootMode) -> Void
     var onDismiss: () -> Void
 
@@ -91,15 +90,12 @@ struct ShutterSettingsSheet: View {
 
                 Section {
                     Toggle("Natural capture", isOn: $naturalCapture)
-                    if naturalCapture {
-                        Toggle("Bake film/FX into JPEG", isOn: $bakeLooksIntoProcessed)
-                    }
                 } header: {
                     Text("Image honesty")
                 } footer: {
                     Text(naturalCapture
-                          ? "Speed prioritization, Bayer RAW over ProRAW, no red-eye rewrite, no virtual-cam fusion. Apple has no public “off” for Deep Fusion — this is the honest minimum."
-                          : "Polished path: quality prioritization and Apple’s heavier still pipeline.")
+                          ? "Less Apple fusion (speed + Bayer RAW). Selected film/FX still bake into the saved photo — natural is about the ISP, not stripping your looks."
+                          : "Polished path: quality prioritization and Apple’s heavier still pipeline. Film/FX always bake either way.")
                 }
 
                 Section("Viewfinder") {

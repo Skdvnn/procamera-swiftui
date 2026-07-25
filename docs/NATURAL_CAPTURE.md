@@ -1,6 +1,6 @@
 # Natural capture — minimize Apple processing
 
-Build **28** · Branch `cursor/natural-capture-landscape-1a29`
+Build **29** · Branch `cursor/natural-capture-landscape-1a29`
 
 ## Thesis
 iPhone stills get heavy computational photography (Smart HDR / Deep Fusion / tone fusion). Shutter’s default is **natural**: deliver something closer to what the sensor saw.
@@ -15,11 +15,18 @@ There is **no public API** to disable Deep Fusion by name. The real levers:
 | RAW pixel format | Bayer preferred | first available |
 | Virtual device fusion | off | off |
 | Auto red-eye | off | off |
-| Bake film/FX into JPEG | off (preview only) | on |
+
+**Film / Lens FX always bake** into the processed HEIC/JPEG when selected (WYSIWYG). Natural only reduces Apple’s ISP fusion — it does not strip looks. RAW DNG stays clean.
+
+## Effects safety (build 29)
+- Thread-safe bake gate so live FX doesn’t fight still bake on the GPU
+- Film still render uses the same downscale + software CIContext retries as Lens FX
+- MTKView size-guards before `currentDrawable`; explicit `drawableSize` on layout
+- Comic/Toon has a posterize+edges fallback if `CIComicEffect` is missing
+- Live preview FX runs in an autoreleasepool with extent guards
 
 ## Product
 - Settings → **Image honesty** → Natural capture (default ON)
-- Optional: **Bake film/FX into JPEG** when you want looks on the saved twin
 - Info bar shows **NAT** when natural is active
 - Format pill still chooses HEIC / JPEG / RAW; RAW uses Bayer when the device exposes it
 
