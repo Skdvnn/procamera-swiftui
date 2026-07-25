@@ -213,6 +213,11 @@ struct ContentView: View {
     @State private var photoCount = 0
     @State private var lastCapturedImage: UIImage?
     @State private var showFlash = false
+    /// Brief chrome toast for failed capture / Photos denial / LE cancel.
+    @State private var statusToast: String?
+    @State private var statusToastWork: DispatchWorkItem?
+    /// Suppresses "Capture failed" toast when the user aborted LE.
+    @State private var expectingLECancel = false
     @State private var showFocusPoint = false
     @State private var focusPoint: CGPoint = .zero
     /// EV captured when the focus reticle appeared — vertical drag offsets from this.
@@ -313,7 +318,8 @@ struct ContentView: View {
                         shutterSpeedIndex: $shutterSpeedIndex,
                         timerSeconds: timerSeconds,
                         iso: isoValue,
-                        flashMode: camera.flashMode == .off ? "OFF" : "ON",
+                        flashMode: flashModeLabel(camera.flashMode),
+                        isoIsAuto: !camera.isManualExposure,
                         macroEnabled: macroEnabled,
                         isAutoFocus: !isManualFocusEnabled,
                         compact: effectiveTopCollapsed,
@@ -496,8 +502,33 @@ struct ContentView: View {
                     .opacity(showFlash ? 0.92 : 0)
                     .allowsHitTesting(false)
                     .animation(ShutterMotion.flash, value: showFlash)
+
+                if let toast = statusToast {
+                    Text(toast)
+                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 8)
+                        .background(Capsule().fill(Color.black.opacity(0.72)))
+                        .padding(.top, safeTop + 8)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                        .allowsHitTesting(false)
+                        .zIndex(50)
+                }
+
+                // Camera permission / session errors — never leave a silent black finder.
+                if let err = camera.error {
+                    CameraPermissionOverlay(message: err.localizedDescription ?? "Camera unavailable") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(url)
+                        }
+                    }
+                    .zIndex(60)
+                }
             }
             .ignoresSafeArea()
+            .animation(ShutterMotion.chrome, value: statusToast)
             .onChange(of: isLandscape) { _, landscape in
                 // Landscape uses compact chrome; remember portrait expanded state separately.
                 if landscape {
@@ -596,6 +627,18 @@ struct ContentView: View {
         .onChange(of: naturalCapture) { _, on in
             camera.naturalCaptureEnabled = on
         }
+        .onChange(of: captureFormat) { _, fmt in
+            // Keep session + AppStorage in sync even if Settings is swipe-dismissed.
+            captureFormatRaw = fmt.rawValue
+            switch fmt {
+            case .heic: camera.captureFormat = .heic
+            case .jpeg: camera.captureFormat = .jpeg
+            case .raw: camera.captureFormat = .raw
+            }
+        }
+        .onChange(of: camera.maxISO) { _, maxISO in
+            clampISOToDevice(maxISO: maxISO)
+        }
         .onChange(of: camera.isAEAFLocked) { _, locked in
             isLocked = locked
         }
@@ -670,7 +713,39 @@ struct ContentView: View {
         gallery.add(image: img, metadata: metadata)
         // Dual-write to Photos; stash localIdentifier so cull can delete both sides.
         camera.saveToPhotoLibrary(img) { assetID in
-            gallery.setPhotosAssetIdentifier(assetID, for: metadata.id)
+            if let assetID {
+                gallery.setPhotosAssetIdentifier(assetID, for: metadata.id)
+            } else {
+                showStatusToast("Saved in app · Photos access needed")
+            }
+        }
+    }
+
+    private func flashModeLabel(_ mode: AVCaptureDevice.FlashMode) -> String {
+        switch mode {
+        case .off: return "OFF"
+        case .on: return "ON"
+        case .auto: return "AUTO"
+        @unknown default: return "OFF"
+        }
+    }
+
+    private func showStatusToast(_ message: String) {
+        statusToastWork?.cancel()
+        statusToast = message
+        let work = DispatchWorkItem {
+            statusToast = nil
+        }
+        statusToastWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: work)
+    }
+
+    private func clampISOToDevice(maxISO: Float = 0) {
+        let cap = maxISO > 0 ? maxISO : camera.maxISO
+        guard cap > 0 else { return }
+        let maxI = Int(cap)
+        if isoValue > maxI {
+            isoValue = isoValues.last(where: { $0 <= maxI }) ?? maxI
         }
     }
 
@@ -1013,7 +1088,8 @@ struct ContentView: View {
                     if camera.isLongExposureCapturing {
                         LongExposureProgressOverlay(
                             progress: camera.longExposureProgress,
-                            pathLabel: camera.longExposurePathLabel
+                            pathLabel: camera.longExposurePathLabel,
+                            onCancel: { handleCapture() }
                         )
                         .transition(.opacity)
                     }
@@ -1236,6 +1312,7 @@ struct ContentView: View {
                 longExposureProgress: camera.isLongExposureCapturing
                     ? camera.longExposureProgress
                     : nil,
+                allowCancelWhileBusy: camera.isLongExposureCapturing,
                 compact: compact
             ) {
                 handleCapture()
@@ -1288,7 +1365,9 @@ struct ContentView: View {
                     iso: $isoValue,
                     onChanged: { iso in
                         guard !isLocked else { return }
-                        camera.setISO(Float(iso))
+                        let capped = min(iso, max(1, Int(camera.maxISO)))
+                        if capped != isoValue { isoValue = capped }
+                        camera.setISO(Float(capped))
                     }
                 )
 
@@ -1387,7 +1466,8 @@ struct ContentView: View {
                     timerCountdown: timerCountdown,
                     longExposureProgress: camera.isLongExposureCapturing
                         ? camera.longExposureProgress
-                        : nil
+                        : nil,
+                    allowCancelWhileBusy: camera.isLongExposureCapturing
                 ) {
                     handleCapture()
                 }
@@ -1409,10 +1489,20 @@ struct ContentView: View {
     }
 
     private func handleCapture() {
+        // Abort in-flight long exposure (shutter stays enabled during LE).
+        if camera.isLongExposureCapturing {
+            Haptics.click()
+            expectingLECancel = true
+            camera.cancelLongExposure()
+            isCapturing = false
+            showStatusToast("Long exposure cancelled")
+            return
+        }
         // Second tap during countdown cancels (shutter stays enabled while armed).
         if timerWorkItem != nil || timerCountdown > 0 {
             Haptics.click()
             cancelTimerCountdown()
+            showStatusToast("Timer cancelled")
             return
         }
         guard !isCapturing else { return }
@@ -1476,7 +1566,13 @@ struct ContentView: View {
             ) { img in
                 isCapturing = false
                 if let img = img {
+                    expectingLECancel = false
                     finishCapturedImage(img)
+                } else if expectingLECancel {
+                    expectingLECancel = false
+                } else {
+                    showStatusToast("Capture failed")
+                    UINotificationFeedbackGenerator().notificationOccurred(.error)
                 }
             }
         } else {
@@ -1492,6 +1588,9 @@ struct ContentView: View {
                 isCapturing = false
                 if let img = img {
                     finishCapturedImage(img)
+                } else {
+                    showStatusToast("Capture failed")
+                    UINotificationFeedbackGenerator().notificationOccurred(.error)
                 }
             }
         }
@@ -1517,10 +1616,12 @@ struct ViewfinderVignette: View {
 struct LongExposureProgressOverlay: View {
     let progress: Float
     var pathLabel: String = ""
+    var onCancel: (() -> Void)? = nil
 
     var body: some View {
         ZStack {
             Color.black.opacity(0.35)
+                .allowsHitTesting(false)
 
             VStack(spacing: 14) {
                 ZStack {
@@ -1550,9 +1651,61 @@ struct LongExposureProgressOverlay: View {
                             .foregroundColor(.white.opacity(0.45))
                     }
                 }
+
+                if onCancel != nil {
+                    Button {
+                        onCancel?()
+                    } label: {
+                        Text("CANCEL")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 8)
+                            .background(Capsule().fill(Color.white.opacity(0.18)))
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.top, 4)
+                }
             }
         }
-        .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Camera permission / error overlay
+struct CameraPermissionOverlay: View {
+    let message: String
+    let onOpenSettings: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.92).ignoresSafeArea()
+            VStack(spacing: 18) {
+                Text("CAMERA")
+                    .font(.system(size: 12, weight: .bold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.45))
+                    .tracking(2)
+                Text(message)
+                    .font(.system(size: 16, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 28)
+                Text("Enable camera access in Settings to shoot.")
+                    .font(.system(size: 12, weight: .regular, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.55))
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 32)
+                Button(action: onOpenSettings) {
+                    Text("OPEN SETTINGS")
+                        .font(.system(size: 13, weight: .bold, design: .monospaced))
+                        .foregroundColor(.black)
+                        .padding(.horizontal, 22)
+                        .padding(.vertical, 12)
+                        .background(Capsule().fill(Color.white))
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 6)
+            }
+        }
     }
 }
 
@@ -2341,11 +2494,14 @@ struct ShutterButton: View {
     var timerCountdown: Int = 0
     /// 0…1 while STACK/HW long exposure is running (nil = not in LE).
     var longExposureProgress: Float? = nil
+    /// Keep shutter enabled so the user can abort LE.
+    var allowCancelWhileBusy: Bool = false
     /// Landscape / short deck — slightly smaller chrome.
     var compact: Bool = false
     let action: () -> Void
 
     private var isTimerArmed: Bool { timerCountdown > 0 }
+    private var canCancel: Bool { isTimerArmed || allowCancelWhileBusy }
 
     var body: some View {
         Button(action: action) {
@@ -2358,10 +2514,14 @@ struct ShutterButton: View {
         }
         // ButtonStyle press feedback — never a DragGesture(minDistance: 0),
         // which stole taps when the expanded deck also owned a swipe gesture.
-        .buttonStyle(ShutterPressStyle(armed: isTimerArmed))
-        // Busy blocks re-entry; timer-armed stays tappable so cancel works.
-        .disabled(isBusy && !isTimerArmed)
-        .accessibilityLabel(isTimerArmed ? "Cancel timer" : "Shutter")
+        .buttonStyle(ShutterPressStyle(armed: canCancel))
+        // Busy blocks re-entry; timer/LE cancel stays tappable.
+        .disabled(isBusy && !canCancel)
+        .accessibilityLabel(
+            isTimerArmed ? "Cancel timer"
+                : allowCancelWhileBusy ? "Cancel long exposure"
+                : "Shutter"
+        )
     }
 }
 

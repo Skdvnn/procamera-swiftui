@@ -1,6 +1,6 @@
 # Natural capture — minimize Apple processing
 
-Build **42** · Branch `cursor/natural-capture-landscape-1a29`
+Build **45** · Branch `cursor/natural-capture-landscape-1a29`
 
 ## Thesis
 iPhone stills get heavy computational photography (Smart HDR / Deep Fusion / tone fusion). Shutter’s default is **natural**: deliver something closer to what the sensor saw.

@@ -612,9 +612,10 @@ class CameraManager: NSObject, ObservableObject {
         let captureFilm = longExposureFilmFilter
         let captureFX = longExposureLensFX
 
-        // Token so a late exposure callback can't double-complete after timeout.
+        // Token so a late exposure callback can't double-complete after timeout/cancel.
         let hwToken = UUID()
         hwLongExposureToken = hwToken
+        longExposureCompletion = completion
 
         DispatchQueue.main.async {
             self.isLongExposureCapturing = true
@@ -625,6 +626,7 @@ class CameraManager: NSObject, ObservableObject {
         let hwTimeout = DispatchWorkItem { [weak self] in
             guard let self, self.hwLongExposureToken == hwToken else { return }
             self.hwLongExposureToken = nil
+            self.longExposureCompletion = nil
             print("HW long-exposure timeout — aborting")
             self.restoreExposureAfterLongExposure()
             self.isLongExposureCapturing = false
@@ -646,6 +648,7 @@ class CameraManager: NSObject, ObservableObject {
                         guard self.hwLongExposureToken == hwToken else { return }
                         hwTimeout.cancel()
                         self.hwLongExposureToken = nil
+                        self.longExposureCompletion = nil
                         self.longExposureProgress = 1.0
                         self.capturePhoto(
                             filmFilter: captureFilm,
@@ -668,7 +671,12 @@ class CameraManager: NSObject, ObservableObject {
                 DispatchQueue.main.async {
                     hwTimeout.cancel()
                     self.hwLongExposureToken = nil
+                    self.longExposureCompletion = nil
                     self.isLongExposureCapturing = false
+                    self.longExposureProgress = 0.0
+                    self.longExposurePathLabel = ""
+                    // Don't leave the finder locked on a multi-second custom exposure.
+                    self.restoreExposureAfterLongExposure()
                     completion(nil)
                 }
             }
@@ -717,11 +725,39 @@ class CameraManager: NSObject, ObservableObject {
                 print("Error setting up computational long exposure: \(error)")
                 self.isAccumulatingLongExposure = false
                 self.longExposureCompletion = nil
+                self.restoreExposureAfterLongExposure()
                 DispatchQueue.main.async {
                     self.isLongExposureCapturing = false
+                    self.longExposureProgress = 0.0
+                    self.longExposurePathLabel = ""
                     completion(nil)
                 }
             }
+        }
+    }
+
+    /// Abort in-flight HW or STACK long exposure and restore manuals.
+    func cancelLongExposure() {
+        let hadHW = hwLongExposureToken != nil
+        let hadStack = isAccumulatingLongExposure || isFinalizingLongExposure
+        guard hadHW || hadStack || isLongExposureCapturing else { return }
+
+        hwLongExposureToken = nil
+        isAccumulatingLongExposure = false
+        isFinalizingLongExposure = false
+        longExposureAccumulator = nil
+        longExposureFrameCount = 0
+        longExposureTargetDuration = 0
+        let completion = longExposureCompletion
+        longExposureCompletion = nil
+
+        restoreExposureAfterLongExposure()
+
+        DispatchQueue.main.async {
+            self.isLongExposureCapturing = false
+            self.longExposureProgress = 0.0
+            self.longExposurePathLabel = ""
+            completion?(nil)
         }
     }
 

@@ -1,6 +1,6 @@
 # Shutter motion
 
-Build **44** · `ShutterMotion` in `ContentView.swift`
+Build **45** · `ShutterMotion` in `ContentView.swift`
 
 Camera chrome uses **timing curves**, not bouncy springs. Cull/Darkroom keeps its own `CullMotion` system.
 

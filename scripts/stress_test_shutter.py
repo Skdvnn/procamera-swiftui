@@ -269,7 +269,7 @@ def test_source_guards() -> None:
         "shutter timer cancel stays enabled",
         "Do NOT set isCapturing" in content
         and "timerCountdown: timerCountdown" in content
-        and ".disabled(isBusy && !isTimerArmed)" in content,
+        and ".disabled(isBusy && !canCancel)" in content,
     )
     check(
         "shutter SwiftUI press travel",
@@ -282,6 +282,18 @@ def test_source_guards() -> None:
     )
     check("shutter compact landscape", "compact: compact" in content and "landscapeDeckHeight: CGFloat = 80" in content)
     check("shutter larger hit target", "contentShape(Circle())" in content and "hitPad" in content)
+    check("camera permission overlay", "CameraPermissionOverlay" in content and "OPEN SETTINGS" in content)
+    check("capture fail toast", "showStatusToast" in content and "Capture failed" in content)
+    check("format syncs onChange", "onChange(of: captureFormat)" in content)
+    check("LE cancel API", "func cancelLongExposure" in cam and "allowCancelWhileBusy" in content)
+    check("HW LE configure restores exposure", "Don't leave the finder locked" in cam)
+    check("flash AUTO label", 'case .auto: return "AUTO"' in content)
+    check(
+        "top ISO AUTO honesty",
+        "isoIsAuto" in content and "isoIsAuto" in (ROOT / "AnalogGaugeView.swift").read_text(),
+    )
+    check("lock screen honest about looks", "LOOKS IN FULL APP" in (ROOT / "ShutterCaptureExtension" / "ShutterCaptureExtension.swift").read_text())
+    check("photos denial toast", "Saved in app · Photos access needed" in content)
     check("comic fallback", "func applyToon" in (ROOT / "LensFXEngine.swift").read_text())
     check("film grain bake", "func applyFilmGrain" in cam)
     # Preview intentionally skips CineStill bloom (perf); still bake keeps it.
@@ -446,10 +458,10 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 44", m is not None and int(ver) >= 44, ver)
+    check("Info.plist build >= 45", m is not None and int(ver) >= 45, ver)
     import re as _re
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 44+", any(v >= 44 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 45+", any(v >= 45 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

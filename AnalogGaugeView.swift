@@ -422,6 +422,7 @@ struct NeedleShape: Shape {
 struct HorizontalExposureMeter: View {
     let value: Float // -2 to +2
     let iso: Int
+    var isoIsAuto: Bool = false
 
     // Major marks at full stops, minor marks at 1/3 stops
     private let majorMarks = ["-2", "-1", "0", "+1", "+2"]
@@ -491,7 +492,7 @@ struct HorizontalExposureMeter: View {
                 Text("ISO")
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundColor(.white.opacity(0.5))
-                Text("\(iso)")
+                Text(isoIsAuto ? "AUTO" : "\(iso)")
                     .font(.system(size: 13, weight: .bold, design: .monospaced))
                     .foregroundColor(.white.opacity(0.8))
             }
@@ -507,6 +508,7 @@ struct HorizontalExposureMeter: View {
 struct CenterDisplay: View {
     let timerSeconds: Int
     let iso: Int
+    var isoIsAuto: Bool = false
     let flashMode: String
     let macroEnabled: Bool
     let isAutoFocus: Bool
@@ -516,7 +518,7 @@ struct CenterDisplay: View {
 
     var body: some View {
         // Just the horizontal exposure meter, centered between gauges
-        HorizontalExposureMeter(value: exposureValue, iso: iso)
+        HorizontalExposureMeter(value: exposureValue, iso: iso, isoIsAuto: isoIsAuto)
     }
 }
 
@@ -548,6 +550,7 @@ struct AnalogDisplayPanel: View {
     @Binding var shutterSpeedIndex: Int  // Changed from apertureValue to shutter speed
     let timerSeconds: Int
     let iso: Int
+    var isoIsAuto: Bool = false
     let flashMode: String
     let macroEnabled: Bool
     let isAutoFocus: Bool
@@ -608,6 +611,7 @@ struct AnalogDisplayPanel: View {
                     CenterDisplay(
                         timerSeconds: timerSeconds,
                         iso: iso,
+                        isoIsAuto: isoIsAuto,
                         flashMode: flashMode,
                         macroEnabled: macroEnabled,
                         isAutoFocus: isAutoFocus,
