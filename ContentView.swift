@@ -21,7 +21,7 @@ enum ShutterMotion {
     static let reticleIn = Animation.easeOut(duration: 0.14)
     static let reticleOut = Animation.easeOut(duration: 0.2)
     /// Capture flash wash
-    static let flash = Animation.easeOut(duration: 0.07)
+    static let flash = Animation.easeOut(duration: 0.1)
     /// Timer digit tick
     static let tick = Animation.easeOut(duration: 0.15)
     /// Local film / FX / recipe picker entrance (picker subtree only)
@@ -264,7 +264,8 @@ struct ContentView: View {
     /// Shared collapsed chrome metrics — histogram floats above fade/deck.
     private enum CollapsedChrome {
         static let deckHeight: CGFloat = 88
-        static let landscapeDeckHeight: CGFloat = 72
+        /// Tall enough for the compact shutter (64) + vertical pad in landscape.
+        static let landscapeDeckHeight: CGFloat = 80
         static let fadeHeight: CGFloat = 48
         /// Approximate RefractiveGlassInfoBar height (pad + hist + readouts).
         static let infoBarHeight: CGFloat = 56
@@ -1161,7 +1162,7 @@ struct ContentView: View {
                         .frame(maxWidth: .infinity)
                         .contentShape(Rectangle())
 
-                    bottomCompactDeck
+                    bottomCompactDeck(compact: compact)
                         .frame(height: deckH)
                         .offset(y: bottomDeckDrag * 0.12)
                         .opacity(1.0 - min(abs(bottomDeckDrag) / 90.0, 0.45))
@@ -1220,7 +1221,7 @@ struct ContentView: View {
             }
     }
 
-    private var bottomCompactDeck: some View {
+    private func bottomCompactDeck(compact: Bool = false) -> some View {
         HStack(alignment: .center, spacing: 0) {
             ThumbnailPill(image: lastCapturedImage) {
                 Haptics.click()
@@ -1229,8 +1230,14 @@ struct ContentView: View {
 
             Spacer(minLength: 8)
 
-            ShutterButton(isCapturing: isCapturing) {
-                Haptics.heavy()
+            ShutterButton(
+                isBusy: isCapturing,
+                timerCountdown: timerCountdown,
+                longExposureProgress: camera.isLongExposureCapturing
+                    ? camera.longExposureProgress
+                    : nil,
+                compact: compact
+            ) {
                 handleCapture()
             }
             .zIndex(2)
@@ -1245,7 +1252,7 @@ struct ContentView: View {
             )
         }
         .padding(.horizontal, DS.pageMargin)
-        .padding(.vertical, 6)
+        .padding(.vertical, compact ? 4 : 6)
     }
 
     private var bottomExpandedDeck: some View {
@@ -1375,8 +1382,13 @@ struct ContentView: View {
 
                 Spacer(minLength: 8)
 
-                ShutterButton(isCapturing: isCapturing) {
-                    Haptics.heavy()
+                ShutterButton(
+                    isBusy: isCapturing,
+                    timerCountdown: timerCountdown,
+                    longExposureProgress: camera.isLongExposureCapturing
+                        ? camera.longExposureProgress
+                        : nil
+                ) {
                     handleCapture()
                 }
                 .zIndex(2)
@@ -1397,14 +1409,16 @@ struct ContentView: View {
     }
 
     private func handleCapture() {
-        // Second tap during countdown cancels.
+        // Second tap during countdown cancels (shutter stays enabled while armed).
         if timerWorkItem != nil || timerCountdown > 0 {
+            Haptics.click()
             cancelTimerCountdown()
             return
         }
         guard !isCapturing else { return }
         if timerSeconds > 0 {
-            isCapturing = true
+            // Do NOT set isCapturing — that used to .disabled the shutter and
+            // blocked the on-screen cancel path the comment above promises.
             timerCountdown = timerSeconds
             runCountdown()
         } else {
@@ -1416,9 +1430,6 @@ struct ContentView: View {
         timerWorkItem?.cancel()
         timerWorkItem = nil
         timerCountdown = 0
-        if !camera.isLongExposureCapturing {
-            isCapturing = false
-        }
     }
 
     private func runCountdown() {
@@ -1472,7 +1483,7 @@ struct ContentView: View {
             // Normal capture with flash wash (opacity eases via ShutterMotion.flash)
             isCapturing = true
             showFlash = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.055) { showFlash = false }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) { showFlash = false }
             camera.capturePhoto(
                 filmFilter: shutterFilm,
                 lensFX: shutterFX,
@@ -2320,45 +2331,87 @@ struct Triangle: Shape {
 }
 
 // MARK: - Shutter Button (machined steel — bevel + brush)
-/// Shader roughness args are CONSTANT — never animate stitchable Metal params
-/// (animating them caused EXC_BAD_ACCESS / MetadataCache stack overflow on press & capture).
+/// Shader roughness / size / lightPos args are CONSTANT — never animate
+/// stitchable Metal params (EXC_BAD_ACCESS / MetadataCache on press & capture).
+/// Press travel, busy rings, and timer digits are SwiftUI-only overlays.
 struct ShutterButton: View {
-    let isCapturing: Bool
+    /// True while a still / LE bake owns the pipeline (disables the button).
+    var isBusy: Bool = false
+    /// Countdown seconds remaining; >0 keeps the button enabled for cancel.
+    var timerCountdown: Int = 0
+    /// 0…1 while STACK/HW long exposure is running (nil = not in LE).
+    var longExposureProgress: Float? = nil
+    /// Landscape / short deck — slightly smaller chrome.
+    var compact: Bool = false
     let action: () -> Void
+
+    private var isTimerArmed: Bool { timerCountdown > 0 }
 
     var body: some View {
         Button(action: action) {
-            ShutterButtonChrome(isCapturing: isCapturing)
+            ShutterButtonChrome(
+                isBusy: isBusy,
+                timerCountdown: timerCountdown,
+                longExposureProgress: longExposureProgress,
+                compact: compact
+            )
         }
         // ButtonStyle press feedback — never a DragGesture(minDistance: 0),
         // which stole taps when the expanded deck also owned a swipe gesture.
-        .buttonStyle(ShutterPressStyle())
-        .disabled(isCapturing)
+        .buttonStyle(ShutterPressStyle(armed: isTimerArmed))
+        // Busy blocks re-entry; timer-armed stays tappable so cancel works.
+        .disabled(isBusy && !isTimerArmed)
+        .accessibilityLabel(isTimerArmed ? "Cancel timer" : "Shutter")
     }
 }
 
 private struct ShutterPressStyle: ButtonStyle {
+    var armed: Bool = false
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .brightness(configuration.isPressed ? -0.04 : 0)
-            .opacity(configuration.isPressed ? 0.94 : 1)
+            // SwiftUI travel only — Metal shader args stay constant.
+            .scaleEffect(configuration.isPressed ? 0.955 : 1.0)
+            .offset(y: configuration.isPressed ? 1.2 : 0)
+            .brightness(configuration.isPressed ? -0.055 : 0)
+            .opacity(configuration.isPressed ? 0.96 : 1)
             .shadow(
-                color: Color.black.opacity(configuration.isPressed ? 0.35 : 0.55),
-                radius: configuration.isPressed ? 2 : 5,
-                y: configuration.isPressed ? 1 : 2.5
+                color: Color.black.opacity(configuration.isPressed ? 0.32 : 0.58),
+                radius: configuration.isPressed ? 1.5 : 5.5,
+                y: configuration.isPressed ? 0.5 : 2.5
             )
+            .animation(ShutterMotion.press, value: configuration.isPressed)
             .onChange(of: configuration.isPressed) { _, pressed in
                 if pressed {
-                    UIImpactFeedbackGenerator(style: .heavy).impactOccurred(intensity: 0.8)
-                } else {
-                    UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.6)
+                    let style: UIImpactFeedbackGenerator.FeedbackStyle = armed ? .rigid : .medium
+                    UIImpactFeedbackGenerator(style: style).impactOccurred(intensity: armed ? 0.7 : 0.85)
+                } else if !armed {
+                    UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.4)
                 }
             }
     }
 }
 
 private struct ShutterButtonChrome: View {
-    let isCapturing: Bool
+    let isBusy: Bool
+    let timerCountdown: Int
+    let longExposureProgress: Float?
+    let compact: Bool
+
+    private var outer: CGFloat { compact ? 64 : 76 }
+    private var face: CGFloat { compact ? 50 : 60 }
+    private var well: CGFloat { compact ? 56 : 66 }
+    private var hitPad: CGFloat { compact ? 8 : 10 }
+
+    private var isTimerArmed: Bool { timerCountdown > 0 }
+    private var leProgress: CGFloat {
+        CGFloat(max(0, min(1, longExposureProgress ?? 0)))
+    }
+    private var showLERing: Bool { longExposureProgress != nil }
+
+    /// Accent for armed timer / LE — warm, reads on steel.
+    private let armAccent = Color(red: 1.0, green: 0.72, blue: 0.28)
+    private let leAccent = Color(red: 1.0, green: 0.42, blue: 0.28)
 
     var body: some View {
         ZStack {
@@ -2367,24 +2420,24 @@ private struct ShutterButtonChrome: View {
                 .fill(
                     AngularGradient(
                         colors: [
+                            Color(red: 0.52, green: 0.54, blue: 0.58),
+                            Color(red: 0.18, green: 0.19, blue: 0.22),
+                            Color(red: 0.46, green: 0.48, blue: 0.52),
+                            Color(red: 0.14, green: 0.15, blue: 0.18),
                             Color(red: 0.50, green: 0.52, blue: 0.56),
                             Color(red: 0.20, green: 0.21, blue: 0.24),
-                            Color(red: 0.44, green: 0.46, blue: 0.50),
-                            Color(red: 0.16, green: 0.17, blue: 0.20),
-                            Color(red: 0.48, green: 0.50, blue: 0.54),
-                            Color(red: 0.22, green: 0.23, blue: 0.26),
-                            Color(red: 0.50, green: 0.52, blue: 0.56)
+                            Color(red: 0.52, green: 0.54, blue: 0.58)
                         ],
                         center: .center
                     )
                 )
-                .frame(width: 76, height: 76)
+                .frame(width: outer, height: outer)
                 .overlay {
                     Circle()
                         .fill(Color(red: 0.33, green: 0.35, blue: 0.39))
                         .colorEffect(
                             ShaderLibrary.metallicSurface(
-                                .float2(76, 76),
+                                .float2(Float(outer), Float(outer)),
                                 .float(1.0),
                                 .float2(0.26, 0.14)
                             )
@@ -2397,14 +2450,14 @@ private struct ShutterButtonChrome: View {
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.55),
+                                    Color.white.opacity(0.62),
                                     Color.white.opacity(0.08),
-                                    Color.black.opacity(0.7)
+                                    Color.black.opacity(0.75)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
-                            lineWidth: 1.35
+                            lineWidth: compact ? 1.15 : 1.4
                         )
                 }
                 .overlay {
@@ -2412,30 +2465,37 @@ private struct ShutterButtonChrome: View {
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.black.opacity(0.45),
+                                    Color.black.opacity(0.5),
                                     Color.clear,
-                                    Color.white.opacity(0.12)
+                                    Color.white.opacity(0.14)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
                             ),
                             lineWidth: 1.0
                         )
-                        .padding(2.5)
+                        .padding(compact ? 2 : 2.5)
                 }
+                // Soft outer glow when armed / LE — SwiftUI only.
+                .shadow(
+                    color: (isTimerArmed ? armAccent : showLERing ? leAccent : .clear)
+                        .opacity(isTimerArmed || showLERing ? 0.45 : 0),
+                    radius: 6,
+                    y: 0
+                )
 
             Circle()
-                .stroke(Color.black.opacity(0.55), lineWidth: 1.75)
-                .frame(width: 66, height: 66)
+                .stroke(Color.black.opacity(0.6), lineWidth: compact ? 1.4 : 1.75)
+                .frame(width: well, height: well)
                 .shadow(color: Color.black.opacity(0.35), radius: 1, y: 0.5)
 
             ZStack {
                 Circle()
                     .fill(Color(red: 0.30, green: 0.32, blue: 0.36))
-                    .frame(width: 60, height: 60)
+                    .frame(width: face, height: face)
                     .colorEffect(
                         ShaderLibrary.metallicSurface(
-                            .float2(60, 60),
+                            .float2(Float(face), Float(face)),
                             .float(0.95),
                             .float2(0.28, 0.20)
                         )
@@ -2446,63 +2506,118 @@ private struct ShutterButtonChrome: View {
                     .fill(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(0.26),
+                                Color.white.opacity(0.28),
                                 Color.clear,
-                                Color.black.opacity(0.22)
+                                Color.black.opacity(0.24)
                             ],
                             startPoint: UnitPoint(x: 0.22, y: 0.12),
                             endPoint: UnitPoint(x: 0.85, y: 0.92)
                         )
                     )
-                    .frame(width: 60, height: 60)
+                    .frame(width: face, height: face)
                     .blendMode(.softLight)
 
                 Ellipse()
                     .fill(
                         RadialGradient(
                             colors: [
-                                Color.white.opacity(0.16),
+                                Color.white.opacity(0.18),
                                 Color.clear
                             ],
                             center: UnitPoint(x: 0.35, y: 0.28),
                             startRadius: 0,
-                            endRadius: 18
+                            endRadius: face * 0.3
                         )
                     )
-                    .frame(width: 36, height: 22)
-                    .offset(x: -4, y: -8)
+                    .frame(width: face * 0.6, height: face * 0.37)
+                    .offset(x: -face * 0.07, y: -face * 0.13)
                     .blendMode(.plusLighter)
-                    .opacity(0.55)
+                    .opacity(isBusy ? 0.25 : 0.55)
 
                 ForEach(0..<4, id: \.self) { i in
                     Circle()
                         .stroke(Color.white.opacity(0.05), lineWidth: 0.55)
-                        .frame(width: CGFloat(50 - i * 9), height: CGFloat(50 - i * 9))
+                        .frame(
+                            width: face - 10 - CGFloat(i) * (face * 0.15),
+                            height: face - 10 - CGFloat(i) * (face * 0.15)
+                        )
                 }
 
                 Circle()
                     .stroke(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(0.32),
+                                Color.white.opacity(0.34),
                                 Color.clear,
-                                Color.black.opacity(0.45)
+                                Color.black.opacity(0.48)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         ),
                         lineWidth: 1
                     )
-                    .frame(width: 58, height: 58)
+                    .frame(width: face - 2, height: face - 2)
 
-                if isCapturing {
+                // Busy dim (still bake) — not the only cue anymore.
+                if isBusy && !isTimerArmed {
                     Circle()
-                        .fill(Color.white.opacity(0.12))
-                        .frame(width: 60, height: 60)
+                        .fill(Color.black.opacity(0.28))
+                        .frame(width: face, height: face)
+                }
+
+                // Timer digit on the face (cancel target stays the whole button).
+                if isTimerArmed {
+                    Text("\(timerCountdown)")
+                        .font(.system(size: compact ? 22 : 26, weight: .semibold, design: .monospaced))
+                        .foregroundColor(armAccent)
+                        .shadow(color: .black.opacity(0.55), radius: 1, y: 1)
+                        .contentTransition(.numericText())
+                        .animation(ShutterMotion.tick, value: timerCountdown)
                 }
             }
             .shadow(color: Color.black.opacity(0.5), radius: 2.5, y: 1.5)
+
+            // Status rings outside the Metal face — safe to animate.
+            if isTimerArmed {
+                Circle()
+                    .stroke(armAccent.opacity(0.85), lineWidth: 2.25)
+                    .frame(width: face + 6, height: face + 6)
+                Circle()
+                    .stroke(armAccent.opacity(0.25), lineWidth: 4)
+                    .frame(width: face + 10, height: face + 10)
+            } else if showLERing {
+                Circle()
+                    .stroke(leAccent.opacity(0.22), lineWidth: 2.5)
+                    .frame(width: face + 8, height: face + 8)
+                Circle()
+                    .trim(from: 0, to: leProgress)
+                    .stroke(
+                        leAccent,
+                        style: StrokeStyle(lineWidth: 2.5, lineCap: .round)
+                    )
+                    .frame(width: face + 8, height: face + 8)
+                    .rotationEffect(.degrees(-90))
+                    .animation(ShutterMotion.scrub, value: leProgress)
+            } else if isBusy {
+                // Indeterminate capture ring (pulse via TimelineView — no Metal args).
+                TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                    let t = context.date.timeIntervalSinceReferenceDate
+                    let spin = t.truncatingRemainder(dividingBy: 1.2) / 1.2
+                    let pulse = 0.4 + 0.45 * (0.5 + 0.5 * sin(t * 7))
+                    Circle()
+                        .trim(from: spin, to: min(1, spin + 0.28))
+                        .stroke(
+                            Color.white.opacity(pulse),
+                            style: StrokeStyle(lineWidth: 2.2, lineCap: .round)
+                        )
+                        .frame(width: face + 8, height: face + 8)
+                        .rotationEffect(.degrees(-90))
+                }
+            }
         }
+        // Larger hit target without growing Metal layers.
+        .frame(width: outer + hitPad, height: outer + hitPad)
+        .contentShape(Circle())
     }
 }
 

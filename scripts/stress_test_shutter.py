@@ -265,6 +265,23 @@ def test_source_guards() -> None:
         and ".simultaneousGesture(bottomDeckSwipe)" in content
         and "Above histogram + viewfinder chrome" in content,
     )
+    check(
+        "shutter timer cancel stays enabled",
+        "Do NOT set isCapturing" in content
+        and "timerCountdown: timerCountdown" in content
+        and ".disabled(isBusy && !isTimerArmed)" in content,
+    )
+    check(
+        "shutter SwiftUI press travel",
+        "scaleEffect(configuration.isPressed ? 0.955" in content
+        and "Shader roughness / size / lightPos args are CONSTANT" in content,
+    )
+    check(
+        "shutter LE ring on button",
+        "longExposureProgress:" in content and "showLERing" in content,
+    )
+    check("shutter compact landscape", "compact: compact" in content and "landscapeDeckHeight: CGFloat = 80" in content)
+    check("shutter larger hit target", "contentShape(Circle())" in content and "hitPad" in content)
     check("comic fallback", "func applyToon" in (ROOT / "LensFXEngine.swift").read_text())
     check("film grain bake", "func applyFilmGrain" in cam)
     # Preview intentionally skips CineStill bloom (perf); still bake keeps it.
@@ -381,7 +398,7 @@ def test_landscape_layout() -> None:
     W, H = 844.0, 390.0
     safe_top, safe_bottom = 0.0, 21.0
     top_panel = 44.0
-    deck_h = 72.0  # landscapeDeckHeight
+    deck_h = 80.0  # landscapeDeckHeight
     fade_h = 48.0
     info_h = 48.0
     bottom_pad = max(safe_bottom * 0.55, 8.0)
@@ -429,10 +446,10 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 43", m is not None and int(ver) >= 43, ver)
+    check("Info.plist build >= 44", m is not None and int(ver) >= 44, ver)
     import re as _re
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 43+", any(v >= 43 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 44+", any(v >= 44 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)
