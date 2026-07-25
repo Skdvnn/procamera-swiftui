@@ -337,6 +337,7 @@ struct LoupeView: View {
     let touch: CGPoint
     let container: CGSize
     var diameter: CGFloat = 148
+    var magnification: CGFloat = 2.4
     @State private var raised = false
 
     var body: some View {
@@ -345,7 +346,7 @@ struct LoupeView: View {
             aspectRatio: imgSize.width > 0 ? imgSize : CGSize(width: 1, height: 1),
             insideRect: CGRect(origin: .zero, size: container)
         )
-        let scale: CGFloat = 2.4
+        let scale = magnification
         let nx = (touch.x - fit.minX) / max(fit.width, 1)
         let ny = (touch.y - fit.minY) / max(fit.height, 1)
         let pos = CGPoint(
@@ -399,6 +400,14 @@ struct LoupeView: View {
             Rectangle()
                 .fill(CullPalette.amber.opacity(0.45))
                 .frame(width: 0.6, height: 10)
+
+            Text(String(format: "%.1f×", magnification))
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundColor(CullPalette.amber.opacity(0.9))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(Color.black.opacity(0.65)))
+                .offset(y: diameter * 0.42)
         }
         .scaleEffect(raised ? 1.0 : 0.72, anchor: .bottom)
         .opacity(raised ? 1 : 0)
@@ -1153,6 +1162,12 @@ struct CullSessionView: View {
                         shareKeeperImages()
                     }
                 },
+                onShareProof: {
+                    showFinishDone = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        shareDoneProofPDF()
+                    }
+                },
                 onOpenPhotos: {
                     PhotosLibraryService.openPhotosApp()
                 },
@@ -1162,7 +1177,7 @@ struct CullSessionView: View {
                     dismiss()
                 }
             )
-            .presentationDetents([.medium])
+            .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
             .preferredColorScheme(.dark)
         }
@@ -1829,6 +1844,16 @@ struct CullSessionView: View {
         shareKeeperItems = urls.isEmpty ? images : urls
     }
 
+    private func shareDoneProofPDF() {
+        let frames = doneKeeperShots.isEmpty ? shots : doneKeeperShots
+        if let url = ProofPDFExporter.makePDF(title: doneAlbumName.isEmpty ? session.title : doneAlbumName, shots: frames, store: store) {
+            shareProofURL = url
+        } else {
+            // Re-offer the done sheet if PDF failed.
+            showFinishDone = true
+        }
+    }
+
     private func exportProofPDF() {
         let keepers = shots.filter { marks.state(for: $0.id) == .keep }
         let frames = keepers.isEmpty ? shots : keepers
@@ -1847,6 +1872,7 @@ struct FinishDoneSheet: View {
     let keeperCount: Int
     let onOpenBook: () -> Void
     let onShareKeepers: () -> Void
+    var onShareProof: (() -> Void)? = nil
     let onOpenPhotos: () -> Void
     let onDone: () -> Void
 
@@ -1887,6 +1913,16 @@ struct FinishDoneSheet: View {
                             subtitle: "JPEG files via system share sheet",
                             accent: false
                         )
+                    }
+
+                    if let onShareProof {
+                        Button(action: onShareProof) {
+                            finishActionRow(
+                                title: "SHARE PROOF PDF",
+                                subtitle: "Contact sheet of keepers",
+                                accent: false
+                            )
+                        }
                     }
 
                     Button(action: onOpenPhotos) {

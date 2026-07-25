@@ -97,7 +97,8 @@ struct ViewfinderOverlay: View {
     var onFlipCamera: (() -> Void)? = nil
     var onSaveLook: (() -> Void)? = nil
     /// Scene presets live in the film dock (Street chip removed).
-    var shootMode: ShootMode = .street
+    /// Nil when exposure is AUTO (no scene owns the dials).
+    var shootMode: ShootMode? = nil
     var onApplyShootMode: ((ShootMode) -> Void)? = nil
     @ObservedObject var lookStore: LookRecipeStore = .shared
     @State private var showFilmMenu = false
@@ -637,7 +638,8 @@ struct InfoBar: View {
 struct LeicaFilmPicker: View {
     @Binding var selectedFilter: FilmFilterMode
     @Binding var isPresented: Bool
-    var shootMode: ShootMode = .street
+    /// Nil when exposure is AUTO (no scene owns the dials).
+    var shootMode: ShootMode? = nil
     var onApplyShootMode: ((ShootMode) -> Void)? = nil
     var onSaveLook: (() -> Void)? = nil
 

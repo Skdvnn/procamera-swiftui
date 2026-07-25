@@ -46,6 +46,8 @@ struct ShutterSettingsSheet: View {
     @Binding var captureFormat: CaptureFormat
     @Binding var defaultFilm: FilmFilterMode
     @Binding var naturalCapture: Bool
+    @Binding var nightAssist: Bool
+    @Binding var holdBurst: Bool
     var onDismiss: () -> Void
 
     var body: some View {
@@ -68,6 +70,15 @@ struct ShutterSettingsSheet: View {
                     Toggle("Focus peaking", isOn: $focusPeaking)
                     Toggle("Zebra highlights", isOn: $zebraEnabled)
                     Toggle("Horizon level", isOn: $showLevel)
+                }
+
+                Section {
+                    Toggle("Low-light Night tip", isOn: $nightAssist)
+                    Toggle("Hold shutter for burst", isOn: $holdBurst)
+                } header: {
+                    Text("Assist")
+                } footer: {
+                    Text("Night tip offers an opt-in Night preset when AUTO is dark — it never auto-fires long exposure. Burst queues up to 6 stills while you hold.")
                 }
 
                 Section("Capture defaults") {

@@ -224,6 +224,7 @@ struct ContentView: View {
     @State private var nightAssistDarkStreak = 0
     @State private var nightAssistDismissedUntil: Date?
     @AppStorage("cam.nightAssist") private var nightAssistEnabled = true
+    @AppStorage("cam.holdBurst") private var holdBurstEnabled = true
     /// Hold-to-burst: finger still down after long-press threshold.
     @State private var isBurstHolding = false
     /// Suppresses the Button tap that fires when a long-press burst ends.
@@ -462,7 +463,7 @@ struct ContentView: View {
                                 LookRecipeStore.shared.saveCurrent(film: filmFilter, lensFX: lensFX)
                                 Haptics.medium()
                             },
-                            shootMode: ShootMode(rawValue: shootModeRaw) ?? .street,
+                            shootMode: ShootMode(rawValue: shootModeRaw),
                             onApplyShootMode: { applyShootMode($0) }
                         )
                         .padding(.horizontal, effectiveBottomCollapsed ? 6 : DS.pageMargin)
@@ -752,6 +753,8 @@ struct ContentView: View {
                 captureFormat: $captureFormat,
                 defaultFilm: defaultFilmBinding,
                 naturalCapture: $naturalCapture,
+                nightAssist: $nightAssistEnabled,
+                holdBurst: $holdBurstEnabled,
                 onDismiss: {
                     captureFormatRaw = captureFormat.rawValue
                     switch captureFormat {
@@ -884,6 +887,7 @@ struct ContentView: View {
     }
 
     private func beginBurstHold() {
+        guard holdBurstEnabled else { return }
         guard !isCapturing else { return }
         guard !camera.isLongExposureCapturing else { return }
         guard timerWorkItem == nil, timerCountdown == 0 else { return }
@@ -1048,6 +1052,10 @@ struct ContentView: View {
         // the glass bar says AUTO.
         shutterSpeedIndex = 9 // 1/125 (display only until next manual set)
         isoValue = 400
+        // Clear SCENE highlight — no preset owns AUTO exposure.
+        shootModeRaw = "auto"
+        nightAssistVisible = false
+        nightAssistDarkStreak = 0
         camera.returnToAuto()
     }
 
@@ -1537,8 +1545,9 @@ struct ContentView: View {
                     : nil,
                 allowCancelWhileBusy: camera.isLongExposureCapturing,
                 compact: compact,
-                onBurstStart: { beginBurstHold() },
-                onBurstEnd: { endBurstHold() }
+                burstCount: isBurstHolding ? max(burstCaptured, 1) : 0,
+                onBurstStart: holdBurstEnabled ? { beginBurstHold() } : nil,
+                onBurstEnd: holdBurstEnabled ? { endBurstHold() } : nil
             ) {
                 if burstConsumedTap {
                     burstConsumedTap = false
@@ -1698,8 +1707,9 @@ struct ContentView: View {
                         ? camera.longExposureProgress
                         : nil,
                     allowCancelWhileBusy: camera.isLongExposureCapturing,
-                    onBurstStart: { beginBurstHold() },
-                    onBurstEnd: { endBurstHold() }
+                    burstCount: isBurstHolding ? max(burstCaptured, 1) : 0,
+                    onBurstStart: holdBurstEnabled ? { beginBurstHold() } : nil,
+                    onBurstEnd: holdBurstEnabled ? { endBurstHold() } : nil
                 ) {
                     if burstConsumedTap {
                         burstConsumedTap = false
@@ -2735,6 +2745,8 @@ struct ShutterButton: View {
     var allowCancelWhileBusy: Bool = false
     /// Landscape / short deck — slightly smaller chrome.
     var compact: Bool = false
+    /// Frames captured in the current hold-burst (0 = not bursting).
+    var burstCount: Int = 0
     /// Hold past threshold → burst (optional).
     var onBurstStart: (() -> Void)? = nil
     var onBurstEnd: (() -> Void)? = nil
@@ -2751,7 +2763,8 @@ struct ShutterButton: View {
                 isBusy: isBusy,
                 timerCountdown: timerCountdown,
                 longExposureProgress: longExposureProgress,
-                compact: compact
+                compact: compact,
+                burstCount: burstCount
             )
         }
         // ButtonStyle press feedback — never a DragGesture(minDistance: 0),
@@ -2814,6 +2827,7 @@ private struct ShutterButtonChrome: View {
     let timerCountdown: Int
     let longExposureProgress: Float?
     let compact: Bool
+    var burstCount: Int = 0
 
     private var outer: CGFloat { compact ? 64 : 76 }
     private var face: CGFloat { compact ? 50 : 60 }
@@ -2821,6 +2835,7 @@ private struct ShutterButtonChrome: View {
     private var hitPad: CGFloat { compact ? 8 : 10 }
 
     private var isTimerArmed: Bool { timerCountdown > 0 }
+    private var isBursting: Bool { burstCount > 0 }
     private var leProgress: CGFloat {
         CGFloat(max(0, min(1, longExposureProgress ?? 0)))
     }
@@ -2829,6 +2844,7 @@ private struct ShutterButtonChrome: View {
     /// Accent for armed timer / LE — warm, reads on steel.
     private let armAccent = Color(red: 1.0, green: 0.72, blue: 0.28)
     private let leAccent = Color(red: 1.0, green: 0.42, blue: 0.28)
+    private let burstAccent = Color(red: 0.55, green: 0.82, blue: 1.0)
 
     var body: some View {
         ZStack {
@@ -2990,6 +3006,13 @@ private struct ShutterButtonChrome: View {
                         .shadow(color: .black.opacity(0.55), radius: 1, y: 1)
                         .contentTransition(.numericText())
                         .animation(ShutterMotion.tick, value: timerCountdown)
+                } else if isBursting {
+                    Text("\(burstCount)")
+                        .font(.system(size: compact ? 20 : 24, weight: .semibold, design: .monospaced))
+                        .foregroundColor(burstAccent)
+                        .shadow(color: .black.opacity(0.55), radius: 1, y: 1)
+                        .contentTransition(.numericText())
+                        .animation(ShutterMotion.tick, value: burstCount)
                 }
             }
             .shadow(color: Color.black.opacity(0.5), radius: 2.5, y: 1.5)
@@ -3002,6 +3025,19 @@ private struct ShutterButtonChrome: View {
                 Circle()
                     .stroke(armAccent.opacity(0.25), lineWidth: 4)
                     .frame(width: face + 10, height: face + 10)
+            } else if isBursting {
+                Circle()
+                    .stroke(burstAccent.opacity(0.8), lineWidth: 2.25)
+                    .frame(width: face + 6, height: face + 6)
+                Circle()
+                    .trim(from: 0, to: CGFloat(burstCount) / 6.0)
+                    .stroke(
+                        burstAccent,
+                        style: StrokeStyle(lineWidth: 2.5, lineCap: .round)
+                    )
+                    .frame(width: face + 10, height: face + 10)
+                    .rotationEffect(.degrees(-90))
+                    .animation(ShutterMotion.tick, value: burstCount)
             } else if showLERing {
                 Circle()
                     .stroke(leAccent.opacity(0.22), lineWidth: 2.5)
