@@ -146,13 +146,18 @@ final class LensFXEngine {
 
     // Cached smooth-noise texture that drives the liquid glass distortion
     private var liquidTexture: CIImage?
+    /// Throttled morph field — regenerating every preview frame was expensive.
+    private var morphCache: CIImage?
+    private var morphCacheKey: Int = .min
+    private var morphCacheWidth: Int = 0
+    private var morphCacheHeight: Int = 0
 
     // Epoch for animation: absolute timestamps are ~8e8 seconds, which loses
     // all sub-second precision once converted to Float for shader params
     private let startTime = CFAbsoluteTimeGetCurrent()
 
-    // Dedicated context for still bakes (retries + software fallback)
-    private let renderContext = CIContext(options: [.useSoftwareRenderer: false])
+    // Shared Metal CIContext for still bakes (retries + software fallback)
+    private let renderContext = ShutterRender.ciContext
 
     /// Latest viewfinder touch; read on the capture/preview queue.
     private let touchLock = NSLock()
@@ -539,8 +544,7 @@ final class LensFXEngine {
 
         // Render once to a bitmap — otherwise the noise+blur chain would be
         // lazily re-executed on the GPU for every preview frame
-        let context = CIContext(options: [.useSoftwareRenderer: false])
-        if let cgImage = context.createCGImage(blurred, from: textureRect) {
+        if let cgImage = ShutterRender.ciContext.createCGImage(blurred, from: textureRect) {
             return CIImage(cgImage: cgImage)
         }
         return blurred
@@ -548,8 +552,19 @@ final class LensFXEngine {
 
     // Two noise layers flowing in different directions, blended 50/50.
     // Their interference makes the distortion field genuinely morph over time
-    // instead of just sliding past.
+    // instead of just sliding past. Cached ~8 Hz — motion still reads continuous.
     private func morphingTexture(covering extent: CGRect, time: TimeInterval) -> CIImage {
+        let w = Int(extent.width.rounded())
+        let h = Int(extent.height.rounded())
+        // Quantize time so Liquid/Chrome don't rebuild the tile field every frame.
+        let key = Int((time * 8.0).rounded(.down))
+        if let morphCache,
+           morphCacheKey == key,
+           morphCacheWidth == w,
+           morphCacheHeight == h {
+            return morphCache
+        }
+
         let t = CGFloat(time)
 
         let driftA = CGAffineTransform(translationX: t * 46, y: t * 18)
@@ -572,7 +587,12 @@ final class LensFXEngine {
         mix.targetImage = layerB
         mix.time = 0.5
 
-        return (mix.outputImage ?? layerA).cropped(to: extent)
+        let result = (mix.outputImage ?? layerA).cropped(to: extent)
+        morphCache = result
+        morphCacheKey = key
+        morphCacheWidth = w
+        morphCacheHeight = h
+        return result
     }
 
     // Heavy glass warp driven by the morphing texture, plus a slow breathing

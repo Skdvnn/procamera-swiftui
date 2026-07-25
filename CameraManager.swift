@@ -51,6 +51,9 @@ class CameraManager: NSObject, ObservableObject {
     }
     @Published var isLongExposureCapturing: Bool = false
     @Published var longExposureProgress: Float = 0.0
+    /// Throttle STACK progress publishes so ContentView isn't rebuilt every frame.
+    private var lastLEProgressPublish: CFAbsoluteTime = 0
+    private var lastLEProgressValue: Float = -1
     /// "HW" single-shot hardware duration vs "STACK" computational average.
     @Published var longExposurePathLabel: String = ""
     /// Hold-to-compare: temporarily show clean preview (no film/FX bake).
@@ -76,12 +79,13 @@ class CameraManager: NSObject, ObservableObject {
     private var lastPreviewFrameTime: CFAbsoluteTime = 0
     /// True while Metal is showing a filtered frame (video-queue flag).
     private var livePreviewActive = false
-    /// Cap live FX preview — heavy FX go slower.
-    private let previewFrameInterval: CFAbsoluteTime = 1.0 / 15.0
+    /// Cap live FX preview — heavy FX go slower (build 42: slightly lower for headroom).
+    private let previewFrameInterval: CFAbsoluteTime = 1.0 / 12.0
 
-    // Live histogram - real luminance bins computed from preview frames
-    @Published var histogramBins: [Float] = []
+    // Live histogram — published on HistogramBus (not here) so bin updates
+    // don't invalidate the whole finder. Sampled on a utility queue.
     private var lastHistogramTime: CFAbsoluteTime = 0
+    private let histogramQueue = DispatchQueue(label: "camera.histogram", qos: .utility)
 
     // Thread-safe copies for the video-data callback (don't read @Published off-main)
     private let pipelineLock = NSLock()
@@ -140,7 +144,7 @@ class CameraManager: NSObject, ObservableObject {
     // Film stocks — same enum as UI (`FilmFilterMode`).
     typealias FilmFilter = FilmFilterMode
 
-    private let ciContext = CIContext(options: [.useSoftwareRenderer: false])
+    private let ciContext = ShutterRender.ciContext
 
     override init() {
         super.init()
@@ -463,30 +467,83 @@ class CameraManager: NSObject, ObservableObject {
         return duration
     }
 
-    // MARK: - Long Exposure Format Selection
+    // MARK: - Preview Format Selection
+    /// Prefer a smooth finder (≥30 fps near 1080p) over maximizing exposure duration.
+    /// Night/LE still work within the format's max exposure; we no longer pick
+    /// slow high-res formats that starve the live preview.
     private func selectBestFormatForLongExposure(device: AVCaptureDevice) {
-        // Find format with longest max exposure duration at >= 1080p resolution.
-        // On builtInWideAngleCamera all standard formats support .custom exposure.
-        var bestFormat: AVCaptureDevice.Format?
-        var longestDuration: CMTime = CMTime.zero
+        struct Candidate {
+            let format: AVCaptureDevice.Format
+            let width: Int32
+            let maxFps: Float
+            let maxExp: CMTime
+        }
 
+        var candidates: [Candidate] = []
         for format in device.formats {
-            let maxDuration = format.maxExposureDuration
             let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+            let maxFps = Float(
+                format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
+            )
+            // Keep preview-sized streams; skip 4K/photo-only formats that crush fps.
+            guard dimensions.width >= 1280, dimensions.width <= 1920 else { continue }
+            candidates.append(
+                Candidate(
+                    format: format,
+                    width: dimensions.width,
+                    maxFps: maxFps,
+                    maxExp: format.maxExposureDuration
+                )
+            )
+        }
 
-            guard dimensions.width >= 1920 else { continue }
-
-            if CMTimeCompare(maxDuration, longestDuration) > 0 {
-                longestDuration = maxDuration
-                bestFormat = format
+        // Fallback: any ≥1280 wide format if the 1080p band is empty.
+        if candidates.isEmpty {
+            for format in device.formats {
+                let dimensions = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+                guard dimensions.width >= 1280 else { continue }
+                let maxFps = Float(
+                    format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
+                )
+                candidates.append(
+                    Candidate(
+                        format: format,
+                        width: dimensions.width,
+                        maxFps: maxFps,
+                        maxExp: format.maxExposureDuration
+                    )
+                )
             }
         }
 
-        guard let format = bestFormat else { return }
+        let ranked = candidates.sorted { a, b in
+            let a30 = a.maxFps >= 29
+            let b30 = b.maxFps >= 29
+            if a30 != b30 { return a30 && !b30 }
+            let aDist = abs(Int(a.width) - 1920)
+            let bDist = abs(Int(b.width) - 1920)
+            if aDist != bDist { return aDist < bDist }
+            if a.maxFps != b.maxFps { return a.maxFps > b.maxFps }
+            return CMTimeCompare(a.maxExp, b.maxExp) > 0
+        }
+
+        guard let best = ranked.first else { return }
+        let format = best.format
 
         do {
             try device.lockForConfiguration()
             device.activeFormat = format
+
+            // Cap peak stream rate at 30 fps for thermal/GPU headroom. Leave
+            // maxFrameDuration alone so custom long exposures can still lengthen frames.
+            let thirty = CMTime(value: 1, timescale: 30)
+            if format.videoSupportedFrameRateRanges.contains(where: {
+                CMTimeCompare($0.minFrameDuration, thirty) <= 0
+                    && CMTimeCompare($0.maxFrameDuration, thirty) >= 0
+            }) {
+                device.activeVideoMinFrameDuration = thirty
+            }
+
             device.unlockForConfiguration()
 
             // Verify custom exposure still works with this format; revert if not
@@ -639,6 +696,8 @@ class CameraManager: NSObject, ObservableObject {
         longExposureStartTime = CFAbsoluteTimeGetCurrent()
         longExposureTargetDuration = max(targetDuration, 0.1)
         longExposureCompletion = completion
+        lastLEProgressPublish = 0
+        lastLEProgressValue = -1
 
         // Set camera to max exposure per frame for best light gathering
         sessionQueue.async {
@@ -1690,7 +1749,7 @@ class CameraManager: NSObject, ObservableObject {
 
     // Cap live preview frames; heavy FX use a smaller buffer.
     private func downscaledForPreview(_ image: CIImage, heavyFX: Bool) -> CIImage {
-        downscaled(image, longEdge: heavyFX ? 720 : 840)
+        downscaled(image, longEdge: heavyFX ? 640 : 720)
     }
 
     private func isHeavyPreviewFX(_ fx: LensFXMode) -> Bool {
@@ -1701,7 +1760,7 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     private func previewInterval(for fx: LensFXMode, film: FilmFilter) -> CFAbsoluteTime {
-        if isHeavyPreviewFX(fx) { return 1.0 / 11.0 }
+        if isHeavyPreviewFX(fx) { return 1.0 / 8.0 }
         if film != .none || fx != .none { return previewFrameInterval }
         return previewFrameInterval
     }
@@ -1746,19 +1805,8 @@ class CameraManager: NSObject, ObservableObject {
         let normalized = bins.map { $0 / peak }
 
         DispatchQueue.main.async {
-            // Skip no-op publishes — each assignment redraws ContentView.
-            if Self.histogramNearlyEqual(normalized, self.histogramBins) { return }
-            self.histogramBins = normalized
+            HistogramBus.shared.publish(normalized)
         }
-    }
-
-    private static func histogramNearlyEqual(_ a: [Float], _ b: [Float]) -> Bool {
-        guard a.count == b.count, !a.isEmpty else { return false }
-        var err: Float = 0
-        for i in a.indices {
-            err += abs(a[i] - b[i])
-        }
-        return err < 0.4
     }
 
     // MARK: - Lens FX Processing
@@ -2051,34 +2099,48 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
 // MARK: - Video Data Output Delegate (for computational long exposure + live preview)
 extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
-        // Convert sample buffer to CIImage
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+
+        let (filmFilter, lensFX, peaking, zebra, bypass, bakingStill) = currentPipelineSelection()
+        let accumulating = isAccumulatingLongExposure
+        let wantsLiveProcessing = !bypass
+            && (filmFilter != .none || lensFX != .none || peaking || zebra)
+            && !accumulating
+            && !bakingStill
+
+        let now = CFAbsoluteTimeGetCurrent()
+        let wantsHistogram = !accumulating && (now - lastHistogramTime >= 0.5)
+
+        // Idle frames: no CIImage wrap, no GPU work — AVCaptureVideoPreviewLayer paints.
+        if !wantsLiveProcessing && !accumulating && !wantsHistogram {
+            if bypass || livePreviewActive {
+                if livePreviewActive {
+                    livePreviewActive = false
+                    livePreview.push(nil)
+                }
+            }
+            return
+        }
+
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
 
-        // Update the real histogram ~2×/sec (was 4× and republished every time).
-        if !isLongExposureCapturing {
-            let now = CFAbsoluteTimeGetCurrent()
-            if now - lastHistogramTime >= 0.5 {
-                lastHistogramTime = now
-                updateHistogram(from: ciImage)
+        if wantsHistogram {
+            lastHistogramTime = now
+            // Keep histogram off the video queue so the next frame isn't blocked.
+            histogramQueue.async { [weak self] in
+                self?.updateHistogram(from: ciImage)
             }
         }
 
-        // Handle live preview processing (film filter and/or lens FX, not during long exposure)
-        let (filmFilter, lensFX, peaking, zebra, bypass, bakingStill) = currentPipelineSelection()
         if bypass {
             if livePreviewActive {
                 livePreviewActive = false
                 livePreview.push(nil)
             }
-        } else {
-        let wantsLiveProcessing = filmFilter != .none || lensFX != .none || peaking || zebra
-        if wantsLiveProcessing && !isLongExposureCapturing && !bakingStill {
-
-            let currentTime = CFAbsoluteTimeGetCurrent()
+        } else if wantsLiveProcessing {
             let interval = previewInterval(for: lensFX, film: filmFilter)
-            if currentTime - lastPreviewFrameTime >= interval {
-                lastPreviewFrameTime = currentTime
+            if now - lastPreviewFrameTime >= interval {
+                lastPreviewFrameTime = now
                 let heavy = isHeavyPreviewFX(lensFX)
 
                 // Downscale + autoreleasepool: keep FX cheap and crash-resistant
@@ -2097,7 +2159,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                         frame = LensFXEngine.shared.apply(
                             lensFX,
                             to: frame,
-                            time: currentTime,
+                            time: now,
                             previewCheap: true
                         )
                     }
@@ -2119,19 +2181,16 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                     livePreview.push(processed)
                 }
             }
-        } else if !wantsLiveProcessing {
+        } else if livePreviewActive {
             // Clear once — do not hop to main on every idle camera frame.
-            if livePreviewActive {
-                livePreviewActive = false
-                livePreview.push(nil)
-            }
-        }
+            livePreviewActive = false
+            livePreview.push(nil)
         }
 
         // Handle long exposure frame capture (wall-clock stop + running average)
-        guard isAccumulatingLongExposure else { return }
+        guard accumulating else { return }
 
-        let elapsed = CFAbsoluteTimeGetCurrent() - longExposureStartTime
+        let elapsed = now - longExposureStartTime
         // Prefer at least one frame before stopping; bail if the sensor never delivers.
         if elapsed >= longExposureTargetDuration {
             if longExposureFrameCount > 0 || elapsed >= longExposureTargetDuration + 8 {
@@ -2164,8 +2223,13 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         }
 
         let progress = min(1.0, Float(elapsed / longExposureTargetDuration))
-        DispatchQueue.main.async {
-            self.longExposureProgress = progress
+        // ~12 Hz / 4% steps — enough for the ring, cheap for SwiftUI.
+        if progress - lastLEProgressValue >= 0.04 || now - lastLEProgressPublish >= 0.08 {
+            lastLEProgressPublish = now
+            lastLEProgressValue = progress
+            DispatchQueue.main.async {
+                self.longExposureProgress = progress
+            }
         }
     }
 

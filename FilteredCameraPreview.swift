@@ -300,14 +300,9 @@ class FilteredPreviewView: UIView {
     }
 
     override init(frame: CGRect) {
-        // Create CIContext with Metal for GPU-accelerated rendering
-        if let device = MTLCreateSystemDefaultDevice() {
-            self.device = device
-            self.commandQueue = device.makeCommandQueue()
-            self.ciContext = CIContext(mtlDevice: device, options: [.workingColorSpace: CGColorSpaceCreateDeviceRGB()])
-        } else {
-            self.ciContext = CIContext(options: [.useSoftwareRenderer: false])
-        }
+        self.device = ShutterRender.device
+        self.commandQueue = ShutterRender.device?.makeCommandQueue()
+        self.ciContext = ShutterRender.ciContext
 
         super.init(frame: frame)
         setupViews()
@@ -315,13 +310,9 @@ class FilteredPreviewView: UIView {
     }
 
     required init?(coder: NSCoder) {
-        if let device = MTLCreateSystemDefaultDevice() {
-            self.device = device
-            self.commandQueue = device.makeCommandQueue()
-            self.ciContext = CIContext(mtlDevice: device, options: [.workingColorSpace: CGColorSpaceCreateDeviceRGB()])
-        } else {
-            self.ciContext = CIContext(options: [.useSoftwareRenderer: false])
-        }
+        self.device = ShutterRender.device
+        self.commandQueue = ShutterRender.device?.makeCommandQueue()
+        self.ciContext = ShutterRender.ciContext
 
         super.init(coder: coder)
         setupViews()

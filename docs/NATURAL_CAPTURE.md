@@ -1,6 +1,6 @@
 # Natural capture — minimize Apple processing
 
-Build **30** · Branch `cursor/natural-capture-landscape-1a29`
+Build **42** · Branch `cursor/natural-capture-landscape-1a29`
 
 ## Thesis
 iPhone stills get heavy computational photography (Smart HDR / Deep Fusion / tone fusion). Shutter’s default is **natural**: deliver something closer to what the sensor saw.
@@ -38,3 +38,11 @@ There is **no public API** to disable Deep Fusion by name. The real levers:
 - Expanded shutter hit-testing fixed (swipe only in gaps; higher drag threshold; ButtonStyle press)
 - Landscape left/right enabled; compact chrome in landscape
 - Curved ƒ edge readout while scrubbing the deck down into fullscreen
+
+## Finder performance (build 42)
+- Active format prefers ≥30 fps near 1080p (no longer maximizes exposure duration at the cost of the live feed)
+- Idle video frames skip `CIImage` wrap when FX/histogram/LE are off
+- Histogram publishes on `HistogramBus` (utility queue) so bin updates do not rebuild `ContentView`
+- Shared Metal `CIContext` (`ShutterRender`) across camera, Metal preview, and Lens FX
+- Live FX caps: ~12 fps / 720px light, ~8 fps / 640px heavy; Liquid morph texture cached ~8 Hz
+- STACK long-exposure progress publishes throttled (~12 Hz)

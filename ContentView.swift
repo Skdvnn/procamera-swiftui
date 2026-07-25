@@ -359,7 +359,6 @@ struct ContentView: View {
                             RefractiveGlassInfoBar(
                                 iso: isoValue,
                                 shutterSpeed: shutterSpeeds[shutterSpeedIndex],
-                                histogram: camera.histogramBins,
                                 aperture: apertureValue,
                                 photoCount: photoCount,
                                 exposureValue: exposureValue,
@@ -1015,7 +1014,6 @@ struct ContentView: View {
                         RefractiveGlassInfoBar(
                             iso: isoValue,
                             shutterSpeed: shutterSpeeds[shutterSpeedIndex],
-                            histogram: camera.histogramBins,
                             aperture: apertureValue,
                             photoCount: photoCount,
                             exposureValue: exposureValue,
@@ -1503,7 +1501,6 @@ struct LongExposureProgressOverlay: View {
 struct RefractiveGlassInfoBar: View {
     let iso: Int
     let shutterSpeed: String
-    var histogram: [Float] = []
     let aperture: Float
     let photoCount: Int
     let exposureValue: Float
@@ -1516,11 +1513,13 @@ struct RefractiveGlassInfoBar: View {
     var compact: Bool = false
     var onToggleLock: (() -> Void)? = nil
     var onReturnToAuto: (() -> Void)? = nil
+    /// Isolated from CameraManager so ~2 Hz bin updates don't rebuild the finder.
+    @ObservedObject private var histogramBus = HistogramBus.shared
 
     var body: some View {
         HStack(spacing: compact ? 8 : 10) {
             // Histogram in glass container
-            GlassHistogram(exposureValue: exposureValue, bins: histogram)
+            GlassHistogram(exposureValue: exposureValue, bins: histogramBus.bins)
                 .frame(width: compact ? 54 : 70, height: compact ? 32 : 40)
 
             // Format info
