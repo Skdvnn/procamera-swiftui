@@ -266,6 +266,8 @@ struct ContentView: View {
     @StateObject private var gallery = GalleryStore()
     @StateObject private var volumeShutter = VolumeShutterObserver()
     @State private var showPhotoBook = false
+    /// Field Book deep link — applied when CullLibraryView appears (not a racy Notification).
+    @State private var pendingOpenFieldBook = false
     @State private var showingCleanCompare = false
 
     private var defaultFilmBinding: Binding<FilmFilterMode> {
@@ -325,7 +327,7 @@ struct ContentView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .shutterHardwareShutter)) { _ in
-            guard !showPhotoBook, !showSettings else { return }
+            guard !showPhotoBook, !showSettings, !isBurstHolding else { return }
             handleCapture()
         }
         .modifier(ContentViewLifecycle(
@@ -356,7 +358,11 @@ struct ContentView: View {
                 lastCapturedImage = nil
             }
         }) {
-            CullLibraryView(store: gallery)
+            CullLibraryView(
+                store: gallery,
+                openFieldBooksOnAppear: pendingOpenFieldBook,
+                onConsumedFieldBookOpen: { pendingOpenFieldBook = false }
+            )
         }
         .sheet(isPresented: $showSettings) {
             ShutterSettingsSheet(
@@ -602,12 +608,7 @@ struct ContentView: View {
                     toast: statusToast,
                     nightAssistVisible: nightAssistVisible,
                     cameraError: camera.error?.localizedDescription,
-                    onApplyNight: {
-                        nightAssistVisible = false
-                        nightAssistDismissedUntil = Date().addingTimeInterval(180)
-                        applyShootMode(.night)
-                        showStatusToast("Night · 1″ · ISO 1600")
-                    },
+                    onApplyNight: { applyNightAssistFromChip() },
                     onDismissNight: {
                         nightAssistVisible = false
                         nightAssistDismissedUntil = Date().addingTimeInterval(300)
@@ -751,6 +752,13 @@ struct ContentView: View {
             nightAssistDarkStreak = 0
             return
         }
+        // Never prompt / keep chip up while a capture owns the pipeline.
+        if isCapturing || isBurstHolding || camera.isLongExposureCapturing {
+            if nightAssistVisible {
+                withAnimation(ShutterMotion.chrome) { nightAssistVisible = false }
+            }
+            return
+        }
         guard !camera.isManualExposure else {
             nightAssistVisible = false
             nightAssistDarkStreak = 0
@@ -783,6 +791,14 @@ struct ContentView: View {
         }
     }
 
+    private func applyNightAssistFromChip() {
+        guard !isCapturing, !isBurstHolding, !camera.isLongExposureCapturing else { return }
+        nightAssistVisible = false
+        nightAssistDismissedUntil = Date().addingTimeInterval(180)
+        applyShootMode(.night)
+        showStatusToast("Night · 1″ · ISO 1600")
+    }
+
     private func isLowLightAUTO(iso: Float, shutterLabel: String) -> Bool {
         if iso >= 1000 { return true }
         guard let seconds = Self.parseShutterSeconds(shutterLabel) else { return false }
@@ -805,13 +821,15 @@ struct ContentView: View {
     }
 
     private func beginBurstHold() {
+        // Always mark the long-press so the Button release doesn't fire a single shot,
+        // even when we bail before starting the burst (timer / LE / busy).
+        burstConsumedTap = true
         guard holdBurstEnabled else { return }
         guard !isCapturing else { return }
         guard !camera.isLongExposureCapturing else { return }
         guard timerWorkItem == nil, timerCountdown == 0 else { return }
         // Manual LE indices — hold is cancel, not burst.
         if camera.isManualExposure && shutterSpeedIndex <= 3 { return }
-        burstConsumedTap = true
         isBurstHolding = true
         burstCaptured = 0
         fireBurstFrame()
@@ -821,6 +839,15 @@ struct ContentView: View {
         isBurstHolding = false
         if burstCaptured > 1 {
             showStatusToast("Burst · \(burstCaptured)")
+        }
+        // Do NOT clear burstConsumedTap here — finger-up order is
+        // onBurstEnd → (maybe disable) → Button.action. Clearing early lets
+        // Button.action fire a bonus single shot. Swallow in the action, or
+        // clear on the next main turn if the action was skipped (disabled).
+        DispatchQueue.main.async {
+            if self.burstConsumedTap {
+                self.burstConsumedTap = false
+            }
         }
     }
 
@@ -832,7 +859,13 @@ struct ContentView: View {
             }
             return
         }
-        guard !isCapturing else { return }
+        // Pipeline still owned — reschedule while finger is down (don't stall burst).
+        if isCapturing {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
+                fireBurstFrame()
+            }
+            return
+        }
         isCapturing = true
         syncCaptureControlsToCamera()
         let shutterFilm = cameraFilmFilter(from: filmFilter)
@@ -865,6 +898,11 @@ struct ContentView: View {
                     if burstCaptured > 1 {
                         showStatusToast("Burst · \(burstCaptured)")
                     }
+                }
+            } else if isBurstHolding && burstCaptured < burstMaxFrames {
+                // Serialize reject / bake busy — retry while still holding.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+                    fireBurstFrame()
                 }
             } else {
                 isBurstHolding = false
@@ -993,11 +1031,8 @@ struct ContentView: View {
         case .darkroom:
             showPhotoBook = true
         case .fieldBook:
+            pendingOpenFieldBook = true
             showPhotoBook = true
-            // CullLibraryView listens and opens the Field Book shelf.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                NotificationCenter.default.post(name: .shutterOpenFieldBook, object: nil)
-            }
         case .look(let filmName, let fxName):
             showPhotoBook = false
             // Always apply both — film-only widgets used to leave a stale FX on.
@@ -1456,7 +1491,7 @@ struct ContentView: View {
             Spacer(minLength: 8)
 
             ShutterButton(
-                isBusy: isCapturing && !isBurstHolding,
+                isBusy: isCapturing && !isBurstHolding && !burstConsumedTap,
                 timerCountdown: timerCountdown,
                 longExposureProgress: camera.isLongExposureCapturing
                     ? camera.longExposureProgress
@@ -1469,7 +1504,6 @@ struct ContentView: View {
             ) {
                 if burstConsumedTap {
                     burstConsumedTap = false
-                    endBurstHold()
                     return
                 }
                 handleCapture()
@@ -1619,7 +1653,7 @@ struct ContentView: View {
                 Spacer(minLength: 8)
 
                 ShutterButton(
-                    isBusy: isCapturing && !isBurstHolding,
+                    isBusy: isCapturing && !isBurstHolding && !burstConsumedTap,
                     timerCountdown: timerCountdown,
                     longExposureProgress: camera.isLongExposureCapturing
                         ? camera.longExposureProgress
@@ -1631,7 +1665,6 @@ struct ContentView: View {
                 ) {
                     if burstConsumedTap {
                         burstConsumedTap = false
-                        endBurstHold()
                         return
                     }
                     handleCapture()
@@ -1654,6 +1687,8 @@ struct ContentView: View {
     }
 
     private func handleCapture() {
+        // Volume / hardware must not steal the burst pipeline mid-hold.
+        if isBurstHolding { return }
         // Abort in-flight long exposure (shutter stays enabled during LE).
         if camera.isLongExposureCapturing {
             Haptics.click()
@@ -1838,6 +1873,8 @@ struct LongExposureProgressOverlay: View {
 
 // MARK: - Finder status overlays (toast / Night assist / permission)
 /// Pulled out of ContentView so the archive type-checker can finish.
+/// Hit-testing rule: never enable a full-bleed wrapper (that ate the shutter
+/// with the old Street chip). Only the Night capsule itself is tappable.
 struct FinderStatusOverlays: View {
     let safeTop: CGFloat
     let toast: String?
@@ -1888,7 +1925,8 @@ struct FinderStatusOverlays: View {
                 .background(Capsule().fill(Color.black.opacity(0.78)))
                 .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.6))
                 .padding(.top, safeTop + (toast == nil ? 8 : 44))
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                // Width only — never maxHeight:.infinity (that reintroduced the Street-chip hit sink).
+                .frame(maxWidth: .infinity, alignment: .top)
                 .transition(.opacity.combined(with: .move(edge: .top)))
                 .zIndex(51)
             }
@@ -1902,7 +1940,6 @@ struct FinderStatusOverlays: View {
                 .zIndex(60)
             }
         }
-        .allowsHitTesting(nightAssistVisible || cameraError != nil)
     }
 }
 

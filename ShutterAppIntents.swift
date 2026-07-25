@@ -102,7 +102,8 @@ struct ApplyShutterLookIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        let filmName = film.flatMap { $0 == .none ? nil : $0.rawValue }
+        // Pass "None" explicitly — nil means "leave film unchanged" in ContentView.
+        let filmName = film.map(\.rawValue)
         ShutterDeepLinkCenter.post(.look(film: filmName, fx: lensFX))
         return .result()
     }

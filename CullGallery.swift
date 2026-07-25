@@ -422,6 +422,9 @@ struct LoupeView: View {
 
 struct CullLibraryView: View {
     @ObservedObject var store: GalleryStore
+    /// Deep link / Shortcut: open Field Book shelf once this cover is up.
+    var openFieldBooksOnAppear: Bool = false
+    var onConsumedFieldBookOpen: (() -> Void)? = nil
     @StateObject private var marks = FrameMarkStore()
     @Environment(\.dismiss) private var dismiss
 
@@ -500,8 +503,18 @@ struct CullLibraryView: View {
             rebuildSessions()
             PhotosLibraryService.requestReadWrite { _ in }
             withAnimation(CullMotion.settle) { appeared = true }
+            if openFieldBooksOnAppear {
+                showFieldBooks = true
+                onConsumedFieldBookOpen?()
+            }
         }
         .onChange(of: store.shots) { _, _ in rebuildSessions() }
+        .onChange(of: openFieldBooksOnAppear) { _, open in
+            // Cover already up when a late deep link arrives.
+            guard open else { return }
+            showFieldBooks = true
+            onConsumedFieldBookOpen?()
+        }
         .onReceive(NotificationCenter.default.publisher(for: .shutterOpenFieldBook)) { _ in
             showFieldBooks = true
         }
@@ -1126,7 +1139,13 @@ struct CullSessionView: View {
         }
         .sheet(isPresented: Binding(
             get: { shareProofURL != nil },
-            set: { if !$0 { shareProofURL = nil } }
+            set: { if !$0 {
+                shareProofURL = nil
+                // Return to done sheet after share cancel/complete.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    showFinishDone = true
+                }
+            } }
         )) {
             if let url = shareProofURL {
                 ShareSheet(items: [url])
@@ -1135,7 +1154,12 @@ struct CullSessionView: View {
         }
         .sheet(isPresented: Binding(
             get: { !shareKeeperItems.isEmpty },
-            set: { if !$0 { shareKeeperItems = [] } }
+            set: { if !$0 {
+                shareKeeperItems = []
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    showFinishDone = true
+                }
+            } }
         )) {
             ShareSheet(
                 items: shareKeeperItems,
@@ -1839,9 +1863,20 @@ struct CullSessionView: View {
 
     private func shareKeeperImages() {
         let images: [UIImage] = doneKeeperShots.compactMap { store.image(for: $0) ?? store.thumbnail(for: $0) }
-        guard !images.isEmpty else { return }
+        guard !images.isEmpty else {
+            // Done sheet was dismissed — bring it back if packing failed.
+            showFinishDone = true
+            return
+        }
         let urls = KeeperSharePackager.jpegFileURLs(from: images)
-        shareKeeperItems = urls.isEmpty ? images : urls
+        // Prefer files; fall back to UIImages so a partial JPEG write never drops keepers.
+        if urls.count == images.count {
+            shareKeeperItems = urls
+        } else if !urls.isEmpty {
+            shareKeeperItems = urls
+        } else {
+            shareKeeperItems = images
+        }
     }
 
     private func shareDoneProofPDF() {

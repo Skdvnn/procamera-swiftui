@@ -183,21 +183,40 @@ enum SessionTitle {
         return "\(day) — \(period)"
     }
 
-    /// Reverse-geocode when a centroid is available; caches by rounded lat/lon + day.
+    /// Reverse-geocode when a centroid is available.
+    /// Caches **place name only** (not the full title) so morning/evening sessions
+    /// at the same spot don't steal each other's period strings. Failures are not cached.
     static func refine(session: ShootSession, location: CLLocation?, completion: @escaping (String) -> Void) {
         guard let location else {
             completion(session.title)
             return
         }
-        let key = String(format: "%.2f,%.2f|%@", location.coordinate.latitude, location.coordinate.longitude,
-                         ISO8601DateFormatter().string(from: Calendar.current.startOfDay(for: session.startDate)))
+        let key = String(format: "%.2f,%.2f", location.coordinate.latitude, location.coordinate.longitude)
         lock.lock()
-        if let cached = cache[key] {
-            lock.unlock()
-            completion(cached)
+        let cachedPlace = cache[key]
+        lock.unlock()
+
+        func titled(place: String?) -> String {
+            let base = fallback(for: session.shots)
+            guard let place, !place.isEmpty else { return base }
+            let df = DateFormatter()
+            df.dateFormat = "MMM d"
+            let day = df.string(from: session.startDate)
+            let hour = Calendar.current.component(.hour, from: session.startDate)
+            let period: String
+            switch hour {
+            case 5..<12: period = "morning"
+            case 12..<17: period = "afternoon"
+            case 17..<21: period = "evening"
+            default: period = "night"
+            }
+            return "\(place) — \(day), \(period)"
+        }
+
+        if let cachedPlace {
+            completion(titled(place: cachedPlace))
             return
         }
-        lock.unlock()
 
         CLGeocoder().reverseGeocodeLocation(location) { placemarks, _ in
             let place = placemarks?.first
@@ -206,29 +225,15 @@ enum SessionTitle {
                 ?? place?.subLocality
                 ?? place?.inlandWater
                 ?? place?.ocean
-            let base = fallback(for: session.shots)
-            let title: String
             if let name, !name.isEmpty {
-                // "Ocean Beach — Aug 14, morning"
-                let df = DateFormatter()
-                df.dateFormat = "MMM d"
-                let day = df.string(from: session.startDate)
-                let hour = Calendar.current.component(.hour, from: session.startDate)
-                let period: String
-                switch hour {
-                case 5..<12: period = "morning"
-                case 12..<17: period = "afternoon"
-                case 17..<21: period = "evening"
-                default: period = "night"
-                }
-                title = "\(name) — \(day), \(period)"
+                lock.lock()
+                cache[key] = name
+                lock.unlock()
+                completion(titled(place: name))
             } else {
-                title = base
+                // Do not cache failures — CLGeocoder rate limits are common.
+                completion(titled(place: nil))
             }
-            lock.lock()
-            cache[key] = title
-            lock.unlock()
-            completion(title)
         }
     }
 }

@@ -332,6 +332,35 @@ def test_source_guards() -> None:
     check("settings night+burst toggles", "Low-light Night tip" in settings and "Hold shutter for burst" in settings)
     check("ContentView body split for type-checker", "finderCanvas(geo:" in content and "struct FinderStatusOverlays" in content and "struct ContentViewLifecycle" in content)
 
+    # Build 51 — deep device-breaker guards (not just "string exists")
+    check(
+        "Night chip has no maxHeight infinity hit sink",
+        'maxHeight: .infinity' not in content.split('struct FinderStatusOverlays')[1].split('struct ContentViewLifecycle')[0]
+        or 'never maxHeight:.infinity' in content.split('struct FinderStatusOverlays')[1].split('struct ContentViewLifecycle')[0],
+    )
+    overlays = content.split('struct FinderStatusOverlays')[1].split('struct ContentViewLifecycle')[0]
+    check("Night chip comment forbids full-bleed hit", "never maxHeight:.infinity" in overlays or "Street-chip hit sink" in overlays)
+    check("Night chip frame is width-only", ".frame(maxWidth: .infinity, alignment: .top)" in overlays and "maxHeight: .infinity" not in overlays.split("if nightAssistVisible")[1].split("if let cameraError")[0])
+    check("burstConsumedTap cleared in endBurstHold", "func endBurstHold" in content and "burstConsumedTap = false" in content[content.find("func endBurstHold"):content.find("func endBurstHold")+220])
+    check("burst marks consumed before guards", content.find("burstConsumedTap = true") < content.find("guard holdBurstEnabled") or "Always mark the long-press" in content)
+    check("burst reschedules when busy", "Pipeline still owned — reschedule" in content)
+    check("burst retries serialize reject", "Serialize reject / bake busy" in content)
+    check("handleCapture ignores volume during burst", "if isBurstHolding { return }" in content)
+    check("Night assist hidden while capturing", "Never prompt / keep chip up while a capture" in content)
+    check("Night apply gated on idle", "func applyNightAssistFromChip" in content and "guard !isCapturing, !isBurstHolding" in content)
+    check("Field Book open via appear flag", "openFieldBooksOnAppear" in content and "pendingOpenFieldBook" in content)
+    check("Field Book not only 0.35 notification", "pendingOpenFieldBook = true" in content)
+    cull = (ROOT / "CullGallery.swift").read_text()
+    check("share dismiss restores FinishDone", "Return to done sheet after share" in cull or "showFinishDone = true" in cull[cull.find("shareProofURL != nil"):cull.find("shareProofURL != nil")+500])
+    check("empty keeper share restores done", "Done sheet was dismissed — bring it back" in cull)
+    check("compare KEEP A/B chrome buttons", "KEEP A" in (ROOT / "CullChrome.swift").read_text() and "KEEP B" in (ROOT / "CullChrome.swift").read_text())
+    check("compare panes are not Buttons", "private func pane(shot: ShotMetadata, label: String)" in (ROOT / "CullChrome.swift").read_text())
+    shoot = (ROOT / "ShootCull.swift").read_text()
+    check("session title caches place only", "Caches **place name only**" in shoot or "place name only" in shoot)
+    check("geocode failures not cached", "Do not cache failures" in shoot)
+    check("Apply Look None passes None string", 'film.map(\\ .rawValue)'.replace(' ', '') in (ROOT / "ShutterAppIntents.swift").read_text().replace(' ', '') or "film.map(\\.rawValue)" in (ROOT / "ShutterAppIntents.swift").read_text())
+
+
     check("bake failure note", "bakeLooksForCapture" in cam and "captureNote" in cam and "captureNote" in content)
     check("album export failure surfaced", "Album export failed — keepers in Field Book" in (ROOT / "CullGallery.swift").read_text())
     check("comic fallback", "func applyToon" in (ROOT / "LensFXEngine.swift").read_text())
@@ -501,10 +530,10 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 50", m is not None and int(ver) >= 50, ver)
+    check("Info.plist build >= 51", m is not None and int(ver) >= 51, ver)
     import re as _re
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 50+", any(v >= 50 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 51+", any(v >= 51 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

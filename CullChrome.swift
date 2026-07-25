@@ -174,7 +174,7 @@ struct CompareFramesView: View {
                             .font(.system(size: 9, weight: .bold, design: .monospaced))
                             .tracking(2.5)
                             .foregroundColor(CullPalette.amber.opacity(0.75))
-                        Text("Pinch both · double-tap reset · tap one to keep")
+                        Text("Pinch · double-tap reset · KEEP A/B below")
                             .font(.system(size: 11, weight: .medium, design: .serif))
                             .foregroundColor(.white.opacity(0.7))
                     }
@@ -204,11 +204,84 @@ struct CompareFramesView: View {
                         : AnyLayout(VStackLayout(spacing: 2))
 
                     stack {
-                        pane(shot: left, promote: onKeepLeft, label: "A")
-                        pane(shot: right, promote: onKeepRight, label: "B")
+                        pane(shot: left, label: "A")
+                        pane(shot: right, label: "B")
                     }
                     .padding(10)
+                    .contentShape(Rectangle())
+                    .onTapGesture(count: 2) {
+                        withAnimation(CullMotion.flick) {
+                            scale = 1
+                            lastScale = 1
+                            offset = .zero
+                            lastOffset = .zero
+                        }
+                        Haptics.light()
+                    }
+                    .gesture(
+                        SimultaneousGesture(
+                            MagnificationGesture()
+                                .onChanged { value in
+                                    scale = min(max(lastScale * value, 1.0), 5.0)
+                                }
+                                .onEnded { _ in lastScale = scale },
+                            DragGesture()
+                                .onChanged { value in
+                                    guard scale > 1.01 else { return }
+                                    offset = CGSize(
+                                        width: lastOffset.width + value.translation.width,
+                                        height: lastOffset.height + value.translation.height
+                                    )
+                                }
+                                .onEnded { _ in
+                                    lastOffset = offset
+                                    if scale <= 1.01 {
+                                        withAnimation(CullMotion.flick) {
+                                            offset = .zero
+                                            lastOffset = .zero
+                                        }
+                                    }
+                                }
+                        )
+                    )
                 }
+
+                // Explicit keep chrome — pane taps used to steal double-tap reset.
+                HStack(spacing: 12) {
+                    Button(action: onKeepLeft) {
+                        Text("KEEP A")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .tracking(1.0)
+                            .foregroundColor(CullPalette.amber)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(CullPalette.amber.opacity(0.12))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 2)
+                                    .stroke(CullPalette.amber.opacity(0.55), lineWidth: 0.8)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Keep frame A")
+
+                    Button(action: onKeepRight) {
+                        Text("KEEP B")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .tracking(1.0)
+                            .foregroundColor(CullPalette.amber)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 12)
+                            .background(CullPalette.amber.opacity(0.12))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 2)
+                                    .stroke(CullPalette.amber.opacity(0.55), lineWidth: 0.8)
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Keep frame B")
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 10)
 
                 Text("ZOOM & PAN ARE LOCKED TOGETHER")
                     .font(.system(size: 8, weight: .semibold, design: .monospaced))
@@ -219,74 +292,37 @@ struct CompareFramesView: View {
         }
         .preferredColorScheme(.dark)
         .statusBarHidden(true)
-        .gesture(
-            SimultaneousGesture(
-                MagnificationGesture()
-                    .onChanged { value in
-                        scale = min(max(lastScale * value, 1.0), 5.0)
-                    }
-                    .onEnded { _ in lastScale = scale },
-                DragGesture()
-                    .onChanged { value in
-                        guard scale > 1.01 else { return }
-                        offset = CGSize(
-                            width: lastOffset.width + value.translation.width,
-                            height: lastOffset.height + value.translation.height
-                        )
-                    }
-                    .onEnded { _ in
-                        lastOffset = offset
-                        if scale <= 1.01 {
-                            withAnimation(CullMotion.flick) {
-                                offset = .zero
-                                lastOffset = .zero
-                            }
-                        }
-                    }
-            )
-        )
-        .onTapGesture(count: 2) {
-            withAnimation(CullMotion.flick) {
-                scale = 1
-                lastScale = 1
-                offset = .zero
-                lastOffset = .zero
-            }
-            Haptics.light()
-        }
     }
 
-    private func pane(shot: ShotMetadata, promote: @escaping () -> Void, label: String) -> some View {
-        Button(action: promote) {
-            ZStack(alignment: .topLeading) {
-                Color.black
-                if let img = store.image(for: shot) ?? store.thumbnail(for: shot) {
-                    Image(uiImage: img)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .scaleEffect(scale)
-                        .offset(offset)
-                }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(label)
-                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .foregroundColor(CullPalette.amber)
-                    Text(metaLine(for: shot))
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                        .foregroundColor(.white.opacity(0.7))
-                        .lineLimit(2)
-                }
-                .padding(8)
-                .background(Color.black.opacity(0.5))
+    private func pane(shot: ShotMetadata, label: String) -> some View {
+        ZStack(alignment: .topLeading) {
+            Color.black
+            if let img = store.image(for: shot) ?? store.thumbnail(for: shot) {
+                Image(uiImage: img)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .scaleEffect(scale)
+                    .offset(offset)
             }
-            .clipShape(Rectangle())
-            .overlay(
-                Rectangle()
-                    .stroke(CullPalette.hairline, lineWidth: 0.6)
-            )
+            VStack(alignment: .leading, spacing: 4) {
+                Text(label)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .foregroundColor(CullPalette.amber)
+                Text(metaLine(for: shot))
+                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.7))
+                    .lineLimit(2)
+            }
+            .padding(8)
+            .background(Color.black.opacity(0.5))
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Keep frame \(label)")
+        .clipShape(Rectangle())
+        .overlay(
+            Rectangle()
+                .stroke(CullPalette.hairline, lineWidth: 0.6)
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Frame \(label), \(metaLine(for: shot))")
     }
 
     private func metaLine(for shot: ShotMetadata) -> String {
