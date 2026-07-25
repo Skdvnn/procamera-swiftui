@@ -686,13 +686,10 @@ struct LeicaFilmPicker: View {
                         ForEach(ShootMode.allCases) { mode in
                             Button {
                                 VFHaptics.click()
+                                onApplyShootMode?(mode)
                                 var t = Transaction()
                                 t.disablesAnimations = true
                                 withTransaction(t) { isPresented = false }
-                                let chosen = mode
-                                DispatchQueue.main.async {
-                                    onApplyShootMode?(chosen)
-                                }
                             } label: {
                                 HStack(spacing: 8) {
                                     Text(shootMode == mode ? ">" : " ")
@@ -734,16 +731,13 @@ struct LeicaFilmPicker: View {
                     ForEach(FilmFilterMode.allCases, id: \.self) { filter in
                         Button(action: {
                             VFHaptics.click()
-                            // Same as Lens FX: dismiss first, apply on next turn so
-                            // the live Metal/CI preview doesn't enable mid-teardown.
+                            // Apply synchronously so volume/hardware shutter in the
+                            // same turn cannot miss the look the user just tapped.
+                            selectedFilter = filter
                             var t = Transaction()
                             t.disablesAnimations = true
                             withTransaction(t) {
                                 isPresented = false
-                            }
-                            let chosen = filter
-                            DispatchQueue.main.async {
-                                selectedFilter = chosen
                             }
                         }) {
                             HStack(spacing: 8) {
@@ -914,16 +908,12 @@ struct LensFXPicker: View {
     private func fxRow(_ fx: LensFXMode) -> some View {
         Button(action: {
             VFHaptics.click()
-            // Dismiss first, then apply FX on the next turn so the Metal
-            // preview pipeline doesn't enable mid-teardown.
+            // Apply synchronously so shutter cannot miss the FX just tapped.
+            selectedFX = fx
             var t = Transaction()
             t.disablesAnimations = true
             withTransaction(t) {
                 isPresented = false
-            }
-            let chosen = fx
-            DispatchQueue.main.async {
-                selectedFX = chosen
             }
         }) {
             HStack(spacing: 8) {
@@ -998,19 +988,15 @@ struct LookRecipePicker: View {
                 ScrollView(showsIndicators: false) {
                     VStack(spacing: 0) {
                         ForEach(store.recipes) { recipe in
-                            Button {
-                                VFHaptics.click()
-                                var t = Transaction()
-                                t.disablesAnimations = true
-                                withTransaction(t) { isPresented = false }
-                                let film = recipe.film
-                                let fx = recipe.lensFX
-                                DispatchQueue.main.async {
-                                    filmFilter = film
-                                    lensFX = fx
-                                }
-                            } label: {
-                                HStack(spacing: 8) {
+                            HStack(spacing: 8) {
+                                Button {
+                                    VFHaptics.click()
+                                    filmFilter = recipe.film
+                                    lensFX = recipe.lensFX
+                                    var t = Transaction()
+                                    t.disablesAnimations = true
+                                    withTransaction(t) { isPresented = false }
+                                } label: {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(recipe.name.uppercased())
                                             .font(.system(size: 11, weight: .semibold, design: .monospaced))
@@ -1021,21 +1007,23 @@ struct LookRecipePicker: View {
                                             .foregroundColor(.white.opacity(0.35))
                                             .lineLimit(1)
                                     }
-                                    Spacer()
-                                    Button {
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
+                                }
+                                .buttonStyle(.plain)
+
+                                Image(systemName: "xmark")
+                                    .font(.system(size: 9, weight: .bold))
+                                    .foregroundColor(.white.opacity(0.35))
+                                    .frame(width: 28, height: 28)
+                                    .contentShape(Rectangle())
+                                    .onTapGesture {
                                         VFHaptics.click()
                                         store.delete(recipe.id)
-                                    } label: {
-                                        Image(systemName: "xmark")
-                                            .font(.system(size: 9, weight: .bold))
-                                            .foregroundColor(.white.opacity(0.35))
                                     }
-                                    .buttonStyle(.plain)
-                                }
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 8)
                             }
-                            .buttonStyle(.plain)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
                         }
                     }
                 }

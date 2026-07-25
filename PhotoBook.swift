@@ -53,6 +53,8 @@ final class GalleryStore: ObservableObject {
         indexURL = directory.appendingPathComponent("index.json")
         booksURL = directory.appendingPathComponent("books.json")
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        thumbCache.countLimit = 160
+        thumbCache.totalCostLimit = 48 * 1024 * 1024
         load()
     }
 
@@ -122,10 +124,21 @@ final class GalleryStore: ObservableObject {
     func thumbnail(for shot: ShotMetadata) -> UIImage? {
         let key = shot.id.uuidString as NSString
         if let cached = thumbCache.object(forKey: key) { return cached }
-        guard let thumb = UIImage(contentsOfFile: thumbURL(for: shot.id).path)
-                ?? image(for: shot) else { return nil }
-        thumbCache.setObject(thumb, forKey: key)
-        return thumb
+        if let disk = UIImage(contentsOfFile: thumbURL(for: shot.id).path) {
+            let cost = Int(disk.size.width * disk.size.height * 4)
+            thumbCache.setObject(disk, forKey: key, cost: cost)
+            return disk
+        }
+        // Never cache full-res under the thumb key (jetsam on contact sheets).
+        guard let full = image(for: shot) else { return nil }
+        let maxEdge: CGFloat = 360
+        let scale = min(1, maxEdge / max(full.size.width, full.size.height))
+        let size = CGSize(width: full.size.width * scale, height: full.size.height * scale)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let down = renderer.image { _ in full.draw(in: CGRect(origin: .zero, size: size)) }
+        let cost = Int(size.width * size.height * 4)
+        thumbCache.setObject(down, forKey: key, cost: cost)
+        return down
     }
 
     // MARK: Books
@@ -416,6 +429,12 @@ struct LibraryView: View {
         }
         .statusBarHidden(true)
         .onAppear {
+            guard !didApplyInitialBook, let id = initialBookID,
+                  store.books.contains(where: { $0.id == id }) else { return }
+            didApplyInitialBook = true
+            route = .book(id)
+        }
+        .onChange(of: initialBookID) { _, _ in
             guard !didApplyInitialBook, let id = initialBookID,
                   store.books.contains(where: { $0.id == id }) else { return }
             didApplyInitialBook = true

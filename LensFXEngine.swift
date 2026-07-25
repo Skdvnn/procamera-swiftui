@@ -475,13 +475,22 @@ final class LensFXEngine {
         for context in contexts {
             // Prefer plain createCGImage — RGBA8+forced sRGB has failed under
             // device GPU contention even when the filter graph is valid.
-            if let cgImage = context.createCGImage(output, from: output.extent)
-                ?? context.createCGImage(
-                    output,
-                    from: output.extent,
-                    format: .RGBA8,
-                    colorSpace: CGColorSpace(name: CGColorSpace.sRGB)
-                ) {
+            let cgImage: CGImage? = {
+                let make = {
+                    context.createCGImage(output, from: output.extent)
+                        ?? context.createCGImage(
+                            output,
+                            from: output.extent,
+                            format: .RGBA8,
+                            colorSpace: CGColorSpace(name: CGColorSpace.sRGB)
+                        )
+                }
+                if context === renderContext {
+                    return ShutterRender.syncCI(make)
+                }
+                return make()
+            }()
+            if let cgImage {
                 return UIImage(cgImage: cgImage, scale: scale, orientation: .up)
             }
         }
@@ -544,7 +553,9 @@ final class LensFXEngine {
 
         // Render once to a bitmap — otherwise the noise+blur chain would be
         // lazily re-executed on the GPU for every preview frame
-        if let cgImage = ShutterRender.ciContext.createCGImage(blurred, from: textureRect) {
+        if let cgImage = ShutterRender.syncCI({
+            ShutterRender.ciContext.createCGImage(blurred, from: textureRect)
+        }) {
             return CIImage(cgImage: cgImage)
         }
         return blurred

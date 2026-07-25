@@ -174,16 +174,20 @@ final class CloudBookManager: ObservableObject {
             guard let self = self else { return }
             guard let zones = zones, error == nil else { return }
 
+            let lock = NSLock()
             var found: [SharedBookRef] = []
             let group = DispatchGroup()
 
             for zone in zones {
                 group.enter()
                 self.queryRecords(type: "FieldBook", zoneID: zone.zoneID, database: self.sharedDB) { records in
-                    for record in records {
+                    let refs = records.map { record -> SharedBookRef in
                         let title = record["title"] as? String ?? "Shared Book"
-                        found.append(SharedBookRef(recordID: record.recordID, title: title))
+                        return SharedBookRef(recordID: record.recordID, title: title)
                     }
+                    lock.lock()
+                    found.append(contentsOf: refs)
+                    lock.unlock()
                     group.leave()
                 }
             }

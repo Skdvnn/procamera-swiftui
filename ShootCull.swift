@@ -307,11 +307,17 @@ enum PhotosLibraryService {
                 return
             }
 
-            let album = fetchOrCreateAlbum(named: albumName)
+            guard let album = fetchOrCreateAlbum(named: albumName) else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
             let assets = PHAsset.fetchAssets(withLocalIdentifiers: assetLocalIdentifiers, options: nil)
+            guard assets.count > 0 else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
             PHPhotoLibrary.shared().performChanges({
-                guard let album,
-                      let add = PHAssetCollectionChangeRequest(for: album) else { return }
+                guard let add = PHAssetCollectionChangeRequest(for: album) else { return }
                 add.addAssets(assets)
             }, completionHandler: { success, error in
                 if let error { print("Album export failed: \(error)") }

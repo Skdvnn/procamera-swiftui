@@ -10,21 +10,44 @@ import MetalKit
 final class LivePreviewBridge {
     private weak var view: FilteredPreviewView?
     private var showingFiltered = false
+    private let lock = NSLock()
+    private var pending: CIImage?
+    private var hasPending = false
+    private var scheduled = false
 
     func attach(_ view: FilteredPreviewView) {
         self.view = view
     }
 
+    /// Latest-wins coalesce — video queue can outrun main without stacking hops.
     func push(_ image: CIImage?) {
+        lock.lock()
+        pending = image
+        hasPending = true
+        if scheduled {
+            lock.unlock()
+            return
+        }
+        scheduled = true
+        lock.unlock()
+
         let work = { [weak self] in
             guard let self else { return }
-            if image == nil {
+            self.lock.lock()
+            let next = self.hasPending ? self.pending : nil
+            let deliver = self.hasPending
+            self.pending = nil
+            self.hasPending = false
+            self.scheduled = false
+            self.lock.unlock()
+            guard deliver else { return }
+            if next == nil {
                 guard self.showingFiltered else { return }
                 self.showingFiltered = false
             } else {
                 self.showingFiltered = true
             }
-            self.view?.updateFilteredImage(image)
+            self.view?.updateFilteredImage(next)
         }
         if Thread.isMainThread {
             work()
@@ -519,15 +542,17 @@ extension FilteredPreviewView: MTKViewDelegate {
         let drawableRect = CGRect(origin: .zero, size: drawableSize)
         transformedImage = transformedImage.cropped(to: drawableRect)
 
-        // Render to Metal texture
+        // Render to Metal texture — serialize with still bake / LE flatten.
         let colorSpace = CGColorSpaceCreateDeviceRGB()
-        ciContext.render(
-            transformedImage,
-            to: drawable.texture,
-            commandBuffer: commandBuffer,
-            bounds: drawableRect,
-            colorSpace: colorSpace
-        )
+        ShutterRender.syncCI {
+            ciContext.render(
+                transformedImage,
+                to: drawable.texture,
+                commandBuffer: commandBuffer,
+                bounds: drawableRect,
+                colorSpace: colorSpace
+            )
+        }
 
         commandBuffer.present(drawable)
         commandBuffer.commit()

@@ -1029,6 +1029,10 @@ struct CullSessionView: View {
     @State private var doneBookID: UUID?
     @State private var doneAlbumName: String = ""
     @State private var doneKeeperShots: [ShotMetadata] = []
+    /// Re-open FinishDone only after post-finish share (not mid-cull proof export).
+    @State private var reopenFinishDoneAfterShare = false
+    /// Loupe drag must not commit keep/reject when the finger lifts.
+    @State private var loupeSessionActive = false
     @State private var finishMessage: String?
     @State private var flashMark: FrameMarkState?
     @State private var loupeTouch: CGPoint?
@@ -1141,9 +1145,11 @@ struct CullSessionView: View {
             get: { shareProofURL != nil },
             set: { if !$0 {
                 shareProofURL = nil
-                // Return to done sheet after share cancel/complete.
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    showFinishDone = true
+                if reopenFinishDoneAfterShare {
+                    reopenFinishDoneAfterShare = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        showFinishDone = true
+                    }
                 }
             } }
         )) {
@@ -1156,8 +1162,11 @@ struct CullSessionView: View {
             get: { !shareKeeperItems.isEmpty },
             set: { if !$0 {
                 shareKeeperItems = []
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                    showFinishDone = true
+                if reopenFinishDoneAfterShare {
+                    reopenFinishDoneAfterShare = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        showFinishDone = true
+                    }
                 }
             } }
         )) {
@@ -1182,12 +1191,14 @@ struct CullSessionView: View {
                 onShareKeepers: {
                     // Dismiss done sheet first so share isn't nested underneath.
                     showFinishDone = false
+                    reopenFinishDoneAfterShare = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                         shareKeeperImages()
                     }
                 },
                 onShareProof: {
                     showFinishDone = false
+                    reopenFinishDoneAfterShare = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                         shareDoneProofPDF()
                     }
@@ -1608,7 +1619,9 @@ struct CullSessionView: View {
                 }
             }
             .onEnded { value in
-                guard loupeTouch == nil, !isAdvancing else {
+                // Loupe just ended (or still up) — never treat that pan as keep/reject.
+                if loupeSessionActive || loupeTouch != nil || isAdvancing {
+                    loupeSessionActive = false
                     withAnimation(CullMotion.flick) { dragOffset = .zero }
                     return
                 }
@@ -1653,6 +1666,7 @@ struct CullSessionView: View {
                     let point = drag?.location ?? CGPoint(x: size.width / 2, y: size.height / 2)
                     if loupeTouch == nil {
                         Haptics.light()
+                        loupeSessionActive = true
                         loupeLoading = true
                         loupeImage = fallback
                         if let shot = current, let full = store.image(for: shot) {
@@ -1673,6 +1687,10 @@ struct CullSessionView: View {
                     loupeTouch = nil
                     loupeImage = nil
                     loupeLoading = false
+                }
+                // Keep loupeSessionActive until cull drag onEnded can see it.
+                DispatchQueue.main.async {
+                    loupeSessionActive = false
                 }
             }
     }
@@ -1845,8 +1863,12 @@ struct CullSessionView: View {
                         finishMessage = albumFailed
                             ? "Album export + Photos delete failed — local frames kept."
                             : "Photos delete failed — local frames kept."
-                        // Still clear marks + offer handoff for keepers that made it.
-                        complete()
+                        // Leave marks intact so the user can retry; only surface the done sheet.
+                        doneKeeperShots = keepers
+                        doneBookID = createdBookID
+                        doneAlbumName = albumName
+                        isFinishing = false
+                        showFinishDone = true
                         return
                     }
                     for shot in rejects { store.delete(shot) }

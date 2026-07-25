@@ -2,6 +2,7 @@ import SwiftUI
 import UIKit
 import AVFoundation
 import WidgetKit
+import Combine
 
 struct Haptics {
     static func light() { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
@@ -193,6 +194,32 @@ enum CaptureFormat: String, CaseIterable, Hashable {
     }
 }
 
+/// Thin observer that re-renders only the chrome subtree when AE hunts.
+/// Keeps ContentView body from rebuilding ~2.5×/sec during AUTO exposure.
+private struct LiveExposureChrome<Content: View>: View {
+    @ObservedObject private var bus = LiveExposureBus.shared
+    let isManualExposure: Bool
+    let isoOverride: Int
+    let shutterOverride: String
+    @ViewBuilder let content: (_ iso: Int, _ shutter: String) -> Content
+
+    private var resolvedISO: Int {
+        if isManualExposure { return isoOverride }
+        let live = Int(bus.iso.rounded())
+        return live > 0 ? live : isoOverride
+    }
+
+    private var resolvedShutter: String {
+        if isManualExposure { return shutterOverride }
+        let live = bus.shutterLabel
+        return live.isEmpty || live == "AUTO" ? "AUTO" : live
+    }
+
+    var body: some View {
+        content(resolvedISO, resolvedShutter)
+    }
+}
+
 struct ContentView: View {
     @StateObject private var camera = CameraManager()
     @Environment(\.colorScheme) var colorScheme  // Track color scheme changes
@@ -230,8 +257,11 @@ struct ContentView: View {
     /// Suppresses the Button tap that fires when a long-press burst ends.
     @State private var burstConsumedTap = false
     @State private var burstCaptured = 0
+    @State private var burstNilRetries = 0
     private let burstMaxFrames = 6
+    private let burstMaxNilRetries = 24
     @State private var showFocusPoint = false
+    @State private var frozenMorphTouch: MorphTouchState? = nil
     @State private var focusPoint: CGPoint = .zero
     /// EV captured when the focus reticle appeared — vertical drag offsets from this.
     @State private var focusStartEV: Float = 0
@@ -410,52 +440,58 @@ struct ContentView: View {
 
                 VStack(spacing: 0) {
                     // TOP: Analog Display Panel — FOCUS/EV when compact
-                    AnalogDisplayPanel(
-                        focusPosition: $focusPosition,
-                        exposureValue: $exposureValue,
-                        shutterSpeedIndex: $shutterSpeedIndex,
-                        timerSeconds: timerSeconds,
-                        iso: displayISO,
-                        isoIsAuto: !camera.isManualExposure,
-                        shutterLabel: displayShutterLabel,
-                        shutterIsAuto: !camera.isManualExposure,
-                        flashMode: flashModeLabel(camera.flashMode),
-                        macroEnabled: macroEnabled,
-                        isAutoFocus: !isManualFocusEnabled,
-                        compact: effectiveTopCollapsed,
-                        onFocusChanged: { val in
-                            camera.setManualFocus(val)
-                            isManualFocusEnabled = true
-                        },
-                        onExposureChanged: { val in
-                            guard !isLocked, !camera.isManualExposure else { return }
-                            camera.setExposure(val)
-                        },
-                        onShutterSpeedChanged: { idx in
-                            guard !isLocked else { return }
-                            // Pass UI ISO so we don't lock shutter with CameraManager's stale 100.
-                            shutterSpeedIndex = idx
-                            camera.setShutterSpeed(index: idx, iso: Float(isoValue))
-                        },
-                        onTimerTap: {
-                            Haptics.click()
-                            if timerSeconds == 0 { timerSeconds = 3 }
-                            else if timerSeconds == 3 { timerSeconds = 10 }
-                            else { timerSeconds = 0 }
-                        },
-                        onMacroTap: {
-                            Haptics.click()
-                            macroEnabled.toggle()
-                            if macroEnabled, isLocked {
-                                isLocked = false
-                                camera.setAEAFLocked(false)
+                    LiveExposureChrome(
+                        isManualExposure: camera.isManualExposure,
+                        isoOverride: isoValue,
+                        shutterOverride: shutterSpeeds[shutterSpeedIndex]
+                    ) { liveISO, liveShutter in
+                        AnalogDisplayPanel(
+                            focusPosition: $focusPosition,
+                            exposureValue: $exposureValue,
+                            shutterSpeedIndex: $shutterSpeedIndex,
+                            timerSeconds: timerSeconds,
+                            iso: liveISO,
+                            isoIsAuto: !camera.isManualExposure,
+                            shutterLabel: liveShutter,
+                            shutterIsAuto: !camera.isManualExposure,
+                            flashMode: flashModeLabel(camera.flashMode),
+                            macroEnabled: macroEnabled,
+                            isAutoFocus: !isManualFocusEnabled,
+                            compact: effectiveTopCollapsed,
+                            onFocusChanged: { val in
+                                camera.setManualFocus(val)
+                                isManualFocusEnabled = true
+                            },
+                            onExposureChanged: { val in
+                                guard !isLocked, !camera.isManualExposure else { return }
+                                camera.setExposure(val)
+                            },
+                            onShutterSpeedChanged: { idx in
+                                guard !isLocked else { return }
+                                // Pass UI ISO so we don't lock shutter with CameraManager's stale 100.
+                                shutterSpeedIndex = idx
+                                camera.setShutterSpeed(index: idx, iso: Float(isoValue))
+                            },
+                            onTimerTap: {
+                                Haptics.click()
+                                if timerSeconds == 0 { timerSeconds = 3 }
+                                else if timerSeconds == 3 { timerSeconds = 10 }
+                                else { timerSeconds = 0 }
+                            },
+                            onMacroTap: {
+                                Haptics.click()
+                                macroEnabled.toggle()
+                                if macroEnabled, isLocked {
+                                    isLocked = false
+                                    camera.setAEAFLocked(false)
+                                }
+                                camera.setMacroEnabled(macroEnabled)
+                                if macroEnabled {
+                                    isManualFocusEnabled = false
+                                }
                             }
-                            camera.setMacroEnabled(macroEnabled)
-                            if macroEnabled {
-                                isManualFocusEnabled = false
-                            }
-                        }
-                    )
+                        )
+                    }
                     .frame(height: topPanelHeight)
                     .padding(.horizontal, DS.pageMargin)
                     // Higher threshold when dials are out so vertical dial drags
@@ -481,21 +517,27 @@ struct ContentView: View {
                             // Histogram BELOW shutter in z-order. Never put contentShape
                             // on the bottom-padded frame — that invisible pad sat on top
                             // of the shutter and ate every tap.
-                            RefractiveGlassInfoBar(
-                                iso: displayISO,
-                                shutterSpeed: displayShutterLabel,
-                                aperture: apertureValue,
-                                photoCount: photoCount,
-                                exposureValue: exposureValue,
-                                captureFormat: captureFormat,
-                                aspectLabel: aspectRatio.shortLabel,
-                                isLocked: isLocked,
+                            LiveExposureChrome(
                                 isManualExposure: camera.isManualExposure,
-                                naturalCapture: naturalCapture,
-                                compact: isLandscape,
-                                onToggleLock: { toggleAEAFLock() },
-                                onReturnToAuto: { returnToAuto() }
-                            )
+                                isoOverride: isoValue,
+                                shutterOverride: shutterSpeeds[shutterSpeedIndex]
+                            ) { liveISO, liveShutter in
+                                RefractiveGlassInfoBar(
+                                    iso: liveISO,
+                                    shutterSpeed: liveShutter,
+                                    aperture: apertureValue,
+                                    photoCount: photoCount,
+                                    exposureValue: exposureValue,
+                                    captureFormat: captureFormat,
+                                    aspectLabel: aspectRatio.shortLabel,
+                                    isLocked: isLocked,
+                                    isManualExposure: camera.isManualExposure,
+                                    naturalCapture: naturalCapture,
+                                    compact: isLandscape,
+                                    onToggleLock: { toggleAEAFLock() },
+                                    onReturnToAuto: { returnToAuto() }
+                                )
+                            }
                             .padding(.horizontal, isLandscape ? 10 : 14)
                             .simultaneousGesture(bottomDeckSwipe)
                             .padding(.bottom, CollapsedChrome.histogramBottomPad(
@@ -618,12 +660,8 @@ struct ContentView: View {
             .ignoresSafeArea()
             .animation(ShutterMotion.chrome, value: statusToast)
             .animation(ShutterMotion.chrome, value: nightAssistVisible)
-            .onChange(of: camera.liveISO) { _, _ in
-                evaluateNightAssist()
-            }
-            .onChange(of: camera.liveShutterLabel) { _, _ in
-                evaluateNightAssist()
-            }
+            .onReceive(LiveExposureBus.shared.$iso) { _ in evaluateNightAssist() }
+            .onReceive(LiveExposureBus.shared.$shutterLabel) { _ in evaluateNightAssist() }
             .onChange(of: camera.isManualExposure) { _, manual in
                 if manual { nightAssistVisible = false; nightAssistDarkStreak = 0 }
                 else { evaluateNightAssist() }
@@ -690,14 +728,14 @@ struct ContentView: View {
     /// ISO for chrome / metadata — live sensor value while AUTO.
     private var displayISO: Int {
         if camera.isManualExposure { return isoValue }
-        let live = Int(camera.liveISO.rounded())
+        let live = Int(LiveExposureBus.shared.iso.rounded())
         return live > 0 ? live : isoValue
     }
 
     /// Shutter label for chrome / metadata — live duration while AUTO.
     private var displayShutterLabel: String {
         if camera.isManualExposure { return shutterSpeeds[shutterSpeedIndex] }
-        let live = camera.liveShutterLabel
+        let live = LiveExposureBus.shared.shutterLabel
         return live.isEmpty || live == "AUTO" ? "AUTO" : live
     }
 
@@ -773,8 +811,8 @@ struct ContentView: View {
             return
         }
         let dark = isLowLightAUTO(
-            iso: camera.liveISO,
-            shutterLabel: camera.liveShutterLabel
+            iso: LiveExposureBus.shared.iso,
+            shutterLabel: LiveExposureBus.shared.shutterLabel
         )
         if dark {
             nightAssistDarkStreak += 1
@@ -821,17 +859,19 @@ struct ContentView: View {
     }
 
     private func beginBurstHold() {
-        // Always mark the long-press so the Button release doesn't fire a single shot,
-        // even when we bail before starting the burst (timer / LE / busy).
-        burstConsumedTap = true
         guard holdBurstEnabled else { return }
+        // Timer / LE cancel must still reach Button.action — do NOT consume the tap.
+        if camera.isLongExposureCapturing || timerWorkItem != nil || timerCountdown > 0 {
+            return
+        }
         guard !isCapturing else { return }
-        guard !camera.isLongExposureCapturing else { return }
-        guard timerWorkItem == nil, timerCountdown == 0 else { return }
         // Manual LE indices — hold is cancel, not burst.
         if camera.isManualExposure && shutterSpeedIndex <= 3 { return }
+        // Only swallow the Button release when a real burst actually starts.
+        burstConsumedTap = true
         isBurstHolding = true
         burstCaptured = 0
+        burstNilRetries = 0
         fireBurstFrame()
     }
 
@@ -861,11 +901,18 @@ struct ContentView: View {
         }
         // Pipeline still owned — reschedule while finger is down (don't stall burst).
         if isCapturing {
+            burstNilRetries += 1
+            guard burstNilRetries < burstMaxNilRetries else {
+                isBurstHolding = false
+                showStatusToast(burstCaptured > 0 ? "Burst · \(burstCaptured)" : "Burst stopped")
+                return
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.06) {
                 fireBurstFrame()
             }
             return
         }
+        burstNilRetries = 0
         isCapturing = true
         syncCaptureControlsToCamera()
         let shutterFilm = cameraFilmFilter(from: filmFilter)
@@ -900,6 +947,12 @@ struct ContentView: View {
                     }
                 }
             } else if isBurstHolding && burstCaptured < burstMaxFrames {
+                burstNilRetries += 1
+                guard burstNilRetries < burstMaxNilRetries else {
+                    isBurstHolding = false
+                    showStatusToast(burstCaptured > 0 ? "Burst · \(burstCaptured)" : "Burst stopped")
+                    return
+                }
                 // Serialize reject / bake busy — retry while still holding.
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
                     fireBurstFrame()
@@ -1053,7 +1106,7 @@ struct ContentView: View {
                 lensFX = .none
             }
         case .timer(let seconds):
-            timerSeconds = [0, 3, 10].contains(seconds) ? seconds : 3
+            timerSeconds = [0, 3, 10].contains(seconds) ? seconds : 0
         case .peaking(let on):
             focusPeaking = on
         case .flip:
@@ -1314,20 +1367,26 @@ struct ContentView: View {
                 if showHistogram {
                     VStack {
                         Spacer().allowsHitTesting(false)
-                        RefractiveGlassInfoBar(
-                            iso: displayISO,
-                            shutterSpeed: displayShutterLabel,
-                            aperture: apertureValue,
-                            photoCount: photoCount,
-                            exposureValue: exposureValue,
-                            captureFormat: captureFormat,
-                            aspectLabel: aspectRatio.shortLabel,
-                            isLocked: isLocked,
+                        LiveExposureChrome(
                             isManualExposure: camera.isManualExposure,
-                            naturalCapture: naturalCapture,
-                            onToggleLock: { toggleAEAFLock() },
-                            onReturnToAuto: { returnToAuto() }
-                        )
+                            isoOverride: isoValue,
+                            shutterOverride: shutterSpeeds[shutterSpeedIndex]
+                        ) { liveISO, liveShutter in
+                            RefractiveGlassInfoBar(
+                                iso: liveISO,
+                                shutterSpeed: liveShutter,
+                                aperture: apertureValue,
+                                photoCount: photoCount,
+                                exposureValue: exposureValue,
+                                captureFormat: captureFormat,
+                                aspectLabel: aspectRatio.shortLabel,
+                                isLocked: isLocked,
+                                isManualExposure: camera.isManualExposure,
+                                naturalCapture: naturalCapture,
+                                onToggleLock: { toggleAEAFLock() },
+                                onReturnToAuto: { returnToAuto() }
+                            )
+                        }
                         .padding(.horizontal, 8)
                         // Keep clear of the viewfinder bottom edge / swipe strip so it
                         // never reads as overlapping the expanded shutter row below.
@@ -1343,17 +1402,6 @@ struct ContentView: View {
                     .zIndex(5)
                 }
 
-                if !bottomCollapsed {
-                    VStack {
-                        Spacer().allowsHitTesting(false)
-                        Color.clear
-                            .frame(height: 56)
-                            .frame(maxWidth: .infinity)
-                            .contentShape(Rectangle())
-                            .simultaneousGesture(bottomDeckSwipe)
-                    }
-                    .zIndex(4)
-                }
 
                 // Chrome moved to parent ZStack (above collapsed fade) so FX stays tappable.
 
@@ -1417,26 +1465,28 @@ struct ContentView: View {
                 .allowsHitTesting(false)
 
                 VStack(spacing: 0) {
+                    // Visual fade only — never a hit sink over the glass bar L/A.
                     Color.clear
                         .frame(height: CollapsedChrome.fadeHeight)
                         .frame(maxWidth: .infinity)
-                        .contentShape(Rectangle())
+                        .allowsHitTesting(false)
 
                     bottomCompactDeck(compact: compact)
                         .frame(height: deckH)
                         .offset(y: bottomDeckDrag * 0.12)
                         .opacity(1.0 - min(abs(bottomDeckDrag) / 90.0, 0.45))
+                        .contentShape(Rectangle())
+                        .simultaneousGesture(bottomDeckSwipe)
 
                     Color.clear
                         .frame(height: bottomPad)
                         .frame(maxWidth: .infinity)
                         .contentShape(Rectangle())
+                        .simultaneousGesture(bottomDeckSwipe)
                 }
             }
             .frame(height: underlayHeight)
-            .contentShape(Rectangle())
-            // Whole dock is a pull zone; shutter Button still wins taps.
-            .simultaneousGesture(bottomDeckSwipe)
+            .allowsHitTesting(true)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
     }
@@ -1598,46 +1648,35 @@ struct ContentView: View {
                 Spacer()
 
                 HStack(spacing: 8) {
-                    VStack(spacing: 8) {
-                        ModeIcon(icon: "gearshape", isActive: showSettings)
-                        ModeButton(isActive: showSettings) {
-                            Haptics.click()
-                            showSettings = true
+                    ModeControl(icon: "gearshape", isActive: showSettings) {
+                        Haptics.click()
+                        showSettings = true
+                    }
+                    ModeControl(icon: "camera.macro", isActive: macroEnabled) {
+                        Haptics.click()
+                        macroEnabled.toggle()
+                        if macroEnabled, isLocked {
+                            isLocked = false
+                            camera.setAEAFLocked(false)
+                        }
+                        camera.setMacroEnabled(macroEnabled)
+                        if macroEnabled {
+                            isManualFocusEnabled = false
                         }
                     }
-                    VStack(spacing: 8) {
-                        ModeIcon(icon: "camera.macro", isActive: macroEnabled)
-                        ModeButton(isActive: macroEnabled) {
-                            Haptics.click()
-                            macroEnabled.toggle()
-                            if macroEnabled, isLocked {
-                                isLocked = false
-                                camera.setAEAFLocked(false)
-                            }
-                            camera.setMacroEnabled(macroEnabled)
-                            if macroEnabled {
-                                isManualFocusEnabled = false
-                            }
-                        }
+                    ModeControl(icon: "timer", isActive: timerSeconds > 0) {
+                        Haptics.click()
+                        if timerSeconds == 0 { timerSeconds = 3 }
+                        else if timerSeconds == 3 { timerSeconds = 10 }
+                        else { timerSeconds = 0 }
+                        syncCaptureContextToSystem()
                     }
-                    VStack(spacing: 8) {
-                        ModeIcon(icon: "timer", isActive: timerSeconds > 0)
-                        ModeButton(isActive: timerSeconds > 0) {
-                            Haptics.click()
-                            if timerSeconds == 0 { timerSeconds = 3 }
-                            else if timerSeconds == 3 { timerSeconds = 10 }
-                            else { timerSeconds = 0 }
-                        }
-                    }
-                    VStack(spacing: 8) {
-                        ModeIcon(icon: "rectangle.on.rectangle", isActive: showGrid)
-                        ModeButton(isActive: showGrid) {
-                            Haptics.click()
-                            showGrid.toggle()
-                        }
+                    ModeControl(icon: "rectangle.on.rectangle", isActive: showGrid) {
+                        Haptics.click()
+                        showGrid.toggle()
                     }
                 }
-                .frame(width: 120, height: 48)
+                .frame(width: 160, height: 48)
             }
             .padding(.horizontal, DS.pageMargin)
             .contentShape(Rectangle())
@@ -1710,6 +1749,12 @@ struct ContentView: View {
             // Do NOT set isCapturing — that used to .disabled the shutter and
             // blocked the on-screen cancel path the comment above promises.
             timerCountdown = timerSeconds
+            // Freeze touch-reactive morph at arm time so the composition doesn't
+            // drift while the countdown runs and the finger lifts off the screen.
+            let armFX = lensFX
+            frozenMorphTouch = armFX.isTouchReactive
+                ? LensFXEngine.shared.snapshotForCapture()
+                : nil
             runCountdown()
         } else {
             captureNow()
@@ -1720,6 +1765,7 @@ struct ContentView: View {
         timerWorkItem?.cancel()
         timerWorkItem = nil
         timerCountdown = 0
+        frozenMorphTouch = nil
     }
 
     private func runCountdown() {
@@ -1745,10 +1791,11 @@ struct ContentView: View {
         syncCaptureControlsToCamera()
         let shutterFilm = cameraFilmFilter(from: filmFilter)
         let shutterFX = lensFX
-        // Freeze drag-to-morph before the finger leaves the viewfinder for shutter
-        let morphTouch = shutterFX.isTouchReactive
+        // Use frozen touch from timer arm if available, otherwise snapshot live state.
+        let morphTouch: MorphTouchState? = frozenMorphTouch ?? (shutterFX.isTouchReactive
             ? LensFXEngine.shared.snapshotForCapture()
-            : nil
+            : nil)
+        frozenMorphTouch = nil
 
         // LE only when manuals are live — AUTO must not inherit a stale Night index.
         let isLongExposure = camera.isManualExposure && shutterSpeedIndex <= 3
@@ -1762,7 +1809,8 @@ struct ContentView: View {
             camera.captureLongExposure(
                 durationSeconds: duration,
                 filmFilter: shutterFilm,
-                lensFX: shutterFX
+                lensFX: shutterFX,
+                morphTouch: morphTouch
             ) { img in
                 isCapturing = false
                 if let img = img {
@@ -3236,7 +3284,6 @@ struct FlashButtonPill: View {
     // Uniform size for flash/thumbnail/WB
     private let pillWidth: CGFloat = 88
     private let pillHeight: CGFloat = 48
-    @State private var isPressed = false
 
     private var iconColor: Color {
         switch flashMode {
@@ -3255,38 +3302,14 @@ struct FlashButtonPill: View {
                     .fill(Color.black)
                     .frame(width: pillWidth, height: pillHeight)
 
-                // Inner frame - darker when pressed for inset effect
+                // Inner frame
                 Capsule()
-                    .fill(Color(hex: isPressed ? "181818" : "242424"))
+                    .fill(Color(hex: "242424"))
                     .frame(width: pillWidth - 4, height: pillHeight - 4)
-
-                // Inner shadow when pressed (deep inset look)
-                if isPressed {
-                    Capsule()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.black.opacity(0.6),
-                                    Color.black.opacity(0.25),
-                                    Color.clear
-                                ],
-                                startPoint: .top,
-                                endPoint: .center
-                            )
-                        )
-                        .frame(width: pillWidth - 4, height: pillHeight - 4)
-
-                    // Blurred inner edge shadow
-                    Capsule()
-                        .stroke(Color.black.opacity(0.5), lineWidth: 3)
-                        .blur(radius: 2)
-                        .frame(width: pillWidth - 8, height: pillHeight - 8)
-                        .clipShape(Capsule())
-                }
 
                 // Inner stroke (Figma: #444444)
                 Capsule()
-                    .stroke(Color(hex: isPressed ? "222222" : "444444"), lineWidth: 0.5)
+                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
                     .frame(width: pillWidth - 4, height: pillHeight - 4)
 
                 Image(systemName: flashIconName)
@@ -3297,12 +3320,7 @@ struct FlashButtonPill: View {
         }
         .frame(width: pillWidth, height: pillHeight + 4)
         .contentShape(Rectangle())
-        .buttonStyle(.plain)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
-        )
+        .buttonStyle(ProButtonStyle())
     }
 
     private var flashIconName: String {
@@ -3325,6 +3343,26 @@ struct ModeIcon: View {
             .font(.system(size: 13, weight: .regular))
             .foregroundColor(isActive ? DS.accent : Color(hex: "5e5e5e"))
             .frame(width: 16, height: 16)
+            .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Mode control (icon + dot — whole column is the hit target)
+struct ModeControl: View {
+    let icon: String
+    let isActive: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                ModeIcon(icon: icon, isActive: isActive)
+                ModeButtonChrome(isActive: isActive)
+            }
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -3333,25 +3371,33 @@ struct ModeButton: View {
     let isActive: Bool
     let action: () -> Void
 
-    // Smaller per Figma - approximately 16px diameter
+    var body: some View {
+        Button(action: action) {
+            ModeButtonChrome(isActive: isActive)
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct ModeButtonChrome: View {
+    let isActive: Bool
     private let size: CGFloat = 16
 
     var body: some View {
-        Button(action: action) {
-            ZStack {
-                // Button background: darker gray when off, lighter when on
-                Circle()
-                    .fill(isActive ? Color(red: 0.28, green: 0.28, blue: 0.28) : Color(red: 0.17, green: 0.17, blue: 0.17))
-
-                // Inner stroke: lighter when active
-                Circle()
-                    .stroke(isActive ? Color(red: 0.4, green: 0.4, blue: 0.4) : Color(red: 0.25, green: 0.25, blue: 0.25), lineWidth: 0.5)
-                    .padding(0.25)
-            }
-            .frame(width: size, height: size)
-            .shadow(color: Color(red: 0.03, green: 0.03, blue: 0.03).opacity(0.2), radius: 0.5, x: 0, y: 0.5)
+        ZStack {
+            Circle()
+                .fill(isActive ? Color(red: 0.28, green: 0.28, blue: 0.28) : Color(red: 0.17, green: 0.17, blue: 0.17))
+            Circle()
+                .stroke(
+                    isActive ? Color(red: 0.4, green: 0.4, blue: 0.4) : Color(red: 0.25, green: 0.25, blue: 0.25),
+                    lineWidth: 0.5
+                )
+                .padding(0.25)
         }
-        .buttonStyle(ProButtonStyle())
+        .frame(width: size, height: size)
+        .shadow(color: Color(red: 0.03, green: 0.03, blue: 0.03).opacity(0.2), radius: 0.5, x: 0, y: 0.5)
     }
 }
 
@@ -3395,7 +3441,6 @@ struct ThumbnailPill: View {
     // Uniform size for flash/thumbnail/WB
     private let pillWidth: CGFloat = 88
     private let pillHeight: CGFloat = 48
-    @State private var isPressed = false
 
     var body: some View {
         Button(action: action) {
@@ -3405,27 +3450,14 @@ struct ThumbnailPill: View {
                     .fill(Color.black)
                     .frame(width: pillWidth, height: pillHeight)
 
-                // Inner frame - darker when pressed
+                // Inner frame
                 RoundedRectangle(cornerRadius: 22)
-                    .fill(Color(hex: isPressed ? "1a1a1a" : "242424"))
+                    .fill(Color(hex: "242424"))
                     .frame(width: pillWidth - 4, height: pillHeight - 4)
-
-                // Inner shadow when pressed
-                if isPressed {
-                    RoundedRectangle(cornerRadius: 22)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.black.opacity(0.3), Color.clear],
-                                startPoint: .top,
-                                endPoint: .bottom
-                            )
-                        )
-                        .frame(width: pillWidth - 4, height: pillHeight - 4)
-                }
 
                 // Inner stroke
                 RoundedRectangle(cornerRadius: 22)
-                    .stroke(Color(hex: isPressed ? "333333" : "444444"), lineWidth: 0.5)
+                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
                     .frame(width: pillWidth - 4, height: pillHeight - 4)
 
                 // Image or placeholder
@@ -3445,12 +3477,7 @@ struct ThumbnailPill: View {
         }
         .frame(width: pillWidth, height: pillHeight + 4)
         .contentShape(Rectangle())
-        .buttonStyle(.plain)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
-        )
+        .buttonStyle(ProButtonStyle())
     }
 }
 
@@ -3628,7 +3655,6 @@ struct WBPill: View {
     // Uniform size for flash/thumbnail/WB
     private let pillWidth: CGFloat = 88
     private let pillHeight: CGFloat = 48
-    @State private var isPressed = false
 
     var body: some View {
         Button(action: {
@@ -3642,37 +3668,13 @@ struct WBPill: View {
                     .fill(Color.black)
                     .frame(width: pillWidth, height: pillHeight)
 
-                // Inner frame - darker when pressed
+                // Inner frame
                 Capsule()
-                    .fill(Color(hex: isPressed ? "181818" : "242424"))
+                    .fill(Color(hex: "242424"))
                     .frame(width: pillWidth - 4, height: pillHeight - 4)
 
-                // Inner shadow when pressed (deep inset look)
-                if isPressed {
-                    Capsule()
-                        .fill(
-                            LinearGradient(
-                                colors: [
-                                    Color.black.opacity(0.6),
-                                    Color.black.opacity(0.25),
-                                    Color.clear
-                                ],
-                                startPoint: .top,
-                                endPoint: .center
-                            )
-                        )
-                        .frame(width: pillWidth - 4, height: pillHeight - 4)
-
-                    // Blurred inner edge shadow
-                    Capsule()
-                        .stroke(Color.black.opacity(0.5), lineWidth: 3)
-                        .blur(radius: 2)
-                        .frame(width: pillWidth - 8, height: pillHeight - 8)
-                        .clipShape(Capsule())
-                }
-
                 Capsule()
-                    .stroke(Color(hex: isPressed ? "222222" : "444444"), lineWidth: 0.5)
+                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
                     .frame(width: pillWidth - 4, height: pillHeight - 4)
 
                 // Text
@@ -3688,12 +3690,7 @@ struct WBPill: View {
             }
             .frame(width: pillWidth, height: pillHeight)
         }
-        .buttonStyle(.plain)
-        .simultaneousGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { _ in isPressed = true }
-                .onEnded { _ in isPressed = false }
-        )
+        .buttonStyle(ProButtonStyle())
     }
 }
 

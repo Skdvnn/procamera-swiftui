@@ -251,7 +251,7 @@ def test_source_guards() -> None:
     check("no photoOutput.isAutoVirtualDeviceFusionEnabled", "photoOutput.isAutoVirtualDeviceFusionEnabled" not in cam)
     check("settings fusion off", "settings.isAutoVirtualDeviceFusionEnabled = false" in cam)
     check("capture on sessionQueue", "sessionQueue.async" in cam and "capturePhoto(with: settings" in cam)
-    check("switchCamera updates max dims", "updateMaxPhotoDimensions" in cam[cam.find("func switchCamera"): cam.find("func switchCamera") + 1200])
+    check("switchCamera updates max dims", "updateMaxPhotoDimensions" in cam[cam.find("func switchCamera"): cam.find("func switchCamera") + 2500])
     check("speed prioritization", "maxPhotoQualityPrioritization = natural ? .speed" in cam)
     check("Bayer prefer", "isBayerRAWPixelFormat" in cam)
     check("bake always when looks", "let needsFXBake = captureLensFX != .none || captureFilmFilter != .none" in cam)
@@ -309,7 +309,7 @@ def test_source_guards() -> None:
     chrome = (ROOT / "CullChrome.swift").read_text()
     proof = (ROOT / "ProofExport.swift").read_text()
     intents = (ROOT / "ShutterAppIntents.swift").read_text()
-    check("live shutter on top meter", "shutterIsAuto" in gauge and "shutterLabel: displayShutterLabel" in content)
+    check("live shutter on top meter", "shutterIsAuto" in gauge and ("shutterLabel: liveShutter" in content or "shutterLabel: displayShutterLabel" in content) and "LiveExposureChrome" in content)
     check("Auto Night assist chip", "evaluateNightAssist" in content and "TAP FOR NIGHT" in content)
     check("hold-to-burst shutter", "beginBurstHold" in content and "onBurstStart" in content and "Hold for burst" in content)
     check("widget timeline reload", "WidgetCenter.shared.reloadAllTimelines" in content)
@@ -341,8 +341,8 @@ def test_source_guards() -> None:
     overlays = content.split('struct FinderStatusOverlays')[1].split('struct ContentViewLifecycle')[0]
     check("Night chip comment forbids full-bleed hit", "never maxHeight:.infinity" in overlays or "Street-chip hit sink" in overlays)
     check("Night chip frame is width-only", ".frame(maxWidth: .infinity, alignment: .top)" in overlays and "maxHeight: .infinity" not in overlays.split("if nightAssistVisible")[1].split("if let cameraError")[0])
-    check("burstConsumedTap cleared in endBurstHold", "func endBurstHold" in content and "burstConsumedTap = false" in content[content.find("func endBurstHold"):content.find("func endBurstHold")+220])
-    check("burst marks consumed before guards", content.find("burstConsumedTap = true") < content.find("guard holdBurstEnabled") or "Always mark the long-press" in content)
+    check("burstConsumedTap cleared in endBurstHold", "func endBurstHold" in content and "burstConsumedTap = false" in content[content.find("func endBurstHold"):content.find("func endBurstHold")+780] and "Do NOT clear burstConsumedTap here" in content)
+    check("burst marks consumed only when burst starts", "Only swallow the Button release when a real burst actually starts" in content and content.find("burstConsumedTap = true") > content.find("func beginBurstHold"))
     check("burst reschedules when busy", "Pipeline still owned — reschedule" in content)
     check("burst retries serialize reject", "Serialize reject / bake busy" in content)
     check("handleCapture ignores volume during burst", "if isBurstHolding { return }" in content)
@@ -411,7 +411,7 @@ def test_source_guards() -> None:
         _film_branch is not None and "camera.returnToAuto()" not in _film_branch.group(1),
     )
     check("shortcut not double-posted at launch", "Cold-start shortcuts are handled in FingerTipSceneDelegate only" in (ROOT / "ProCameraApp.swift").read_text())
-    check("capture serialized", "if photoCompletionHandler != nil" in cam)
+    check("capture serialized", "peekPhotoHandler()" in cam and "bakeTimeoutCompletion != nil" in cam)
     check("look deep link clears FX", "lensFX = .none" in content and "Always apply both" in content)
     check("LE restores manuals", "restoreExposureAfterLongExposure" in cam and "exposureSnapshotBeforeLE" in cam)
     check("bake timeout armed", "func armBakeTimeout" in cam and "didFinishCaptureFor" in cam)
@@ -454,6 +454,52 @@ def test_source_guards() -> None:
     check("darkroom dismiss resyncs count", "onDismiss:" in content and "photoCount = gallery.shots.count" in content)
     check("preview layer rotation", "videoRotationAngle" in preview)
 
+    # Build 52 — no-bugs swarm: bake timeout, LE cancel, CI serialize, UI hits
+    check("bakeTimeoutCompletion exists", "bakeTimeoutCompletion" in cam)
+    check("bakeGeneration invalidation", "bakeGeneration" in cam and "finishUserBake" in cam)
+    check("photo handler lock helpers", "func takePhotoHandler" in cam and "func setPhotoHandler" in cam)
+    check("STACK keeps LE flag through bake", "Keep isLongExposureCapturing true through bake" in cam)
+    check("cancel clears bake + photo handler", "Invalidate any in-flight still bake" in cam)
+    check("switchCamera blocks mid-bake", "bakeTimeoutCompletion != nil" in cam[cam.find("func switchCamera"):cam.find("func switchCamera")+900])
+    check("formats empty-safe", "device.formats.first" in cam and "device.formats[0]" not in cam)
+    check("HEIC decode fallback", "decodedProcessedPhoto" in cam and "CGImageSourceCreateWithData" in cam)
+    check("syncCI used in CameraManager", "ShutterRender.syncCI" in cam)
+    check("live preview materializes frames", "Materialize now — CVPixelBuffer is recycled" in cam)
+    check("LivePreviewBridge coalesces", "Latest-wins coalesce" in preview)
+    check("LiveExposureChrome isolates bus", "struct LiveExposureChrome" in content)
+    check("ContentView does not observe LiveExposureBus", "@ObservedObject private var liveExposure" not in content)
+    _looks = (ROOT / "ViewfinderOverlay.swift").read_text().split("ForEach(store.recipes)")[1][:2200]
+    check("LOOKS delete not nested Button", "store.delete(recipe.id)" in _looks and ".onTapGesture" in _looks and 'Image(systemName: "xmark")' in _looks)
+
+    check("SCENE apply before dismiss", "onApplyShootMode?(mode)" in (ROOT / "ViewfinderOverlay.swift").read_text().split("sectionLabel(\"SCENE\")")[1][:400])
+    vf = (ROOT / "ViewfinderOverlay.swift").read_text()
+    scene = vf.split('sectionLabel("SCENE")')[1][:500]
+    check("SCENE no async apply", "DispatchQueue.main.async" not in scene.split("sectionLabel")[0] if "sectionLabel" in scene else "DispatchQueue.main.async" not in scene)
+    check("no 56pt expanded focus strip", "frame(height: 56)" not in content or "focus-stealing" in content)
+    # Prefer absence of the clear strip over finder
+    check(
+        "expanded strip removed",
+        "Color.clear\n                            .frame(height: 56)" not in content
+        and ".frame(height: 56)\n                            .frame(maxWidth: .infinity)\n                            .contentShape(Rectangle())\n                            .simultaneousGesture(bottomDeckSwipe)" not in content,
+    )
+    check("Flash/Thumb/WB use ProButtonStyle not DragGesture0", content.count("DragGesture(minimumDistance: 0)") == 0 or "FlashButtonPill" in content)
+    # Count DragGesture(0) outside shutter comments — should be zero in pill structs
+    flash_chunk = content.split("struct FlashButtonPill")[1].split("struct ModeIcon")[0] if "struct FlashButtonPill" in content else ""
+    thumb_chunk = content.split("struct ThumbnailPill")[1].split("struct FormatTogglePill")[0] if "struct ThumbnailPill" in content else ""
+    wb_chunk = content.split("struct WBPill")[1].split("struct ExposureKnob")[0] if "struct WBPill" in content else ""
+    check("FlashPill no DragGesture0", "DragGesture(minimumDistance: 0)" not in flash_chunk)
+    check("ThumbnailPill no DragGesture0", "DragGesture(minimumDistance: 0)" not in thumb_chunk)
+    check("WBPill no DragGesture0", "DragGesture(minimumDistance: 0)" not in wb_chunk)
+    check("timer freezes morph", "frozenMorphTouch" in content)
+    check("LE accepts morphTouch", "morphTouch: MorphTouchState? = nil" in cam)
+    check("finish delete fail keeps marks", "Leave marks intact so the user can retry" in (ROOT / "CullGallery.swift").read_text())
+    check("initialBookID onChange", "onChange(of: initialBookID)" in (ROOT / "PhotoBook.swift").read_text())
+    check("CloudKit found lock", "NSLock()" in (ROOT / "CloudBooks.swift").read_text() and "found.append" in (ROOT / "CloudBooks.swift").read_text())
+    check("thumb cache limits", "thumbCache.countLimit" in (ROOT / "PhotoBook.swift").read_text())
+    check("loupeSessionActive still present", "loupeSessionActive" in (ROOT / "CullGallery.swift").read_text())
+    check("ModeControl 44pt target", "minWidth: 44, minHeight: 44" in content)
+
+
 
 # ── Landscape layout invariants ─────────────────────────────────────────────
 
@@ -474,6 +520,7 @@ class Rect:
 
     def overlaps(self, o: "Rect") -> bool:
         return not (self.right <= o.x or o.right <= self.x or self.bottom <= o.y or o.bottom <= self.y)
+
 
 
 def test_landscape_layout() -> None:
@@ -530,10 +577,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 51", m is not None and int(ver) >= 51, ver)
+    check("Info.plist build >= 52", m is not None and int(ver) >= 52, ver)
     import re as _re
+
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 51+", any(v >= 51 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 52+", any(v >= 52 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

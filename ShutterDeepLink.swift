@@ -37,9 +37,14 @@ enum ShutterDeepLink: Equatable {
         case "look", "recipe":
             return .look(film: q("film"), fx: q("fx"))
         case "timer":
-            return .timer(seconds: Int(q("seconds") ?? q("s") ?? "3") ?? 3)
+            let sec = Int(q("seconds") ?? q("s") ?? "3") ?? 3
+            // Invalid values → off (not silently 3s).
+            let clamped = [0, 3, 10].contains(sec) ? sec : 0
+            return .timer(seconds: clamped)
         case "peaking":
-            return .peaking((q("on") ?? "1") != "0")
+            let raw = (q("on") ?? "1").lowercased()
+            let on = ["1", "true", "yes", "on"].contains(raw)
+            return .peaking(on)
         case "flip":
             return .flip
         default:

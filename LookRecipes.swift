@@ -107,7 +107,12 @@ final class VolumeShutterObserver: NSObject, ObservableObject {
             view.addSubview(volumeView)
         }
         try? AVAudioSession.sharedInstance().setActive(true)
+        // Prime away from 0%/100% so volume buttons keep producing deltas.
+        setVolumeSlider(0.5)
         lastVolume = AVAudioSession.sharedInstance().outputVolume
+        if lastVolume < 0.05 || lastVolume > 0.95 {
+            lastVolume = 0.5
+        }
         observation = AVAudioSession.sharedInstance().observe(\.outputVolume, options: [.new]) { [weak self] session, _ in
             guard let self else { return }
             Task { @MainActor in
@@ -141,12 +146,25 @@ final class VolumeShutterObserver: NSObject, ObservableObject {
         ignoring = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self else { return }
-            if let slider = self.volumeView.subviews.compactMap({ $0 as? UISlider }).first {
-                slider.value = 0.5
+            if self.setVolumeSlider(0.5) {
+                self.lastVolume = 0.5
             }
-            self.lastVolume = 0.5
             self.ignoring = false
         }
+    }
+
+    @discardableResult
+    private func setVolumeSlider(_ value: Float) -> Bool {
+        func findSlider(in view: UIView) -> UISlider? {
+            if let s = view as? UISlider { return s }
+            for sub in view.subviews {
+                if let s = findSlider(in: sub) { return s }
+            }
+            return nil
+        }
+        guard let slider = findSlider(in: volumeView) else { return false }
+        slider.value = value
+        return true
     }
 
     private func startControllerListening() {
