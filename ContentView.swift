@@ -411,7 +411,9 @@ struct ContentView: View {
                             onSaveLook: {
                                 LookRecipeStore.shared.saveCurrent(film: filmFilter, lensFX: lensFX)
                                 Haptics.medium()
-                            }
+                            },
+                            shootMode: ShootMode(rawValue: shootModeRaw) ?? .street,
+                            onApplyShootMode: { applyShootMode($0) }
                         )
                         .padding(.horizontal, effectiveBottomCollapsed ? 6 : DS.pageMargin)
                         .zIndex(40)
@@ -427,28 +429,6 @@ struct ContentView: View {
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .layoutPriority(1)
-                    // Chip as overlay. Use offset (not outer padding) — padding on a
-                    // Button expands its hit box and was covering the shutter again.
-                    .overlay(alignment: .bottomLeading) {
-                        Button {
-                            Haptics.click()
-                            cycleShootMode()
-                        } label: {
-                            Text((ShootMode(rawValue: shootModeRaw) ?? .street).title.uppercased())
-                                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                                .tracking(1.2)
-                                .foregroundColor(.white.opacity(0.85))
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 4)
-                                .background(Capsule().fill(Color.black.opacity(0.45)))
-                        }
-                        .buttonStyle(.plain)
-                        .fixedSize()
-                        .offset(
-                            x: effectiveBottomCollapsed ? 20 : 24,
-                            y: effectiveBottomCollapsed ? -100 : -16
-                        )
-                    }
 
                     if !effectiveBottomCollapsed {
                         Spacer().frame(height: viewfinderToControlsSpacing)
@@ -653,14 +633,6 @@ struct ContentView: View {
     private func syncCaptureControlsToCamera() {
         syncFilmFilter(filmFilter)
         camera.selectedLensFX = lensFX
-    }
-
-    private func cycleShootMode() {
-        let all = ShootMode.allCases
-        let current = ShootMode(rawValue: shootModeRaw) ?? .street
-        let idx = all.firstIndex(of: current) ?? 0
-        let next = all[(idx + 1) % all.count]
-        applyShootMode(next)
     }
 
     private func applyShootMode(_ mode: ShootMode) {
@@ -914,7 +886,7 @@ struct ContentView: View {
                 GeometryReader { vfGeo in
                     FilteredCameraPreview(
                         session: camera.session,
-                        filteredImage: camera.filteredPreviewImage,
+                        livePreview: camera.livePreview,
                         onTap: { point in
                             handleFocusTap(point, in: vfGeo.size)
                         },
@@ -1642,43 +1614,22 @@ struct ResponsiveHistogram: View {
 // MARK: - Controls Grain (DSLR vulcanite texture - more visible)
 struct ControlsGrain: View {
     var body: some View {
-        // Static seeded grain — animated TimelineView redraws were freezing the UI
-        Canvas { context, size in
-            var rng = GrainRNG(seed: 0xBEEF)
-            for _ in 0..<Int(size.width * size.height * 0.008) {
-                let x = CGFloat.random(in: 0...size.width, using: &rng)
-                let y = CGFloat.random(in: 0...size.height, using: &rng)
-                let opacity = CGFloat.random(in: 0.04...0.12, using: &rng)
-                let dotSize = CGFloat.random(in: 0.8...1.5, using: &rng)
-                context.fill(
-                    Path(ellipseIn: CGRect(x: x, y: y, width: dotSize, height: dotSize)),
-                    with: .color(.white.opacity(opacity))
-                )
-            }
-            for _ in 0..<Int(size.width * size.height * 0.002) {
-                let x = CGFloat.random(in: 0...size.width, using: &rng)
-                let y = CGFloat.random(in: 0...size.height, using: &rng)
-                let opacity = CGFloat.random(in: 0.08...0.15, using: &rng)
-                context.fill(
-                    Path(ellipseIn: CGRect(x: x, y: y, width: 1, height: 1)),
-                    with: .color(.black.opacity(opacity))
-                )
-            }
+        // Cached texture — Canvas ellipse storms on every camera publish were laggy.
+        GeometryReader { geo in
+            Image(uiImage: CachedGrainTexture.image(
+                for: geo.size,
+                density: 0.008,
+                seed: 0xBEEF,
+                darkSpeckDensity: 0.002
+            ))
+            .resizable()
+            .interpolation(.none)
+            .scaledToFill()
+            .frame(width: geo.size.width, height: geo.size.height)
+            .clipped()
         }
         .allowsHitTesting(false)
         .blendMode(.overlay)
-    }
-}
-
-private struct GrainRNG: RandomNumberGenerator {
-    private var state: UInt64
-    init(seed: UInt64) { state = seed == 0 ? 1 : seed }
-    mutating func next() -> UInt64 {
-        state &+= 0x9e3779b97f4a7c15
-        var z = state
-        z = (z ^ (z >> 30)) &* 0xbf58476d1ce4e5b9
-        z = (z ^ (z >> 27)) &* 0x94d049bb133111eb
-        return z ^ (z >> 31)
     }
 }
 

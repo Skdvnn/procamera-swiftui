@@ -270,6 +270,12 @@ def test_source_guards() -> None:
     # Preview intentionally skips CineStill bloom (perf); still bake keeps it.
     check("cinestill still bloom", "case .cinestill800:" in cam and "bloom.intensity = 0.3" in cam)
     check("preview bloom skipped", "Preview skips bloom" in cam)
+    check("live preview bridge", "class LivePreviewBridge" in preview and "let livePreview = LivePreviewBridge()" in cam)
+    check("no @Published filtered preview", "@Published var filteredPreviewImage" not in cam)
+    check("previewCheap live FX", "previewCheap: true" in cam and "previewCheap: Bool = false" in (ROOT / "LensFXEngine.swift").read_text())
+    check("cached grain texture", "enum CachedGrainTexture" in (ROOT / "ViewfinderOverlay.swift").read_text())
+    check("no Street chip overlay", "cycleShootMode" not in content)
+    check("scenes in film dock", "sectionLabel(\"SCENE\")" in (ROOT / "ViewfinderOverlay.swift").read_text())
 
 
 # ── Landscape layout invariants ─────────────────────────────────────────────

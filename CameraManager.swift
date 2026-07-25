@@ -71,11 +71,13 @@ class CameraManager: NSObject, ObservableObject {
             }
         }
     }
-    // Live preview filtering
-    @Published var filteredPreviewImage: CIImage?
+    // Live preview filtering — Metal sink, NOT @Published (avoids 15Hz SwiftUI thrash).
+    let livePreview = LivePreviewBridge()
     private var lastPreviewFrameTime: CFAbsoluteTime = 0
-    /// Cap live FX preview — 20fps keeps Liquid/film from locking the main thread.
-    private let previewFrameInterval: CFAbsoluteTime = 1.0 / 20.0
+    /// True while Metal is showing a filtered frame (video-queue flag).
+    private var livePreviewActive = false
+    /// Cap live FX preview — heavy FX go slower.
+    private let previewFrameInterval: CFAbsoluteTime = 1.0 / 15.0
 
     // Live histogram - real luminance bins computed from preview frames
     @Published var histogramBins: [Float] = []
@@ -1521,7 +1523,8 @@ class CameraManager: NSObject, ObservableObject {
         if previewLooksBypassed
             || (selectedFilmFilter == .none && selectedLensFX == .none
                 && !focusPeakingEnabled && !zebraEnabled) {
-            filteredPreviewImage = nil
+            livePreviewActive = false
+            livePreview.push(nil)
         }
     }
 
@@ -1532,11 +1535,22 @@ class CameraManager: NSObject, ObservableObject {
         return image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
     }
 
-    // Cap live preview frames at ~1280px on the long edge; the viewfinder is
-    // much smaller than sensor resolution and filters cost per-pixel
-    private func downscaledForPreview(_ image: CIImage) -> CIImage {
-        // 960 long-edge is enough for the finder and much cheaper under FX.
-        downscaled(image, longEdge: 960)
+    // Cap live preview frames; heavy FX use a smaller buffer.
+    private func downscaledForPreview(_ image: CIImage, heavyFX: Bool) -> CIImage {
+        downscaled(image, longEdge: heavyFX ? 720 : 840)
+    }
+
+    private func isHeavyPreviewFX(_ fx: LensFXMode) -> Bool {
+        switch fx {
+        case .liquid, .chrome, .dream, .kaleido, .toon: return true
+        default: return false
+        }
+    }
+
+    private func previewInterval(for fx: LensFXMode, film: FilmFilter) -> CFAbsoluteTime {
+        if isHeavyPreviewFX(fx) { return 1.0 / 11.0 }
+        if film != .none || fx != .none { return previewFrameInterval }
+        return previewFrameInterval
     }
 
     // MARK: - Live Histogram
@@ -1546,7 +1560,7 @@ class CameraManager: NSObject, ObservableObject {
         let binCount = 40
 
         // Histogram doesn't need resolution — sample a small version
-        let small = downscaled(image, longEdge: 256)
+        let small = downscaled(image, longEdge: 160)
 
         guard let filter = CIFilter(name: "CIAreaHistogram") else { return }
         filter.setValue(small, forKey: kCIInputImageKey)
@@ -1579,8 +1593,19 @@ class CameraManager: NSObject, ObservableObject {
         let normalized = bins.map { $0 / peak }
 
         DispatchQueue.main.async {
+            // Skip no-op publishes — each assignment redraws ContentView.
+            if Self.histogramNearlyEqual(normalized, self.histogramBins) { return }
             self.histogramBins = normalized
         }
+    }
+
+    private static func histogramNearlyEqual(_ a: [Float], _ b: [Float]) -> Bool {
+        guard a.count == b.count, !a.isEmpty else { return false }
+        var err: Float = 0
+        for i in a.indices {
+            err += abs(a[i] - b[i])
+        }
+        return err < 0.4
     }
 
     // MARK: - Lens FX Processing
@@ -1828,10 +1853,10 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
         let ciImage = CIImage(cvPixelBuffer: pixelBuffer)
 
-        // Update the real histogram a few times a second
+        // Update the real histogram ~2×/sec (was 4× and republished every time).
         if !isLongExposureCapturing {
             let now = CFAbsoluteTimeGetCurrent()
-            if now - lastHistogramTime >= 0.25 {
+            if now - lastHistogramTime >= 0.5 {
                 lastHistogramTime = now
                 updateHistogram(from: ciImage)
             }
@@ -1840,23 +1865,24 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         // Handle live preview processing (film filter and/or lens FX, not during long exposure)
         let (filmFilter, lensFX, peaking, zebra, bypass, bakingStill) = currentPipelineSelection()
         if bypass {
-            DispatchQueue.main.async {
-                if self.filteredPreviewImage != nil {
-                    self.filteredPreviewImage = nil
-                }
+            if livePreviewActive {
+                livePreviewActive = false
+                livePreview.push(nil)
             }
         } else {
         let wantsLiveProcessing = filmFilter != .none || lensFX != .none || peaking || zebra
         if wantsLiveProcessing && !isLongExposureCapturing && !bakingStill {
 
             let currentTime = CFAbsoluteTimeGetCurrent()
-            if currentTime - lastPreviewFrameTime >= previewFrameInterval {
+            let interval = previewInterval(for: lensFX, film: filmFilter)
+            if currentTime - lastPreviewFrameTime >= interval {
                 lastPreviewFrameTime = currentTime
+                let heavy = isHeavyPreviewFX(lensFX)
 
                 // Downscale + autoreleasepool: keep FX cheap and crash-resistant
                 // under GPU contention when toggling looks rapidly.
                 let processed: CIImage? = autoreleasepool {
-                    var frame = downscaledForPreview(ciImage)
+                    var frame = downscaledForPreview(ciImage, heavyFX: heavy)
                     let extent = frame.extent
                     guard !extent.isInfinite,
                           extent.width > 1,
@@ -1865,7 +1891,13 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                     }
                     frame = applyFilmFilter(to: frame, filter: filmFilter)
                     if lensFX != .none {
-                        frame = LensFXEngine.shared.apply(lensFX, to: frame, time: currentTime)
+                        // previewCheap skips bloom/twirl that stills still get.
+                        frame = LensFXEngine.shared.apply(
+                            lensFX,
+                            to: frame,
+                            time: currentTime,
+                            previewCheap: true
+                        )
                     }
                     if peaking {
                         frame = ViewfinderMonitor.applyFocusPeaking(to: frame)
@@ -1881,17 +1913,15 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 }
 
                 if let processed {
-                    DispatchQueue.main.async {
-                        self.filteredPreviewImage = processed
-                    }
+                    livePreviewActive = true
+                    livePreview.push(processed)
                 }
             }
         } else if !wantsLiveProcessing {
-            // Clear filtered preview when no filter selected
-            DispatchQueue.main.async {
-                if self.filteredPreviewImage != nil {
-                    self.filteredPreviewImage = nil
-                }
+            // Clear once — do not hop to main on every idle camera frame.
+            if livePreviewActive {
+                livePreviewActive = false
+                livePreview.push(nil)
             }
         }
         }

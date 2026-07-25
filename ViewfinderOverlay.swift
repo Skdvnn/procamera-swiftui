@@ -8,22 +8,66 @@ private struct VFHaptics {
     }
 }
 
+// MARK: - Cached grain textures (Canvas re-raster was a major lag source)
+
+enum CachedGrainTexture {
+    private static var cache: [Int: UIImage] = [:]
+    private static let lock = NSLock()
+
+    static func image(for size: CGSize, density: CGFloat, seed: UInt64, darkSpeckDensity: CGFloat = 0) -> UIImage {
+        let w = max(64, (Int(size.width) / 64) * 64)
+        let h = max(64, (Int(size.height) / 64) * 64)
+        let key = (w &<< 16) ^ h ^ Int(density * 10_000) ^ Int(seed & 0xFFFF)
+        lock.lock()
+        if let hit = cache[key] {
+            lock.unlock()
+            return hit
+        }
+        lock.unlock()
+
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: w, height: h))
+        let img = renderer.image { ctx in
+            UIColor.clear.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+            var rng = SeededGenerator(seed: seed)
+            let count = Int(CGFloat(w * h) * density)
+            for _ in 0..<count {
+                let x = CGFloat.random(in: 0...CGFloat(w), using: &rng)
+                let y = CGFloat.random(in: 0...CGFloat(h), using: &rng)
+                let opacity = CGFloat.random(in: 0.02...0.08, using: &rng)
+                let dot = CGFloat.random(in: 0.8...1.6, using: &rng)
+                UIColor.white.withAlphaComponent(opacity).setFill()
+                ctx.cgContext.fillEllipse(in: CGRect(x: x, y: y, width: dot, height: dot))
+            }
+            if darkSpeckDensity > 0 {
+                let darkCount = Int(CGFloat(w * h) * darkSpeckDensity)
+                for _ in 0..<darkCount {
+                    let x = CGFloat.random(in: 0...CGFloat(w), using: &rng)
+                    let y = CGFloat.random(in: 0...CGFloat(h), using: &rng)
+                    let opacity = CGFloat.random(in: 0.08...0.15, using: &rng)
+                    UIColor.black.withAlphaComponent(opacity).setFill()
+                    ctx.cgContext.fillEllipse(in: CGRect(x: x, y: y, width: 1, height: 1))
+                }
+            }
+        }
+        lock.lock()
+        cache[key] = img
+        lock.unlock()
+        return img
+    }
+}
+
 // MARK: - Film Grain Overlay
 struct FilmGrainOverlay: View {
     var body: some View {
-        // Seeded static grain — random() every redraw was thrashing the view tree
-        Canvas { context, size in
-            var rng = SeededGenerator(seed: 0xC0FFEE)
-            let count = Int(size.width * size.height * 0.006)
-            for _ in 0..<count {
-                let x = CGFloat.random(in: 0...size.width, using: &rng)
-                let y = CGFloat.random(in: 0...size.height, using: &rng)
-                let opacity = CGFloat.random(in: 0.02...0.07, using: &rng)
-                context.fill(
-                    Path(ellipseIn: CGRect(x: x, y: y, width: 1.5, height: 1.5)),
-                    with: .color(.white.opacity(opacity))
-                )
-            }
+        // One rasterized texture per size bucket — never re-draw thousands of ellipses.
+        GeometryReader { geo in
+            Image(uiImage: CachedGrainTexture.image(for: geo.size, density: 0.006, seed: 0xC0FFEE))
+                .resizable()
+                .interpolation(.none)
+                .scaledToFill()
+                .frame(width: geo.size.width, height: geo.size.height)
+                .clipped()
         }
         .allowsHitTesting(false)
     }
@@ -52,6 +96,9 @@ struct ViewfinderOverlay: View {
     var compactChrome: Bool = false
     var onFlipCamera: (() -> Void)? = nil
     var onSaveLook: (() -> Void)? = nil
+    /// Scene presets live in the film dock (Street chip removed).
+    var shootMode: ShootMode = .street
+    var onApplyShootMode: ((ShootMode) -> Void)? = nil
     @ObservedObject var lookStore: LookRecipeStore = .shared
     @State private var showFilmMenu = false
     @State private var showFXMenu = false
@@ -198,6 +245,8 @@ struct ViewfinderOverlay: View {
                 LeicaFilmPicker(
                     selectedFilter: $filmFilter,
                     isPresented: $showFilmMenu,
+                    shootMode: shootMode,
+                    onApplyShootMode: onApplyShootMode,
                     onSaveLook: { onSaveLook?() }
                 )
                 .padding(.trailing, compactChrome ? 10 : 16)
@@ -584,6 +633,8 @@ struct InfoBar: View {
 struct LeicaFilmPicker: View {
     @Binding var selectedFilter: FilmFilterMode
     @Binding var isPresented: Bool
+    var shootMode: ShootMode = .street
+    var onApplyShootMode: ((ShootMode) -> Void)? = nil
     var onSaveLook: (() -> Void)? = nil
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
@@ -593,7 +644,7 @@ struct LeicaFilmPicker: View {
         // tree (Metal shutter shaders) and can MetadataCache-crash on device.
         VStack(spacing: 0) {
             HStack {
-                Text("FILM")
+                Text("LOOKS")
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundColor(.white.opacity(0.5))
                 Spacer()
@@ -624,6 +675,56 @@ struct LeicaFilmPicker: View {
 
             ScrollView(showsIndicators: false) {
                 VStack(spacing: 0) {
+                    if onApplyShootMode != nil {
+                        sectionLabel("SCENE")
+                        ForEach(ShootMode.allCases) { mode in
+                            Button {
+                                VFHaptics.click()
+                                var t = Transaction()
+                                t.disablesAnimations = true
+                                withTransaction(t) { isPresented = false }
+                                let chosen = mode
+                                DispatchQueue.main.async {
+                                    onApplyShootMode?(chosen)
+                                }
+                            } label: {
+                                HStack(spacing: 8) {
+                                    Text(shootMode == mode ? ">" : " ")
+                                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                        .foregroundColor(accent)
+                                        .frame(width: 12)
+
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(mode.title.uppercased())
+                                            .font(.system(
+                                                size: 11,
+                                                weight: shootMode == mode ? .semibold : .regular,
+                                                design: .monospaced
+                                            ))
+                                            .foregroundColor(shootMode == mode ? .white : .white.opacity(0.6))
+                                        Text(mode.blurb.uppercased())
+                                            .font(.system(size: 8, weight: .regular, design: .monospaced))
+                                            .foregroundColor(.white.opacity(0.28))
+                                            .lineLimit(1)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(shootMode == mode ? Color.white.opacity(0.05) : Color.clear)
+                            }
+                            .buttonStyle(.plain)
+                        }
+
+                        Rectangle()
+                            .fill(Color(hex: "2a2a2a"))
+                            .frame(height: 1)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+
+                        sectionLabel("FILM")
+                    }
+
                     ForEach(FilmFilterMode.allCases, id: \.self) { filter in
                         Button(action: {
                             VFHaptics.click()
@@ -665,12 +766,25 @@ struct LeicaFilmPicker: View {
                     }
                 }
             }
-            .frame(maxHeight: 250)
+            .frame(maxHeight: onApplyShootMode != nil ? 320 : 250)
 
             Spacer().frame(height: 6)
         }
         .background(dsPickerChrome())
-        .frame(width: 180)
+        .frame(width: 196)
+    }
+
+    private func sectionLabel(_ title: String) -> some View {
+        HStack {
+            Text(title)
+                .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                .foregroundColor(.white.opacity(0.35))
+                .tracking(1.0)
+            Spacer()
+        }
+        .padding(.horizontal, 12)
+        .padding(.top, 8)
+        .padding(.bottom, 2)
     }
 
     private func isoLabel(for filter: FilmFilterMode) -> String {

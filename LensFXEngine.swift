@@ -166,6 +166,8 @@ final class LensFXEngine {
     /// Scoped overrides while applying an effect (still bake freezes these).
     private var applyTouchOverride: MorphTouchState?
     private var applyUprightTouch = false
+    /// Live preview: skip bloom / twirl / wake so the finder stays fluid.
+    private var applyPreviewCheap = false
     /// Live buffer→UI rotation; updated from the preview / ContentView.
     private var previewBufferRotation: PreviewBufferRotation = .rotateRight
 
@@ -287,12 +289,14 @@ final class LensFXEngine {
     ///     or a relative phase for stills when `stillBake` is true.
     ///   - touchOverride: Frozen morph uniforms for still capture.
     ///   - stillBake: Skip decay; treat `time` as relative phase; upright touch space.
+    ///   - previewCheap: Lighter live graph (no chrome bloom / twirl / wake).
     func apply(
         _ fx: LensFXMode,
         to image: CIImage,
         time rawTime: TimeInterval,
         touchOverride: MorphTouchState? = nil,
-        stillBake: Bool = false
+        stillBake: Bool = false,
+        previewCheap: Bool = false
     ) -> CIImage {
         let extent = image.extent
         guard fx != .none,
@@ -317,9 +321,11 @@ final class LensFXEngine {
         lock.lock()
         applyTouchOverride = touchOverride
         applyUprightTouch = stillBake
+        applyPreviewCheap = previewCheap && !stillBake
         defer {
             applyTouchOverride = nil
             applyUprightTouch = false
+            applyPreviewCheap = false
             lock.unlock()
         }
 
@@ -587,7 +593,8 @@ final class LensFXEngine {
             + TimeInterval(t.velY) * 0.25
         let texture = morphingTexture(covering: extent, time: textureTime)
 
-        let glassScale = extent.width * strength * (1.0 + force * 1.8 + velBoost * 0.6)
+        let forceGain: CGFloat = applyPreviewCheap ? (1.0 + force * 1.1) : (1.0 + force * 1.8 + velBoost * 0.6)
+        let glassScale = extent.width * strength * forceGain
 
         guard let glass = CIFilter(name: "CIGlassDistortion") else { return image }
         glass.setValue(image.clampedToExtent(), forKey: kCIInputImageKey)
@@ -606,9 +613,9 @@ final class LensFXEngine {
             bump.scale = Float(0.35 + force * 0.85 + velBoost * 0.25)
             output = (bump.outputImage ?? output).cropped(to: extent)
 
-            // Trailing wake opposite drag velocity
+            // Trailing wake opposite drag velocity (skip on cheap live preview)
             let speed = hypot(t.velX, t.velY)
-            if speed > 0.15 {
+            if !applyPreviewCheap, speed > 0.15 {
                 let wake = CIFilter.bumpDistortion()
                 // UIKit +y is down; CI +y is up when baking upright stills
                 let wakeYSign: CGFloat = applyUprightTouch ? 1 : -1
@@ -624,22 +631,25 @@ final class LensFXEngine {
             }
         }
 
-        let twirl = CIFilter.twirlDistortion()
-        twirl.inputImage = output.clampedToExtent()
-        twirl.center = center
-        let baseRadius = min(extent.width, extent.height) * (force > 0.02 ? 0.45 : 0.75)
-        twirl.radius = Float(baseRadius * (1.0 + force * 0.35))
-        let breath = Float(sin(time * 0.45)) * 0.9
-        let dragSpin = Float((t.velX - t.velY) * force * 0.8)
-        twirl.angle = breath + dragSpin
-
-        output = (twirl.outputImage ?? output).cropped(to: extent)
+        // Twirl is expensive — stills keep it; live preview skips.
+        if !applyPreviewCheap {
+            let twirl = CIFilter.twirlDistortion()
+            twirl.inputImage = output.clampedToExtent()
+            twirl.center = center
+            let baseRadius = min(extent.width, extent.height) * (force > 0.02 ? 0.45 : 0.75)
+            twirl.radius = Float(baseRadius * (1.0 + force * 0.35))
+            let breath = Float(sin(time * 0.45)) * 0.9
+            let dragSpin = Float((t.velX - t.velY) * force * 0.8)
+            twirl.angle = breath + dragSpin
+            output = (twirl.outputImage ?? output).cropped(to: extent)
+        }
         return output
     }
 
     private func applyLiquid(to image: CIImage, time: TimeInterval) -> CIImage {
         let extent = image.extent
-        return morphDistort(image, extent: extent, time: time, strength: 0.055)
+        let strength: CGFloat = applyPreviewCheap ? 0.038 : 0.055
+        return morphDistort(image, extent: extent, time: time, strength: strength)
     }
 
     // MARK: - Chrome (liquid metal)
@@ -673,12 +683,14 @@ final class LensFXEngine {
         tint.bVector = CIVector(x: 0, y: 0, z: 1.10, w: 0)
         if let result = tint.outputImage { output = result }
 
-        // Specular sheen
-        let bloom = CIFilter.bloom()
-        bloom.inputImage = output
-        bloom.radius = 6
-        bloom.intensity = 0.4
-        if let result = bloom.outputImage { output = result }
+        // Specular sheen — stills only; live bloom is a GPU sink.
+        if !applyPreviewCheap {
+            let bloom = CIFilter.bloom()
+            bloom.inputImage = output
+            bloom.radius = 6
+            bloom.intensity = 0.4
+            if let result = bloom.outputImage { output = result }
+        }
 
         return output.cropped(to: extent)
     }
@@ -739,7 +751,7 @@ final class LensFXEngine {
         // Wide soft blur of the frame...
         let blur = CIFilter.gaussianBlur()
         blur.inputImage = image.clampedToExtent()
-        blur.radius = Float(extent.width * 0.012)
+        blur.radius = Float(extent.width * (applyPreviewCheap ? 0.006 : 0.012))
         let blurred = (blur.outputImage ?? image).cropped(to: extent)
 
         // ...dimmed, then screened over the sharp original: highlights bloom

@@ -5,10 +5,39 @@ import AVKit
 import CoreImage
 import MetalKit
 
+/// Pushes live FX frames straight into Metal — never via `@Published`, so
+/// 12–15fps film/FX does not invalidate the whole SwiftUI camera tree.
+final class LivePreviewBridge {
+    private weak var view: FilteredPreviewView?
+    private var showingFiltered = false
+
+    func attach(_ view: FilteredPreviewView) {
+        self.view = view
+    }
+
+    func push(_ image: CIImage?) {
+        let work = { [weak self] in
+            guard let self else { return }
+            if image == nil {
+                guard self.showingFiltered else { return }
+                self.showingFiltered = false
+            } else {
+                self.showingFiltered = true
+            }
+            self.view?.updateFilteredImage(image)
+        }
+        if Thread.isMainThread {
+            work()
+        } else {
+            DispatchQueue.main.async(execute: work)
+        }
+    }
+}
+
 // MARK: - Filtered Camera Preview (renders CIImage with film filters)
 struct FilteredCameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
-    let filteredImage: CIImage?
+    let livePreview: LivePreviewBridge
     var onTap: ((CGPoint) -> Void)?
     var onPinch: ((CGFloat) -> Void)?
     /// Drag / press on the viewfinder for morphic Lens FX.
@@ -25,6 +54,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
         let view = FilteredPreviewView()
         view.session = session
         view.backgroundColor = .black
+        livePreview.attach(view)
 
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
         view.addGestureRecognizer(tapGesture)
@@ -53,7 +83,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
 
     func updateUIView(_ uiView: FilteredPreviewView, context: Context) {
         uiView.session = session
-        uiView.updateFilteredImage(filteredImage)
+        livePreview.attach(uiView)
         context.coordinator.onTap = onTap
         context.coordinator.onPinch = onPinch
         context.coordinator.onMorphTouch = onMorphTouch

@@ -8,12 +8,12 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 35 phone test pack (hit-testing fix — shutter / Street / swipe):**
+**Build 36 phone test pack (perf + scenes in film dock):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
 **Preferred:** `git pull` on the Mac, then Xcode **Cmd+R** on the phone.
-Confirm the installed build is **35** (Settings → General → iPhone Storage → Shutter, or Xcode console).
+Confirm the installed build is **36**. Street chip is gone — open the **film** button (top-right) for Scene + Film.
 
 ## Path A — You have a Mac (fastest)
 
