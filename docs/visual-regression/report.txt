@@ -1,6 +1,11 @@
 PASS
+parsed CollapsedChrome: {'deck_h': 88.0, 'landscape_deck_h': 72.0, 'fade_h': 48.0, 'info_bar_h': 56.0, 'hist_deck_gap': 8.0, 'hist_pad_expanded': 14.0, 'vf_to_deck_gap': 5.0}
+cases: 13
 expanded hist↔shutter gap: 19.0pt
 collapsed hist↔deck gap: 8.0pt
 landscape hist↔deck gap: 8.0pt
+landscape expanded hist↔shutter gap: 19.0pt
 gradient covers deck: yes
 film/shader clear of bottom chrome: yes
+shutter z-order above histogram: yes
+film dock clears shutter: yes

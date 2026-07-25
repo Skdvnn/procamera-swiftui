@@ -447,6 +447,23 @@ def main() -> int:
     import subprocess
     r = subprocess.run([sys.executable, str(ROOT / "scripts/visual_layout_regression.py")], cwd=ROOT)
     check("visual_layout_regression.py", r.returncode == 0, f"exit {r.returncode}")
+    viz_report = (ROOT / "docs" / "visual-regression" / "report.txt").read_text()
+    check("visual report PASS", viz_report.startswith("PASS"))
+    check("visual parses CollapsedChrome", "parsed CollapsedChrome:" in viz_report)
+    check("visual film dock case", "film dock clears shutter: yes" in viz_report)
+    check("visual shutter z-order", "shutter z-order above histogram: yes" in viz_report)
+    check("visual landscape expanded", "landscape expanded hist↔shutter gap:" in viz_report)
+    viz_dir = ROOT / "docs" / "visual-regression"
+    for name in (
+        "expanded-layout.png",
+        "collapsed-layout.png",
+        "landscape-layout.png",
+        "expanded-iphone15.png",
+        "collapsed-film-dock.png",
+        "landscape-expanded-iphone15_land.png",
+        "index.html",
+    ):
+        check(f"visual artifact {name}", (viz_dir / name).is_file())
 
     print(f"\n===== RESULTS: {PASS} passed, {FAIL} failed =====")
     if ERRORS:

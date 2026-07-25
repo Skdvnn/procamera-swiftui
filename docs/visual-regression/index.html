@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"/>
+<title>Shutter visual regression</title>
+<style>
+body { background:#111; color:#eee; font-family:ui-sans-serif,system-ui,sans-serif; margin:24px; }
+h1 { font-weight:600; font-size:20px; }
+.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:16px; }
+figure { margin:0; background:#1a1a1e; padding:10px; border-radius:8px; }
+img { width:100%; height:auto; image-rendering:pixelated; background:#000; }
+figcaption { margin-top:8px; font-size:12px; color:#bbb; }
+.report { margin:16px 0 28px; padding:12px 14px; background:#1e1e24; border-left:3px solid #c8c060; font-family:ui-monospace,monospace; font-size:13px; }
+</style></head><body>
+<h1>Shutter visual regression</h1>
+<div class="report">PASS<br/>parsed CollapsedChrome: {'deck_h': 88.0, 'landscape_deck_h': 72.0, 'fade_h': 48.0, 'info_bar_h': 56.0, 'hist_deck_gap': 8.0, 'hist_pad_expanded': 14.0, 'vf_to_deck_gap': 5.0}<br/>cases: 13<br/>expanded hist↔shutter gap: 19.0pt<br/>collapsed hist↔deck gap: 8.0pt<br/>landscape hist↔deck gap: 8.0pt<br/>landscape expanded hist↔shutter gap: 19.0pt<br/>gradient covers deck: yes<br/>film/shader clear of bottom chrome: yes<br/>shutter z-order above histogram: yes<br/>film dock clears shutter: yes</div>
+<div class="grid">
+<figure><img src="expanded-se.png" alt="EXPANDED · se"/><figcaption>EXPANDED · se</figcaption></figure>
+<figure><img src="collapsed-se.png" alt="COLLAPSED · se"/><figcaption>COLLAPSED · se</figcaption></figure>
+<figure><img src="expanded-iphone15.png" alt="EXPANDED · iphone15"/><figcaption>EXPANDED · iphone15</figcaption></figure>
+<figure><img src="collapsed-iphone15.png" alt="COLLAPSED · iphone15"/><figcaption>COLLAPSED · iphone15</figcaption></figure>
+<figure><img src="expanded-pro_max.png" alt="EXPANDED · pro_max"/><figcaption>EXPANDED · pro_max</figcaption></figure>
+<figure><img src="collapsed-pro_max.png" alt="COLLAPSED · pro_max"/><figcaption>COLLAPSED · pro_max</figcaption></figure>
+<figure><img src="collapsed-film-dock.png" alt="COLLAPSED · film dock open"/><figcaption>COLLAPSED · film dock open</figcaption></figure>
+<figure><img src="landscape-collapsed-se_land.png" alt="LANDSCAPE COLLAPSED · se_land"/><figcaption>LANDSCAPE COLLAPSED · se_land</figcaption></figure>
+<figure><img src="landscape-expanded-se_land.png" alt="LANDSCAPE EXPANDED · se_land"/><figcaption>LANDSCAPE EXPANDED · se_land</figcaption></figure>
+<figure><img src="landscape-collapsed-iphone15_land.png" alt="LANDSCAPE COLLAPSED · iphone15_land"/><figcaption>LANDSCAPE COLLAPSED · iphone15_land</figcaption></figure>
+<figure><img src="landscape-expanded-iphone15_land.png" alt="LANDSCAPE EXPANDED · iphone15_land"/><figcaption>LANDSCAPE EXPANDED · iphone15_land</figcaption></figure>
+<figure><img src="landscape-collapsed-pro_max_land.png" alt="LANDSCAPE COLLAPSED · pro_max_land"/><figcaption>LANDSCAPE COLLAPSED · pro_max_land</figcaption></figure>
+<figure><img src="landscape-expanded-pro_max_land.png" alt="LANDSCAPE EXPANDED · pro_max_land"/><figcaption>LANDSCAPE EXPANDED · pro_max_land</figcaption></figure>
+</div>
+</body></html>
