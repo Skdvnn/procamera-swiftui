@@ -330,6 +330,8 @@ def test_source_guards() -> None:
     check("burst count on shutter chrome", "burstCount:" in content and "isBursting" in content)
     check("loupe magnification badge", "magnification" in cull and "%.1f×" in cull)
     check("settings night+burst toggles", "Low-light Night tip" in settings and "Hold shutter for burst" in settings)
+    check("ContentView body split for type-checker", "finderCanvas(geo:" in content and "struct FinderStatusOverlays" in content and "struct ContentViewLifecycle" in content)
+
     check("bake failure note", "bakeLooksForCapture" in cam and "captureNote" in cam and "captureNote" in content)
     check("album export failure surfaced", "Album export failed — keepers in Field Book" in (ROOT / "CullGallery.swift").read_text())
     check("comic fallback", "func applyToon" in (ROOT / "LensFXEngine.swift").read_text())
@@ -499,10 +501,10 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 49", m is not None and int(ver) >= 49, ver)
+    check("Info.plist build >= 50", m is not None and int(ver) >= 50, ver)
     import re as _re
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 49+", any(v >= 49 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 50+", any(v >= 50 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

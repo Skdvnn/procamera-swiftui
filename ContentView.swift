@@ -306,6 +306,85 @@ struct ContentView: View {
 
     var body: some View {
         GeometryReader { geo in
+            finderCanvas(geo: geo)
+        }
+        .statusBarHidden(false)
+        // Require a second deliberate swipe for the home gesture so drags on
+        // the bottom control rows don't accidentally minimize the app
+        .defersSystemGestures(on: .bottom)
+        .id(colorScheme)  // Force redraw on color scheme change
+        .onAppear(perform: handleAppear)
+        .onDisappear {
+            volumeShutter.stop()
+            ShutterDeepLinkCenter.endReceiving()
+            cancelTimerCountdown()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .shutterDeepLink)) { note in
+            if let link = note.userInfo?["link"] as? ShutterDeepLink {
+                applyDeepLink(link)
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .shutterHardwareShutter)) { _ in
+            guard !showPhotoBook, !showSettings else { return }
+            handleCapture()
+        }
+        .modifier(ContentViewLifecycle(
+            camera: camera,
+            pendingCaptureWhenReady: $pendingCaptureWhenReady,
+            focusPeaking: $focusPeaking,
+            zebraEnabled: $zebraEnabled,
+            naturalCapture: naturalCapture,
+            captureFormat: $captureFormat,
+            captureFormatRaw: $captureFormatRaw,
+            apertureValue: $apertureValue,
+            isLocked: $isLocked,
+            filmFilter: filmFilter,
+            lensFX: lensFX,
+            onCapture: { handleCapture() },
+            onClampISO: { clampISOToDevice(maxISO: $0) },
+            onToast: { showStatusToast($0) },
+            onSyncFilm: { syncFilmFilter($0) },
+            onSyncContext: { syncCaptureContextToSystem() }
+        ))
+        .fullScreenCover(isPresented: $showPhotoBook, onDismiss: {
+            // Resync after Darkroom deletes / cull finish.
+            photoCount = gallery.shots.count
+            if let last = gallery.shots.last,
+               let img = gallery.thumbnail(for: last) ?? gallery.image(for: last) {
+                lastCapturedImage = img
+            } else {
+                lastCapturedImage = nil
+            }
+        }) {
+            CullLibraryView(store: gallery)
+        }
+        .sheet(isPresented: $showSettings) {
+            ShutterSettingsSheet(
+                showGrid: $showGrid,
+                focusPeaking: $focusPeaking,
+                zebraEnabled: $zebraEnabled,
+                showLevel: $showLevel,
+                captureFormat: $captureFormat,
+                defaultFilm: defaultFilmBinding,
+                naturalCapture: $naturalCapture,
+                nightAssist: $nightAssistEnabled,
+                holdBurst: $holdBurstEnabled,
+                onDismiss: {
+                    captureFormatRaw = captureFormat.rawValue
+                    switch captureFormat {
+                    case .heic: camera.captureFormat = .heic
+                    case .jpeg: camera.captureFormat = .jpeg
+                    case .raw: camera.captureFormat = .raw
+                    }
+                    showSettings = false
+                }
+            )
+        }
+    }
+
+    /// Split out of `body` so the Swift type-checker can finish (CI archive).
+    @ViewBuilder
+    private func finderCanvas(geo: GeometryProxy) -> some View {
             let safeTop = geo.safeAreaInsets.top
             let safeBottom = geo.safeAreaInsets.bottom
             let isLandscape = geo.size.width > geo.size.height
@@ -518,68 +597,22 @@ struct ContentView: View {
                     .allowsHitTesting(false)
                     .animation(ShutterMotion.flash, value: showFlash)
 
-                if let toast = statusToast {
-                    Text(toast)
-                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(Capsule().fill(Color.black.opacity(0.72)))
-                        .padding(.top, safeTop + 8)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                        .allowsHitTesting(false)
-                        .zIndex(50)
-                }
-
-                if nightAssistVisible {
-                    HStack(spacing: 10) {
-                        Button {
-                            nightAssistVisible = false
-                            nightAssistDismissedUntil = Date().addingTimeInterval(180)
-                            applyShootMode(.night)
-                            showStatusToast("Night · 1″ · ISO 1600")
-                        } label: {
-                            HStack(spacing: 8) {
-                                Text("LOW LIGHT")
-                                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                    .tracking(1.2)
-                                Text("·")
-                                    .foregroundColor(.white.opacity(0.35))
-                                Text("TAP FOR NIGHT")
-                                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            }
-                            .foregroundColor(Color(red: 1.0, green: 0.78, blue: 0.35))
-                        }
-                        Button {
-                            nightAssistVisible = false
-                            nightAssistDismissedUntil = Date().addingTimeInterval(300)
-                        } label: {
-                            Image(systemName: "xmark")
-                                .font(.system(size: 10, weight: .bold))
-                                .foregroundColor(.white.opacity(0.45))
-                                .frame(width: 22, height: 22)
-                        }
+                FinderStatusOverlays(
+                    safeTop: safeTop,
+                    toast: statusToast,
+                    nightAssistVisible: nightAssistVisible,
+                    cameraError: camera.error?.localizedDescription,
+                    onApplyNight: {
+                        nightAssistVisible = false
+                        nightAssistDismissedUntil = Date().addingTimeInterval(180)
+                        applyShootMode(.night)
+                        showStatusToast("Night · 1″ · ISO 1600")
+                    },
+                    onDismissNight: {
+                        nightAssistVisible = false
+                        nightAssistDismissedUntil = Date().addingTimeInterval(300)
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
-                    .background(Capsule().fill(Color.black.opacity(0.78)))
-                    .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.6))
-                    .padding(.top, safeTop + (statusToast == nil ? 8 : 44))
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .transition(.opacity.combined(with: .move(edge: .top)))
-                    .zIndex(51)
-                }
-
-                // Camera permission / session errors — never leave a silent black finder.
-                if let err = camera.error {
-                    CameraPermissionOverlay(message: err.localizedDescription ?? "Camera unavailable") {
-                        if let url = URL(string: UIApplication.openSettingsURLString) {
-                            UIApplication.shared.open(url)
-                        }
-                    }
-                    .zIndex(60)
-                }
+                )
             }
             .ignoresSafeArea()
             .animation(ShutterMotion.chrome, value: statusToast)
@@ -610,161 +643,46 @@ struct ContentView: View {
                     PreviewBufferRotation.from(interfaceOrientation: orient)
                 )
             }
+    }
+
+    private func handleAppear() {
+        camera.checkPermissions()
+        syncFilmFilter(filmFilter)
+        camera.selectedLensFX = lensFX
+        camera.focusPeakingEnabled = focusPeaking
+        camera.zebraEnabled = zebraEnabled
+        photoCount = gallery.shots.count
+        if let last = gallery.shots.last, let img = gallery.thumbnail(for: last) ?? gallery.image(for: last) {
+            lastCapturedImage = img
         }
-        .statusBarHidden(false)
-        // Require a second deliberate swipe for the home gesture so drags on
-        // the bottom control rows don't accidentally minimize the app
-        .defersSystemGestures(on: .bottom)
-        .id(colorScheme)  // Force redraw on color scheme change
-        .onAppear {
-            camera.checkPermissions()
-            // Sync initial filter state
-            syncFilmFilter(filmFilter)
-            camera.selectedLensFX = lensFX
-            camera.focusPeakingEnabled = focusPeaking
-            camera.zebraEnabled = zebraEnabled
-            photoCount = gallery.shots.count
-            if let last = gallery.shots.last, let img = gallery.thumbnail(for: last) ?? gallery.image(for: last) {
-                lastCapturedImage = img
-            }
-            apertureValue = camera.lensAperture
-            camera.naturalCaptureEnabled = naturalCapture
-            if let fmt = CaptureFormat(rawValue: captureFormatRaw) {
-                captureFormat = fmt
-                switch fmt {
-                case .heic: camera.captureFormat = .heic
-                case .jpeg: camera.captureFormat = .jpeg
-                case .raw: camera.captureFormat = .raw
-                }
-            }
-            let film = FilmFilterMode(rawValue: defaultFilmRaw) ?? .none
-            if filmFilter == .none, film != .none {
-                filmFilter = film
-            }
-            volumeShutter.onShutter = {
-                guard !showPhotoBook, !showSettings else { return }
-                handleCapture()
-            }
-            // Attach offscreen volume view to key window when available.
-            DispatchQueue.main.async {
-                let host = UIApplication.shared.connectedScenes
-                    .compactMap { $0 as? UIWindowScene }
-                    .flatMap(\.windows)
-                    .first { $0.isKeyWindow }
-                volumeShutter.start(in: host)
-            }
-            syncCaptureContextToSystem()
-            // Next main turn: `.onReceive` below is installed; then drain the queue.
-            DispatchQueue.main.async {
-                ShutterDeepLinkCenter.beginReceiving()
-            }
-        }
-        .onDisappear {
-            volumeShutter.stop()
-            ShutterDeepLinkCenter.endReceiving()
-            cancelTimerCountdown()
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .shutterDeepLink)) { note in
-            if let link = note.userInfo?["link"] as? ShutterDeepLink {
-                applyDeepLink(link)
-            }
-        }
-        .onReceive(NotificationCenter.default.publisher(for: .shutterHardwareShutter)) { _ in
-            guard !showPhotoBook, !showSettings else { return }
-            handleCapture()
-        }
-        .onChange(of: camera.isSessionRunning) { _, running in
-            guard running, pendingCaptureWhenReady else { return }
-            pendingCaptureWhenReady = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-                handleCapture()
-            }
-        }
-        .onChange(of: focusPeaking) { _, on in
-            camera.focusPeakingEnabled = on
-        }
-        .onChange(of: zebraEnabled) { _, on in
-            camera.zebraEnabled = on
-        }
-        .onChange(of: camera.lensAperture) { _, value in
-            apertureValue = value
-        }
-        .onChange(of: naturalCapture) { _, on in
-            camera.naturalCaptureEnabled = on
-        }
-        .onChange(of: captureFormat) { _, fmt in
-            // Keep session + AppStorage in sync even if Settings is swipe-dismissed.
-            captureFormatRaw = fmt.rawValue
+        apertureValue = camera.lensAperture
+        camera.naturalCaptureEnabled = naturalCapture
+        if let fmt = CaptureFormat(rawValue: captureFormatRaw) {
+            captureFormat = fmt
             switch fmt {
             case .heic: camera.captureFormat = .heic
             case .jpeg: camera.captureFormat = .jpeg
             case .raw: camera.captureFormat = .raw
             }
         }
-        .onChange(of: camera.maxISO) { _, maxISO in
-            clampISOToDevice(maxISO: maxISO)
+        let film = FilmFilterMode(rawValue: defaultFilmRaw) ?? .none
+        if filmFilter == .none, film != .none {
+            filmFilter = film
         }
-        .onChange(of: camera.captureNote) { _, note in
-            guard let note else { return }
-            showStatusToast(note)
-            camera.captureNote = nil
+        volumeShutter.onShutter = {
+            guard !showPhotoBook, !showSettings else { return }
+            handleCapture()
         }
-        .onChange(of: camera.isAEAFLocked) { _, locked in
-            isLocked = locked
+        DispatchQueue.main.async {
+            let host = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap(\.windows)
+                .first { $0.isKeyWindow }
+            volumeShutter.start(in: host)
         }
-        .onChange(of: filmFilter) { _, newFilter in
-            // Apply without inheriting any animation transaction into camera chrome.
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) {
-                syncFilmFilter(newFilter)
-            }
-            syncCaptureContextToSystem()
-        }
-        .onChange(of: lensFX) { _, newFX in
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) {
-                camera.selectedLensFX = newFX
-                if !newFX.isTouchReactive {
-                    LensFXEngine.shared.setTouch(x: 0.5, y: 0.5, force: 0, velX: 0, velY: 0, active: false)
-                }
-            }
-            syncCaptureContextToSystem()
-        }
-        .fullScreenCover(isPresented: $showPhotoBook, onDismiss: {
-            // Resync after Darkroom deletes / cull finish.
-            photoCount = gallery.shots.count
-            if let last = gallery.shots.last,
-               let img = gallery.thumbnail(for: last) ?? gallery.image(for: last) {
-                lastCapturedImage = img
-            } else {
-                lastCapturedImage = nil
-            }
-        }) {
-            CullLibraryView(store: gallery)
-        }
-        .sheet(isPresented: $showSettings) {
-            ShutterSettingsSheet(
-                showGrid: $showGrid,
-                focusPeaking: $focusPeaking,
-                zebraEnabled: $zebraEnabled,
-                showLevel: $showLevel,
-                captureFormat: $captureFormat,
-                defaultFilm: defaultFilmBinding,
-                naturalCapture: $naturalCapture,
-                nightAssist: $nightAssistEnabled,
-                holdBurst: $holdBurstEnabled,
-                onDismiss: {
-                    captureFormatRaw = captureFormat.rawValue
-                    switch captureFormat {
-                    case .heic: camera.captureFormat = .heic
-                    case .jpeg: camera.captureFormat = .jpeg
-                    case .raw: camera.captureFormat = .raw
-                    }
-                    showSettings = false
-                }
-            )
+        syncCaptureContextToSystem()
+        DispatchQueue.main.async {
+            ShutterDeepLinkCenter.beginReceiving()
         }
     }
 
@@ -1915,6 +1833,155 @@ struct LongExposureProgressOverlay: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Finder status overlays (toast / Night assist / permission)
+/// Pulled out of ContentView so the archive type-checker can finish.
+struct FinderStatusOverlays: View {
+    let safeTop: CGFloat
+    let toast: String?
+    let nightAssistVisible: Bool
+    let cameraError: String?
+    let onApplyNight: () -> Void
+    let onDismissNight: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .top) {
+            if let toast {
+                Text(toast)
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(Capsule().fill(Color.black.opacity(0.72)))
+                    .padding(.top, safeTop + 8)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .allowsHitTesting(false)
+                    .zIndex(50)
+            }
+
+            if nightAssistVisible {
+                HStack(spacing: 10) {
+                    Button(action: onApplyNight) {
+                        HStack(spacing: 8) {
+                            Text("LOW LIGHT")
+                                .font(.system(size: 10, weight: .bold, design: .monospaced))
+                                .tracking(1.2)
+                            Text("·")
+                                .foregroundColor(.white.opacity(0.35))
+                            Text("TAP FOR NIGHT")
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                        }
+                        .foregroundColor(Color(red: 1.0, green: 0.78, blue: 0.35))
+                    }
+                    Button(action: onDismissNight) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundColor(.white.opacity(0.45))
+                            .frame(width: 22, height: 22)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Capsule().fill(Color.black.opacity(0.78)))
+                .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.6))
+                .padding(.top, safeTop + (toast == nil ? 8 : 44))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .transition(.opacity.combined(with: .move(edge: .top)))
+                .zIndex(51)
+            }
+
+            if let cameraError {
+                CameraPermissionOverlay(message: cameraError) {
+                    if let url = URL(string: UIApplication.openSettingsURLString) {
+                        UIApplication.shared.open(url)
+                    }
+                }
+                .zIndex(60)
+            }
+        }
+        .allowsHitTesting(nightAssistVisible || cameraError != nil)
+    }
+}
+
+/// Lifecycle onChange bindings — kept off ContentView.body for the type-checker.
+private struct ContentViewLifecycle: ViewModifier {
+    @ObservedObject var camera: CameraManager
+    @Binding var pendingCaptureWhenReady: Bool
+    @Binding var focusPeaking: Bool
+    @Binding var zebraEnabled: Bool
+    var naturalCapture: Bool
+    @Binding var captureFormat: CaptureFormat
+    @Binding var captureFormatRaw: String
+    @Binding var apertureValue: Float
+    @Binding var isLocked: Bool
+    var filmFilter: FilmFilterMode
+    var lensFX: LensFXMode
+    var onCapture: () -> Void
+    var onClampISO: (Float) -> Void
+    var onToast: (String) -> Void
+    var onSyncFilm: (FilmFilterMode) -> Void
+    var onSyncContext: () -> Void
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: camera.isSessionRunning) { _, running in
+                guard running, pendingCaptureWhenReady else { return }
+                pendingCaptureWhenReady = false
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: onCapture)
+            }
+            .onChange(of: focusPeaking) { _, on in
+                camera.focusPeakingEnabled = on
+            }
+            .onChange(of: zebraEnabled) { _, on in
+                camera.zebraEnabled = on
+            }
+            .onChange(of: camera.lensAperture) { _, value in
+                apertureValue = value
+            }
+            .onChange(of: naturalCapture) { _, on in
+                camera.naturalCaptureEnabled = on
+            }
+            .onChange(of: captureFormat) { _, fmt in
+                captureFormatRaw = fmt.rawValue
+                switch fmt {
+                case .heic: camera.captureFormat = .heic
+                case .jpeg: camera.captureFormat = .jpeg
+                case .raw: camera.captureFormat = .raw
+                }
+            }
+            .onChange(of: camera.maxISO) { _, maxISO in
+                onClampISO(maxISO)
+            }
+            .onChange(of: camera.captureNote) { _, note in
+                guard let note else { return }
+                onToast(note)
+                camera.captureNote = nil
+            }
+            .onChange(of: camera.isAEAFLocked) { _, locked in
+                isLocked = locked
+            }
+            .onChange(of: filmFilter) { _, newFilter in
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) {
+                    onSyncFilm(newFilter)
+                }
+                onSyncContext()
+            }
+            .onChange(of: lensFX) { _, newFX in
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) {
+                    camera.selectedLensFX = newFX
+                    if !newFX.isTouchReactive {
+                        LensFXEngine.shared.setTouch(x: 0.5, y: 0.5, force: 0, velX: 0, velY: 0, active: false)
+                    }
+                }
+                onSyncContext()
+            }
     }
 }
 
