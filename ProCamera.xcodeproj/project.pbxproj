@@ -548,7 +548,8 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = ProCameraDebug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 32;
+				DEVELOPMENT_TEAM = 9DKG694QL7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
@@ -605,7 +606,7 @@
 		A10000W6WWWWWWWW00000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = ShutterWidgets/ShutterWidgets.entitlements;
+				CODE_SIGN_ENTITLEMENTS = ShutterWidgets/ShutterWidgetsDebug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 32;
 				DEVELOPMENT_TEAM = 9DKG694QL7;
@@ -633,7 +634,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ShutterWidgets/ShutterWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 32;
+				CURRENT_PROJECT_VERSION = 31;
 				DEVELOPMENT_TEAM = 9DKG694QL7;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShutterWidgets/Info.plist;
@@ -658,7 +659,7 @@
 		A10000C6CCCCCCC000000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = ShutterCaptureExtension/ShutterCaptureExtension.entitlements;
+				CODE_SIGN_ENTITLEMENTS = ShutterCaptureExtension/ShutterCaptureExtensionDebug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 32;
 				DEVELOPMENT_TEAM = 9DKG694QL7;
@@ -686,7 +687,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ShutterCaptureExtension/ShutterCaptureExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 32;
+				CURRENT_PROJECT_VERSION = 31;
 				DEVELOPMENT_TEAM = 9DKG694QL7;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShutterCaptureExtension/Info.plist;

@@ -2,8 +2,6 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Debug / Cmd+R: no App Groups / CloudKit.
-	     Personal team + blocked PLA can't provision those.
-	     Widgets/app-group sync stay Release-only. -->
+	<!-- Debug: empty so device Cmd+R doesn't require App Groups. -->
 </dict>
 </plist>
