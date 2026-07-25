@@ -140,13 +140,13 @@ final class HorizonMotion: ObservableObject {
 
     func start() {
         guard manager.isDeviceMotionAvailable else { return }
-        manager.deviceMotionUpdateInterval = 1.0 / 30.0
+        // 10Hz + deadband — 30Hz publish was thrashing SwiftUI with the camera.
+        manager.deviceMotionUpdateInterval = 1.0 / 10.0
         manager.startDeviceMotionUpdates(to: .main) { [weak self] motion, _ in
-            guard let attitude = motion?.attitude else { return }
-            // Roll in landscape-ish camera hold; convert radians → degrees
-            let roll = Float(attitude.roll * 180.0 / .pi)
-            // Clamp display noise
-            self?.rollDegrees = max(-45, min(45, roll))
+            guard let self, let attitude = motion?.attitude else { return }
+            let roll = max(-45, min(45, Float(attitude.roll * 180.0 / .pi)))
+            guard abs(roll - self.rollDegrees) >= 0.4 else { return }
+            self.rollDegrees = roll
         }
     }
 

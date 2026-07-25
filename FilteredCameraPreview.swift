@@ -35,6 +35,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
         // Pan drives exposure scrub (after focus) or morph FX.
         let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
         panGesture.maximumNumberOfTouches = 2
+        // Don't steal vertical deck swipes near the bottom chrome.
         panGesture.delegate = context.coordinator
         view.addGestureRecognizer(panGesture)
 
@@ -115,6 +116,20 @@ struct FilteredCameraPreview: UIViewRepresentable {
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
             true
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldReceive touch: UITouch
+        ) -> Bool {
+            // Bottom chrome owns vertical swipes / shutter — don't let the
+            // UIKit pan eat them before SwiftUI sees the drag.
+            guard gestureRecognizer is UIPanGestureRecognizer,
+                  let view = gestureRecognizer.view else {
+                return true
+            }
+            let y = touch.location(in: view).y
+            return y < view.bounds.height * 0.78
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {

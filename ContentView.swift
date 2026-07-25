@@ -177,7 +177,8 @@ struct ContentView: View {
     @AppStorage("cam.showGrid") private var showGrid = true
     @AppStorage("cam.focusPeaking") private var focusPeaking = false
     @AppStorage("cam.zebra") private var zebraEnabled = false
-    @AppStorage("cam.showLevel") private var showLevel = true
+    /// Off by default — motion updates were fighting the camera UI for main-thread time.
+    @AppStorage("cam.showLevel") private var showLevel = false
     @AppStorage("cam.shootMode") private var shootModeRaw: String = ShootMode.street.rawValue
     @AppStorage("cam.defaultFilm") private var defaultFilmRaw: Int = FilmFilterMode.none.rawValue
     @AppStorage("cam.captureFormat") private var captureFormatRaw: String = CaptureFormat.heic.rawValue
@@ -422,7 +423,12 @@ struct ContentView: View {
                                 .zIndex(35)
                         }
 
-                        // Shoot mode chip — tap cycles Street → Night → Studio → Film
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .layoutPriority(1)
+                    // Chip as overlay so it does NOT expand into a full-screen hit sink
+                    // (a maxWidth/maxHeight Button was eating shutter taps + deck swipes).
+                    .overlay(alignment: .bottomLeading) {
                         Button {
                             Haptics.click()
                             cycleShootMode()
@@ -436,13 +442,9 @@ struct ContentView: View {
                                 .background(Capsule().fill(Color.black.opacity(0.45)))
                         }
                         .buttonStyle(.plain)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
                         .padding(.leading, effectiveBottomCollapsed ? 20 : 24)
                         .padding(.bottom, effectiveBottomCollapsed ? 100 : 16)
-                        .zIndex(36)
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .layoutPriority(1)
 
                     if !effectiveBottomCollapsed {
                         Spacer().frame(height: viewfinderToControlsSpacing)
@@ -668,8 +670,10 @@ struct ContentView: View {
             isoValue = 400
             camera.setShutterSpeed(index: 10)
             camera.setISO(400)
-            camera.returnToAuto()
+            // Keep the fast shutter/ISO — do NOT immediately returnToAuto()
+            // (that wiped the Street preset and made the chip feel dead).
             isLocked = false
+            camera.setAEAFLocked(false)
         case .night:
             showGrid = false
             focusPeaking = true
@@ -1069,7 +1073,6 @@ struct ContentView: View {
                 .allowsHitTesting(false)
 
             ZStack(alignment: .bottom) {
-                // Soft fade under the whole bottom chrome band
                 LinearGradient(
                     colors: [
                         Color.clear,
@@ -1084,12 +1087,10 @@ struct ContentView: View {
                 .allowsHitTesting(false)
 
                 VStack(spacing: 0) {
-                    // Pull strip above the shutter — swipe up to leave fullscreen
                     Color.clear
                         .frame(height: CollapsedChrome.fadeHeight)
                         .frame(maxWidth: .infinity)
                         .contentShape(Rectangle())
-                        .gesture(bottomDeckSwipe)
 
                     bottomCompactDeck
                         .frame(height: deckH)
@@ -1100,35 +1101,28 @@ struct ContentView: View {
                         .frame(height: bottomPad)
                         .frame(maxWidth: .infinity)
                         .contentShape(Rectangle())
-                        .gesture(bottomDeckSwipe)
                 }
             }
             .frame(height: underlayHeight)
+            .contentShape(Rectangle())
+            // Whole dock is a pull zone; shutter Button still wins taps.
+            .simultaneousGesture(bottomDeckSwipe)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
     }
 
-    /// Clear gap beside shutter — vertical pull lives here, not on the button.
-    private var bottomDeckPullGap: some View {
-        Color.clear
-            .frame(maxWidth: .infinity, minHeight: 76)
-            .contentShape(Rectangle())
-            .gesture(bottomDeckSwipe)
-    }
-
     /// Bottom deck: swipe down collapses, swipe up expands.
-    /// Balanced thresholds — expandable again, but shutter taps still win.
     private var bottomDeckSwipe: some Gesture {
-        DragGesture(minimumDistance: 12, coordinateSpace: .local)
+        DragGesture(minimumDistance: 10, coordinateSpace: .local)
             .onChanged { value in
                 let dy = value.translation.height
                 let dx = value.translation.width
-                guard abs(dy) > abs(dx) * 0.85 else { return }
-                if bottomCollapsed {
-                    // Pull up (negative) to peek expand
+                guard abs(dy) > abs(dx) * 0.7 else { return }
+                // Use visible collapsed state (landscape forces compact chrome).
+                let collapsed = bottomCollapsed
+                if collapsed {
                     bottomDeckDrag = min(0, max(dy, -160))
                 } else {
-                    // Pull down (positive) to peek collapse
                     bottomDeckDrag = max(0, min(dy, 160))
                 }
             }
@@ -1137,19 +1131,19 @@ struct ContentView: View {
                 let dx = value.translation.width
                 let predicted = value.predictedEndTranslation.height
                 let effective: CGFloat = {
-                    guard abs(dy) > 14, abs(predicted) > abs(dy) else { return dy }
+                    guard abs(dy) > 10, abs(predicted) > abs(dy) else { return dy }
                     return predicted
                 }()
 
                 let committedDrag = bottomDeckDrag
                 withAnimation(deckCollapseSpring) {
                     bottomDeckDrag = 0
-                    guard abs(effective) > abs(dx) * 0.75 else { return }
+                    guard abs(effective) > abs(dx) * 0.65 else { return }
                     if bottomCollapsed {
-                        if effective < -28 || committedDrag < -24 {
+                        if effective < -20 || committedDrag < -18 {
                             bottomCollapsed = false
                         }
-                    } else if effective > 32 || committedDrag > 28 {
+                    } else if effective > 24 || committedDrag > 22 {
                         bottomCollapsed = true
                     }
                 }
@@ -1163,7 +1157,7 @@ struct ContentView: View {
                 showPhotoBook = true
             }
 
-            bottomDeckPullGap
+            Spacer(minLength: 8)
 
             ShutterButton(isCapturing: isCapturing) {
                 Haptics.heavy()
@@ -1171,9 +1165,8 @@ struct ContentView: View {
             }
             .zIndex(2)
 
-            bottomDeckPullGap
+            Spacer(minLength: 8)
 
-            // Compact deck: WB where ISO/shutter readout used to sit
             WBPill(
                 whiteBalanceIndex: $whiteBalanceIndex,
                 onChanged: { mode in
@@ -1298,14 +1291,14 @@ struct ContentView: View {
             .contentShape(Rectangle())
             .simultaneousGesture(bottomDeckSwipe)
 
-            // ROW 4: Thumbnail | Shutter | WB — swipe only in gaps beside shutter
+            // ROW 4: Thumbnail | Shutter | WB
             HStack(alignment: .center, spacing: 0) {
                 ThumbnailPill(image: lastCapturedImage) {
                     Haptics.click()
                     showPhotoBook = true
                 }
 
-                bottomDeckPullGap
+                Spacer(minLength: 8)
 
                 ShutterButton(isCapturing: isCapturing) {
                     Haptics.heavy()
@@ -1313,7 +1306,7 @@ struct ContentView: View {
                 }
                 .zIndex(2)
 
-                bottomDeckPullGap
+                Spacer(minLength: 8)
 
                 WBPill(
                     whiteBalanceIndex: $whiteBalanceIndex,
@@ -1323,6 +1316,8 @@ struct ContentView: View {
                 )
             }
             .padding(.horizontal, DS.pageMargin)
+            .contentShape(Rectangle())
+            .simultaneousGesture(bottomDeckSwipe)
         }
     }
 
