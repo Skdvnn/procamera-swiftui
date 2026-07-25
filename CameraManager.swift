@@ -128,6 +128,8 @@ class CameraManager: NSObject, ObservableObject {
     /// Manual shutter/ISO to restore after LE thaws the multi-second preview lock.
     private var exposureSnapshotBeforeLE: (shutter: Int?, iso: Float?)?
     private var bakeTimeoutWork: DispatchWorkItem?
+    /// Invalidates late HW-LE exposure callbacks after timeout/cancel.
+    private var hwLongExposureToken: UUID?
 
     // Film stocks — same enum as UI (`FilmFilterMode`).
     typealias FilmFilter = FilmFilterMode
@@ -371,12 +373,25 @@ class CameraManager: NSObject, ObservableObject {
         bakeTimeoutWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            guard self.photoCompletionHandler != nil else { return }
+            let (_, _, _, _, _, baking) = self.currentPipelineSelection()
+            // Clear stuck still OR stack-LE bake (stack never sets photoCompletionHandler).
+            guard self.photoCompletionHandler != nil || baking else { return }
             print("Capture timeout — clearing stuck bake gate")
             let handler = self.photoCompletionHandler
             self.photoCompletionHandler = nil
             self.setBakingStill(false)
+            self.isFinalizingLongExposure = false
+            let leCompletion = self.longExposureCompletion
+            self.longExposureCompletion = nil
             handler?(nil)
+            if let leCompletion {
+                DispatchQueue.main.async {
+                    self.longExposureProgress = 0
+                    self.longExposurePathLabel = ""
+                    self.isLongExposureCapturing = false
+                    leCompletion(nil)
+                }
+            }
         }
         bakeTimeoutWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 12, execute: work)
@@ -530,6 +545,10 @@ class CameraManager: NSObject, ObservableObject {
         let captureFilm = longExposureFilmFilter
         let captureFX = longExposureLensFX
 
+        // Token so a late exposure callback can't double-complete after timeout.
+        let hwToken = UUID()
+        hwLongExposureToken = hwToken
+
         DispatchQueue.main.async {
             self.isLongExposureCapturing = true
             self.longExposureProgress = 0.0
@@ -537,7 +556,8 @@ class CameraManager: NSObject, ObservableObject {
 
         // If the custom-exposure callback never fires, don't leave the shutter stuck.
         let hwTimeout = DispatchWorkItem { [weak self] in
-            guard let self, self.isLongExposureCapturing else { return }
+            guard let self, self.hwLongExposureToken == hwToken else { return }
+            self.hwLongExposureToken = nil
             print("HW long-exposure timeout — aborting")
             self.restoreExposureAfterLongExposure()
             self.isLongExposureCapturing = false
@@ -556,7 +576,9 @@ class CameraManager: NSObject, ObservableObject {
                 device.setExposureModeCustom(duration: targetDuration, iso: targetISO) { _ in
                     // Now capture the photo
                     DispatchQueue.main.async {
+                        guard self.hwLongExposureToken == hwToken else { return }
                         hwTimeout.cancel()
+                        self.hwLongExposureToken = nil
                         self.longExposureProgress = 1.0
                         self.capturePhoto(
                             filmFilter: captureFilm,
@@ -578,6 +600,7 @@ class CameraManager: NSObject, ObservableObject {
                 print("Error setting long exposure: \(error)")
                 DispatchQueue.main.async {
                     hwTimeout.cancel()
+                    self.hwLongExposureToken = nil
                     self.isLongExposureCapturing = false
                     completion(nil)
                 }
@@ -723,10 +746,8 @@ class CameraManager: NSObject, ObservableObject {
     func setExposure(_ value: Float) {
         guard let device = videoDeviceInput?.device else { return }
         // Target bias is ignored in .custom — don't pretend EV works over manuals.
-        guard !isManualExposure else {
-            DispatchQueue.main.async { self.exposureValue = value }
-            return
-        }
+        // Bias is a no-op in .custom — don't update UI as if it applied.
+        guard !isManualExposure else { return }
 
         sessionQueue.async {
             do {
@@ -973,8 +994,9 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    func setZoom(_ factor: CGFloat) {
-        guard let device = videoDeviceInput?.device else { return }
+    @discardableResult
+    func setZoom(_ factor: CGFloat) -> CGFloat {
+        guard let device = videoDeviceInput?.device else { return factor }
 
         let maxZoom = min(device.activeFormat.videoMaxZoomFactor, 10.0)
         let minZoom = device.minAvailableVideoZoomFactor
@@ -992,6 +1014,7 @@ class CameraManager: NSObject, ObservableObject {
                 print("Error setting zoom: \(error)")
             }
         }
+        return clampedZoom
     }
 
     /// Switch to the physical camera lens matching the focal length.
@@ -1703,10 +1726,10 @@ class CameraManager: NSObject, ObservableObject {
         morphTouch: MorphTouchState? = nil,
         completion: @escaping (UIImage?) -> Void
     ) {
-        // Serialize — handler nils when the still arrives, but bake can still
-        // be running; also block during long exposure.
+        // Serialize: block mid-bake and STACK accumulation.
+        // Do NOT use isLongExposureCapturing — HW LE sets that before calling us.
         let (_, _, _, _, _, baking) = currentPipelineSelection()
-        if photoCompletionHandler != nil || baking || isLongExposureCapturing {
+        if photoCompletionHandler != nil || baking || isAccumulatingLongExposure {
             DispatchQueue.main.async { completion(nil) }
             return
         }

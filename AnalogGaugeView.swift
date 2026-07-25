@@ -99,8 +99,10 @@ struct FocusDial: View {
                         if angle < 0 { angle += 360 }
                         if angle > 300 { angle = angle > 330 ? 0 : 300 }
                         let newValue = Float(min(max(angle / 300, 0), 1))
-                        // Snap to major marks for delight
-                        let snapped = round(newValue * 6) / 6
+                        // Snap to the same mark table as CompactFocusScrubber (∞ = 1.0).
+                        let snapped = marks.min(by: {
+                            abs($0.1 - newValue) < abs($1.1 - newValue)
+                        })?.1 ?? newValue
                         if abs(snapped - value) > 0.02 {
                             value = snapped
                             onChanged(snapped)

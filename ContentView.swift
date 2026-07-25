@@ -321,6 +321,10 @@ struct ContentView: View {
                         onMacroTap: {
                             Haptics.click()
                             macroEnabled.toggle()
+                            if macroEnabled, isLocked {
+                                isLocked = false
+                                camera.setAEAFLocked(false)
+                            }
                             camera.setMacroEnabled(macroEnabled)
                             if macroEnabled {
                                 isManualFocusEnabled = false
@@ -518,6 +522,7 @@ struct ContentView: View {
                 filmFilter = film
             }
             volumeShutter.onShutter = {
+                guard !showPhotoBook, !showSettings else { return }
                 handleCapture()
             }
             // Attach offscreen volume view to key window when available.
@@ -545,6 +550,7 @@ struct ContentView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .shutterHardwareShutter)) { _ in
+            guard !showPhotoBook, !showSettings else { return }
             handleCapture()
         }
         .onChange(of: camera.isSessionRunning) { _, running in
@@ -603,6 +609,11 @@ struct ContentView: View {
                 naturalCapture: $naturalCapture,
                 onDismiss: {
                     captureFormatRaw = captureFormat.rawValue
+                    switch captureFormat {
+                    case .heic: camera.captureFormat = .heic
+                    case .jpeg: camera.captureFormat = .jpeg
+                    case .raw: camera.captureFormat = .raw
+                    }
                     showSettings = false
                 }
             )
@@ -611,11 +622,12 @@ struct ContentView: View {
 
     // Bind a captured frame into the Field Book with the live shot settings
     private func recordShot(_ img: UIImage) {
+        let manual = camera.isManualExposure
         let metadata = ShotMetadata(
             id: UUID(),
             date: Date(),
-            iso: isoValue,
-            shutter: shutterSpeeds[shutterSpeedIndex],
+            iso: manual ? isoValue : 0,
+            shutter: manual ? shutterSpeeds[shutterSpeedIndex] : "AUTO",
             aperture: apertureValue > 0 ? apertureValue : 0,
             ev: exposureValue,
             filmFilter: filmFilter.name,
@@ -709,7 +721,10 @@ struct ContentView: View {
         isLocked = false
         isManualFocusEnabled = false
         exposureValue = 0
-        // Sensor goes continuous-auto — glass bar shows AUTO (not fake 1/125).
+        // Reset UI stops so a leftover Night "1\"" doesn't still trigger LE while
+        // the glass bar says AUTO.
+        shutterSpeedIndex = 9 // 1/125 (display only until next manual set)
+        isoValue = 400
         camera.returnToAuto()
     }
 
@@ -822,7 +837,7 @@ struct ContentView: View {
 
     /// iOS Camera-style sun drag: finger up brightens, down darkens.
     private func handleExposureDrag(_ translationY: CGFloat, ended: Bool) {
-        guard !isLocked else { return }
+        guard !isLocked, !camera.isManualExposure else { return }
         if !ended {
             isDraggingExposure = true
             showFocusPoint = true
@@ -914,9 +929,9 @@ struct ContentView: View {
                         onPinch: { scale in
                             guard !isLocked else { return }
                             Haptics.light()
-                            let newZoom = zoomValue * scale
-                            zoomValue = min(max(newZoom, 0.5), 10.0)
-                            camera.setZoom(zoomValue)
+                            let requested = zoomValue * scale
+                            // Sync UI to what the device actually accepted (min is often 1.0).
+                            zoomValue = camera.setZoom(requested)
                             // Focus and zoom are independent — never write zoom into FOCUS.
                         },
                         onMorphTouch: handleMorphTouch,
@@ -1260,6 +1275,10 @@ struct ContentView: View {
                         ModeButton(isActive: macroEnabled) {
                             Haptics.click()
                             macroEnabled.toggle()
+                            if macroEnabled, isLocked {
+                                isLocked = false
+                                camera.setAEAFLocked(false)
+                            }
                             camera.setMacroEnabled(macroEnabled)
                             if macroEnabled {
                                 isManualFocusEnabled = false
@@ -1372,8 +1391,8 @@ struct ContentView: View {
             ? LensFXEngine.shared.snapshotForCapture()
             : nil
 
-        // Check if this is a long exposure (shutter speed index 0-3 = 4s, 2s, 1s, 1/2s)
-        let isLongExposure = shutterSpeedIndex <= 3
+        // LE only when manuals are live — AUTO must not inherit a stale Night index.
+        let isLongExposure = camera.isManualExposure && shutterSpeedIndex <= 3
 
         if isLongExposure {
             // Use computational long exposure for slow shutter speeds
@@ -2539,8 +2558,7 @@ struct FlashButtonPill: View {
                     .stroke(Color(hex: isPressed ? "222222" : "444444"), lineWidth: 0.5)
                     .frame(width: pillWidth - 4, height: pillHeight - 4)
 
-                // Lightning bolt icon
-                Image(systemName: "bolt.fill")
+                Image(systemName: flashIconName)
                     .font(.system(size: 18, weight: .medium))
                     .foregroundColor(iconColor)
             }
@@ -2554,6 +2572,15 @@ struct FlashButtonPill: View {
                 .onChanged { _ in isPressed = true }
                 .onEnded { _ in isPressed = false }
         )
+    }
+
+    private var flashIconName: String {
+        switch flashMode {
+        case .off: return "bolt.slash.fill"
+        case .on: return "bolt.fill"
+        case .auto: return "bolt.badge.automatic.fill"
+        @unknown default: return "bolt.fill"
+        }
     }
 }
 

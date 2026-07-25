@@ -311,7 +311,17 @@ def test_source_guards() -> None:
     check("pinch does not write focus", "never write zoom into FOCUS" in content)
     check("timer countdown cancellable", "cancelTimerCountdown" in content)
     check("HW LE passes morphTouch", "morphTouch: self.longExposureMorphTouch" in cam)
-    check("bake blocks mid-bake capture", "baking || isLongExposureCapturing" in cam)
+    check(
+        "HW LE not self-blocked",
+        "isAccumulatingLongExposure" in cam
+        and "Do NOT use isLongExposureCapturing" in cam,
+    )
+    check("AUTO return resets LE index", "shutterSpeedIndex = 9" in content and "leftover Night" in content)
+    check("LE only when manual", "camera.isManualExposure && shutterSpeedIndex <= 3" in content)
+    check("settings syncs camera format", "case .heic: camera.captureFormat = .heic" in content)
+    check("no shutter under Darkroom", "guard !showPhotoBook, !showSettings" in content)
+    check("zoom syncs clamped factor", "zoomValue = camera.setZoom(requested)" in content)
+    check("flash auto icon", "bolt.badge.automatic.fill" in content)
 
 
 # ── Landscape layout invariants ─────────────────────────────────────────────
