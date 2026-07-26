@@ -483,18 +483,28 @@ final class ChromePickerViewController: UIViewController, UITableViewDataSource,
         case .scene(let mode):
             onApplyShootMode(mode)
         case .film(let filter):
+            // Exclusive — film and Lens FX cannot both be on.
             session.filmFilter = filter
+            if filter != .none { session.lensFX = .none }
             onFilmApplied()
             onDismiss()
         case .peaking:
             session.focusPeaking.toggle()
             tableView.reloadRows(at: [indexPath], with: .none)
         case .fx(let fx):
+            // Exclusive — FX overrides / clears film.
             session.lensFX = fx
+            if fx != .none { session.filmFilter = .none }
             onDismiss()
         case .recipe(let recipe):
-            session.filmFilter = recipe.film
-            session.lensFX = recipe.lensFX
+            // Saved looks: prefer FX when both stored; keep exclusive.
+            if recipe.lensFX != .none {
+                session.lensFX = recipe.lensFX
+                session.filmFilter = .none
+            } else {
+                session.filmFilter = recipe.film
+                session.lensFX = .none
+            }
             onDismiss()
         case .save:
             onSaveLook()
@@ -559,15 +569,15 @@ struct ViewfinderOverlay: View {
 
                     Spacer().allowsHitTesting(false)
 
+                    // Film + FX only — looks live in Settings (Build 65).
                     UIKitChromeLookButtons(
                         filmActive: filmFilter != .none,
                         fxActive: lensFX != .none,
                         peakingOnly: focusPeaking && lensFX == .none,
                         onFilm: { onTogglePicker?(.film) },
-                        onFX: { onTogglePicker?(.fx) },
-                        onLooks: { onTogglePicker?(.looks) }
+                        onFX: { onTogglePicker?(.fx) }
                     )
-                    .frame(width: 32, height: 32 * 3 + 8 * 2)
+                    .frame(width: 32, height: 32 * 2 + 8)
                     .padding(compactChrome ? 10 : 16)
                 }
                 Spacer().allowsHitTesting(false)
@@ -595,19 +605,17 @@ struct ViewfinderOverlay: View {
     }
 }
 
-/// UIKit film / FX / looks toggles — never SwiftUI `Button` next to MTKView.
+/// UIKit film / FX toggles — never SwiftUI `Button` next to MTKView.
 struct UIKitChromeLookButtons: UIViewRepresentable {
     var filmActive: Bool
     var fxActive: Bool
     var peakingOnly: Bool
     var onFilm: () -> Void
     var onFX: () -> Void
-    var onLooks: () -> Void
 
     final class Coordinator {
         var onFilm: () -> Void = {}
         var onFX: () -> Void = {}
-        var onLooks: () -> Void = {}
         @objc func film() {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             onFilm()
@@ -615,10 +623,6 @@ struct UIKitChromeLookButtons: UIViewRepresentable {
         @objc func fx() {
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             onFX()
-        }
-        @objc func looks() {
-            UIImpactFeedbackGenerator(style: .light).impactOccurred()
-            onLooks()
         }
     }
 
@@ -633,20 +637,16 @@ struct UIKitChromeLookButtons: UIViewRepresentable {
 
         let film = makeCircleButton(systemName: "film", action: #selector(Coordinator.film), coord: context.coordinator)
         let fx = makeCircleButton(systemName: "water.waves", action: #selector(Coordinator.fx), coord: context.coordinator)
-        let looks = makeCircleButton(systemName: "bookmark.fill", action: #selector(Coordinator.looks), coord: context.coordinator)
         film.tag = 1
         fx.tag = 2
-        looks.tag = 3
         stack.addArrangedSubview(film)
         stack.addArrangedSubview(fx)
-        stack.addArrangedSubview(looks)
         return stack
     }
 
     func updateUIView(_ stack: UIStackView, context: Context) {
         context.coordinator.onFilm = onFilm
         context.coordinator.onFX = onFX
-        context.coordinator.onLooks = onLooks
         if let film = stack.viewWithTag(1) as? UIButton {
             film.tintColor = filmActive
                 ? UIColor(red: 1, green: 0.85, blue: 0.35, alpha: 1)
@@ -665,11 +665,13 @@ struct UIKitChromeLookButtons: UIViewRepresentable {
 
     private func makeCircleButton(systemName: String, action: Selector, coord: Coordinator) -> UIButton {
         let b = UIButton(type: .system)
-        b.setImage(UIImage(systemName: systemName), for: .normal)
+        let config = UIImage.SymbolConfiguration(pointSize: 12, weight: .medium)
+        b.setImage(UIImage(systemName: systemName, withConfiguration: config), for: .normal)
         b.backgroundColor = UIColor.black.withAlphaComponent(0.4)
         b.tintColor = UIColor.white.withAlphaComponent(0.8)
         b.layer.cornerRadius = 16
         b.clipsToBounds = true
+        b.contentEdgeInsets = UIEdgeInsets(top: 8, left: 8, bottom: 8, right: 8)
         NSLayoutConstraint.activate([
             b.widthAnchor.constraint(equalToConstant: 32),
             b.heightAnchor.constraint(equalToConstant: 32)

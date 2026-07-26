@@ -546,9 +546,9 @@ def test_source_guards() -> None:
     check("preview restore on draw fail", "noteDrawFailure" in preview)
     check("preview scheduleMetalDraw fallback", "restoreCleanPreview()" in preview and "scheduleMetalDraw" in preview)
     check("live preview fail streak", "livePreviewFailStreak" in cam)
-    check("polish flash wing 88", ".frame(width: 88)" in content and "ModeControl(icon: \"gearshape\"" in content)
-    check("tight mode wing 112", ".frame(width: 112, height: 48, alignment: .trailing)" in content)
+    check("format centered ZStack", "FormatTogglePill(format: $captureFormat)" in content and "ZStack {" in content[content.find("ROW 3"):content.find("ROW 3")+900])
     check("ModeControl column 26", ".frame(width: 26, height: 48)" in content)
+    check("no deck grid ModeControl", "ModeControl(icon: \"rectangle.on.rectangle\"" not in content)
 
     # Build 57 — crash/freeze hardening
     check("capture uniqueID gate", "activeCaptureUniqueID" in cam)
@@ -579,8 +579,9 @@ def test_source_guards() -> None:
     check("dismiss on collapse", "ChromePickerGate.dismiss()" in content and "onChange(of: bottomCollapsed)" in content)
     check("onTogglePicker film", "onTogglePicker?(.film)" in vf)
     check("onTogglePicker fx", "onTogglePicker?(.fx)" in vf)
-    check("onTogglePicker looks", "onTogglePicker?(.looks)" in vf)
+    check("no looks chrome button", "onTogglePicker?(.looks)" not in overlay_chrome and "bookmark.fill" not in overlay_chrome)
     check("UIKit look buttons", "struct UIKitChromeLookButtons" in vf and "UIButton" in vf)
+    check("symbol config chrome icons", "SymbolConfiguration(pointSize: 12" in vf)
     check("no LookRecipeStore on overlay chrome", "LookRecipeStore" not in overlay_chrome)
     check("no activePicker on overlay", "activePicker" not in overlay_chrome)
 
@@ -624,13 +625,33 @@ def test_source_guards() -> None:
     )
     check("teardown willCommit flag", "willCommit" in vf and "teardown?(willCommit)" in vf)
     check("abort unsuspends only", "if !willCommit" in content and "setChromePickerPreviewSuspended(false)" in content)
-    check("unsuspend after FX commit", content.find("camera.selectedLensFX = commit.lensFX") < content.find("setChromePickerPreviewSuspended(false)", content.find("func applyChromePickerCommit")))
+    _commit_body = content[content.find("func applyChromePickerCommit"):content.find("func applyChromePickerCommit") + 1800]
+    check(
+        "unsuspend after FX commit",
+        "selectedLensFX" in _commit_body
+        and "setChromePickerPreviewSuspended(false)" in _commit_body
+        and _commit_body.find("selectedLensFX") < _commit_body.find("setChromePickerPreviewSuspended(false)"),
+    )
     check("peaking committed with FX", "camera.focusPeakingEnabled = commit.focusPeaking" in content)
     check("deferred MTKView drain", "Drain filtered preview on the next turn" in cam)
 
     # Build 64 — pure UIKit picker + UIButton chrome (witness-table freeze)
     check("asyncAfter present delay", "asyncAfter(deadline: .now() + 0.05)" in vf)
     check("UITableView picker", "UITableView" in vf and "UITableViewDataSource" in vf)
+
+    # Build 65 — polish: exclusive looks, retap clear, burst calm, settings looks
+    check("retap clears film", "case .film where filmFilter != .none" in content and "clearChromeLook" in content)
+    check("retap clears fx", "case .fx where lensFX != .none" in content)
+    check("exclusive film clears FX", "if filter != .none { session.lensFX = .none }" in vf)
+    check("exclusive FX clears film", "if fx != .none { session.filmFilter = .none }" in vf)
+    check("applyExclusiveLook helper", "func applyExclusiveLook" in content)
+    check("settings saved looks", "Saved looks" in (ROOT / "ShutterSettings.swift").read_text())
+    check("burst default off", 'holdBurstEnabled = false' in content)
+    check("shutter curtain state", "showShutterCurtain" in content)
+    check("no cyan burstAccent", "0.55, green: 0.82, blue: 1.0" not in content)
+    check("compact scrubbers no outer box", "Scrubbers only — no extra outer container" in (ROOT / "AnalogGaugeView.swift").read_text())
+    check("deck swipe verticalBias", "verticalBias:" in content)
+    check("format on compact deck", "bottomCompactDeck" in content and "FormatTogglePill" in content[content.find("func bottomCompactDeck"):content.find("func bottomCompactDeck")+500])
 
 
 
@@ -710,11 +731,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 64", m is not None and int(ver) >= 64, ver)
+    check("Info.plist build >= 65", m is not None and int(ver) >= 65, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 64+", any(v >= 64 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 65+", any(v >= 65 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

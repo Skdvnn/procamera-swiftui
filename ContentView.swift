@@ -248,6 +248,8 @@ struct ContentView: View {
     @State private var photoCount = 0
     @State private var lastCapturedImage: UIImage?
     @State private var showFlash = false
+    /// Brief dark shutter curtain (burst / clap) — not the white flash wash.
+    @State private var showShutterCurtain = false
     /// Brief chrome toast for failed capture / Photos denial / LE cancel.
     @State private var statusToast: String?
     @State private var statusToastWork: DispatchWorkItem?
@@ -258,7 +260,8 @@ struct ContentView: View {
     @State private var nightAssistDarkStreak = 0
     @State private var nightAssistDismissedUntil: Date?
     @AppStorage("cam.nightAssist") private var nightAssistEnabled = true
-    @AppStorage("cam.holdBurst") private var holdBurstEnabled = true
+    /// Hold-to-burst is opt-in — default off (Build 65).
+    @AppStorage("cam.holdBurst") private var holdBurstEnabled = false
     /// Hold-to-burst: finger still down after long-press threshold.
     @State private var isBurstHolding = false
     /// Suppresses the Button tap that fires when a long-press burst ends.
@@ -419,6 +422,11 @@ struct ContentView: View {
                 naturalCapture: $naturalCapture,
                 nightAssist: $nightAssistEnabled,
                 holdBurst: $holdBurstEnabled,
+                filmFilter: $filmFilter,
+                lensFX: $lensFX,
+                onLookApplied: { film, fx in
+                    applyExclusiveLook(film: film, fx: fx)
+                },
                 onDismiss: {
                     captureFormatRaw = captureFormat.rawValue
                     switch captureFormat {
@@ -426,6 +434,7 @@ struct ContentView: View {
                     case .jpeg: camera.captureFormat = .jpeg
                     case .raw: camera.captureFormat = .raw
                     }
+                    camera.focusPeakingEnabled = focusPeaking
                     showSettings = false
                 }
             )
@@ -443,10 +452,28 @@ struct ContentView: View {
     }
 
     /// Separate UIWindow + UIKit table — never touch Metal on the button turn.
-    /// Film, Lens FX, and looks all share this path.
     private func toggleChromePicker(_ menu: ChromePickerMenu) {
-        // Capture values only. Suspending Metal / presenting happens AFTER the
-        // touch ends (gate defer) — sync MTKView teardown here froze the finder.
+        // Retap while active (picker closed) clears the look — no need to open None.
+        if !ChromePickerGate.isPresented {
+            switch menu {
+            case .film where filmFilter != .none:
+                clearChromeLook(film: true, fx: false)
+                return
+            case .fx where lensFX != .none:
+                clearChromeLook(film: false, fx: true)
+                return
+            case .fx where focusPeaking && lensFX == .none:
+                // Peaking-only tint — second tap clears the aid.
+                focusPeaking = false
+                camera.focusPeakingEnabled = false
+                Haptics.click()
+                syncCaptureContextToSystem()
+                return
+            default:
+                break
+            }
+        }
+
         ChromePickerGate.toggle(
             menu,
             filmFilter: filmFilter,
@@ -468,19 +495,69 @@ struct ContentView: View {
         )
     }
 
-    private func applyChromePickerCommit(_ commit: ChromePickerCommit) {
-        // Apply FX/film to the pipeline BEFORE unsuspending live Metal.
+    private func clearChromeLook(film: Bool, fx: Bool) {
+        Haptics.click()
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
-            filmFilter = commit.filmFilter
-            lensFX = commit.lensFX
+            if film { filmFilter = .none }
+            if fx {
+                lensFX = .none
+                LensFXEngine.shared.clearStickyTouch()
+            }
+        }
+        if film { camera.selectedFilmFilter = .none }
+        if fx { camera.selectedLensFX = .none }
+        syncCaptureContextToSystem()
+    }
+
+    /// Film and Lens FX are exclusive — never both on.
+    private func applyExclusiveLook(film: FilmFilterMode, fx: LensFXMode) {
+        let exclusiveFilm: FilmFilterMode
+        let exclusiveFX: LensFXMode
+        if fx != .none {
+            exclusiveFilm = .none
+            exclusiveFX = fx
+        } else {
+            exclusiveFilm = film
+            exclusiveFX = .none
+        }
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            filmFilter = exclusiveFilm
+            lensFX = exclusiveFX
+        }
+        camera.selectedFilmFilter = exclusiveFilm
+        camera.selectedLensFX = exclusiveFX
+        if !exclusiveFX.isTouchReactive {
+            LensFXEngine.shared.clearStickyTouch()
+        }
+        syncCaptureContextToSystem()
+    }
+
+    private func applyChromePickerCommit(_ commit: ChromePickerCommit) {
+        // Exclusive film ↔ FX before unsuspending live Metal.
+        let exclusiveFilm: FilmFilterMode
+        let exclusiveFX: LensFXMode
+        if commit.lensFX != .none {
+            exclusiveFilm = .none
+            exclusiveFX = commit.lensFX
+        } else {
+            exclusiveFilm = commit.filmFilter
+            exclusiveFX = .none
+        }
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            filmFilter = exclusiveFilm
+            lensFX = exclusiveFX
             focusPeaking = commit.focusPeaking
         }
-        camera.selectedFilmFilter = commit.filmFilter
-        camera.selectedLensFX = commit.lensFX
+        camera.selectedFilmFilter = exclusiveFilm
+        camera.selectedLensFX = exclusiveFX
         camera.focusPeakingEnabled = commit.focusPeaking
-        if !commit.lensFX.isTouchReactive {
+        if !exclusiveFX.isTouchReactive {
             LensFXEngine.shared.clearStickyTouch()
         }
         if commit.filmAppliedDirectly {
@@ -490,11 +567,10 @@ struct ContentView: View {
             applyShootMode(mode)
         }
         if commit.saveLook {
-            LookRecipeStore.shared.saveCurrent(film: commit.filmFilter, lensFX: commit.lensFX)
+            LookRecipeStore.shared.saveCurrent(film: exclusiveFilm, lensFX: exclusiveFX)
             Haptics.medium()
         }
         syncCaptureContextToSystem()
-        // Resume live preview only after the new Lens FX / film is on the pipeline.
         camera.setChromePickerPreviewSuspended(false)
     }
 
@@ -511,8 +587,8 @@ struct ContentView: View {
 
             // Layout measurements — top collapse keeps FOCUS/EV strip as the hero
             let topPanelHeight: CGFloat = effectiveTopCollapsed ? (isLandscape ? 44 : 52) : 110
-            let gaugeToViewfinderSpacing: CGFloat = effectiveTopCollapsed ? 4 : 5
-            let viewfinderToControlsSpacing: CGFloat = CollapsedChrome.viewfinderToDeckGap
+            let gaugeToViewfinderSpacing: CGFloat = effectiveTopCollapsed ? 3 : 4
+            let viewfinderToControlsSpacing: CGFloat = max(2, CollapsedChrome.viewfinderToDeckGap - 2)
 
             ZStack(alignment: .top) {
                 // Non-Metal grip texture — stitchable vulcaniteTexture in this tree
@@ -586,7 +662,10 @@ struct ContentView: View {
                     .simultaneousGesture(
                         deckSwipe(
                             collapseOnSwipeUp: true,
-                            minDistance: effectiveTopCollapsed ? 20 : 56
+                            // Compact scrubbers: require a clear vertical intent so
+                            // horizontal FOCUS/EV scrubs don't expand the dials.
+                            minDistance: effectiveTopCollapsed ? 48 : 56,
+                            verticalBias: effectiveTopCollapsed ? 2.8 : 1.15
                         ) { topCollapsed = $0 }
                     )
 
@@ -726,6 +805,13 @@ struct ContentView: View {
                     .opacity(showFlash ? 0.92 : 0)
                     .allowsHitTesting(false)
                     .animation(ShutterMotion.flash, value: showFlash)
+
+                // Subtle shutter curtain (burst clap) — dark, brief, no blue glow.
+                Color.black
+                    .ignoresSafeArea()
+                    .opacity(showShutterCurtain ? 0.78 : 0)
+                    .allowsHitTesting(false)
+                    .animation(.easeOut(duration: 0.05), value: showShutterCurtain)
 
                 FinderStatusOverlays(
                     safeTop: safeTop,
@@ -1026,9 +1112,10 @@ struct ContentView: View {
             ? LensFXEngine.shared.snapshotForCapture()
             : nil
         if burstCaptured == 0 {
-            Haptics.heavy()
-            showFlash = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.07) { showFlash = false }
+            // Subtle clap + dark curtain — not the gnarly white/blue wash.
+            Haptics.medium()
+            showShutterCurtain = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { showShutterCurtain = false }
         } else {
             Haptics.light()
         }
@@ -1346,13 +1433,16 @@ struct ContentView: View {
     private func deckSwipe(
         collapseOnSwipeUp: Bool,
         minDistance: CGFloat = 20,
+        verticalBias: CGFloat = 1.15,
         set: @escaping (Bool) -> Void
     ) -> some Gesture {
         DragGesture(minimumDistance: minDistance)
             .onEnded { value in
                 let dy = value.translation.height
+                let dx = value.translation.width
                 let threshold = max(30, minDistance * 0.6)
-                guard abs(dy) > abs(value.translation.width) * 1.15 else { return }
+                // Require vertical dominance so scrubbers don't flip deck state.
+                guard abs(dy) > abs(dx) * verticalBias else { return }
                 withAnimation(ShutterMotion.deck) {
                     if dy < -threshold {
                         set(collapseOnSwipeUp)
@@ -1601,11 +1691,12 @@ struct ContentView: View {
 
     /// Bottom deck: swipe down collapses, swipe up expands.
     private var bottomDeckSwipe: some Gesture {
-        DragGesture(minimumDistance: 8, coordinateSpace: .local)
+        DragGesture(minimumDistance: 16, coordinateSpace: .local)
             .onChanged { value in
                 let dy = value.translation.height
                 let dx = value.translation.width
-                guard abs(dy) > abs(dx) * 0.55 else { return }
+                // Stronger vertical bias so ISO/shutter scrubs don't collapse the deck.
+                guard abs(dy) > abs(dx) * 1.6 else { return }
                 // Use visible collapsed state (landscape forces compact chrome).
                 let collapsed = bottomCollapsed
                 if collapsed {
@@ -1626,13 +1717,13 @@ struct ContentView: View {
                 let committedDrag = bottomDeckDrag
                 withAnimation(ShutterMotion.deck) {
                     bottomDeckDrag = 0
-                    guard abs(effective) > abs(dx) * 0.5 else { return }
+                    guard abs(effective) > abs(dx) * 1.6 else { return }
                     if bottomCollapsed {
                         // Swipe up (negative) expands out of fullscreen finder.
-                        if effective < -14 || committedDrag < -12 {
+                        if effective < -20 || committedDrag < -18 {
                             bottomCollapsed = false
                         }
-                    } else if effective > 18 || committedDrag > 16 {
+                    } else if effective > 28 || committedDrag > 24 {
                         bottomCollapsed = true
                     }
                 }
@@ -1640,45 +1731,57 @@ struct ContentView: View {
     }
 
     private func bottomCompactDeck(compact: Bool = false) -> some View {
-        HStack(alignment: .center, spacing: 0) {
-            ThumbnailPill(image: lastCapturedImage) {
-                Haptics.click()
-                showPhotoBook = true
+        VStack(spacing: compact ? 2 : 4) {
+            // Format centered above shutter (same optical center as expanded).
+            FormatTogglePill(format: $captureFormat) { newFormat in
+                captureFormatRaw = newFormat.rawValue
+                switch newFormat {
+                case .heic: camera.captureFormat = .heic
+                case .jpeg: camera.captureFormat = .jpeg
+                case .raw: camera.captureFormat = .raw
+                }
             }
 
-            Spacer(minLength: 8)
-
-            ShutterButton(
-                isBusy: isCapturing && !isBurstHolding && !burstConsumedTap,
-                timerCountdown: timerCountdown,
-                longExposureProgress: camera.isLongExposureCapturing
-                    ? camera.longExposureProgress
-                    : nil,
-                allowCancelWhileBusy: camera.isLongExposureCapturing,
-                compact: compact,
-                burstCount: isBurstHolding ? max(burstCaptured, 1) : 0,
-                onBurstStart: holdBurstEnabled ? { beginBurstHold() } : nil,
-                onBurstEnd: holdBurstEnabled ? { endBurstHold() } : nil
-            ) {
-                if burstConsumedTap {
-                    burstConsumedTap = false
-                    return
+            HStack(alignment: .center, spacing: 0) {
+                ThumbnailPill(image: lastCapturedImage) {
+                    Haptics.click()
+                    showPhotoBook = true
                 }
-                handleCapture()
+
+                Spacer(minLength: 8)
+
+                ShutterButton(
+                    isBusy: isCapturing && !isBurstHolding && !burstConsumedTap,
+                    timerCountdown: timerCountdown,
+                    longExposureProgress: camera.isLongExposureCapturing
+                        ? camera.longExposureProgress
+                        : nil,
+                    allowCancelWhileBusy: camera.isLongExposureCapturing,
+                    compact: compact,
+                    burstCount: isBurstHolding ? max(burstCaptured, 1) : 0,
+                    onBurstStart: holdBurstEnabled ? { beginBurstHold() } : nil,
+                    onBurstEnd: holdBurstEnabled ? { endBurstHold() } : nil
+                ) {
+                    if burstConsumedTap {
+                        burstConsumedTap = false
+                        return
+                    }
+                    handleCapture()
+                }
+                .zIndex(2)
+
+                Spacer(minLength: 8)
+
+                WBPill(
+                    whiteBalanceIndex: $whiteBalanceIndex,
+                    onChanged: { mode in
+                        camera.setWhiteBalance(mode: mode)
+                    }
+                )
             }
-            .zIndex(2)
-
-            Spacer(minLength: 8)
-
-            WBPill(
-                whiteBalanceIndex: $whiteBalanceIndex,
-                onChanged: { mode in
-                    camera.setWhiteBalance(mode: mode)
-                }
-            )
         }
         .padding(.horizontal, DS.pageMargin)
-        .padding(.vertical, compact ? 4 : 6)
+        .padding(.vertical, compact ? 2 : 4)
     }
 
     private var bottomExpandedDeck: some View {
@@ -1734,17 +1837,46 @@ struct ContentView: View {
             .frame(height: 44)
             .padding(.horizontal, DS.pageMargin)
 
-            Spacer().frame(height: 6)
+            Spacer().frame(height: 4)
 
-            // ROW 3: Flash | Format | Mode icons — polish proportions (88 | center | 112)
-            HStack(alignment: .center, spacing: 0) {
-                FlashButtonPill(flashMode: camera.flashMode) {
-                    Haptics.click()
-                    camera.cycleFlash()
+            // ROW 3: Flash | Format (true center above shutter) | Settings/Macro/Timer
+            ZStack {
+                HStack(alignment: .center, spacing: 0) {
+                    FlashButtonPill(flashMode: camera.flashMode) {
+                        Haptics.click()
+                        camera.cycleFlash()
+                    }
+                    .frame(width: 80, alignment: .leading)
+
+                    Spacer(minLength: 0)
+
+                    HStack(spacing: 0) {
+                        ModeControl(icon: "gearshape", isActive: showSettings) {
+                            Haptics.click()
+                            showSettings = true
+                        }
+                        ModeControl(icon: "camera.macro", isActive: macroEnabled) {
+                            Haptics.click()
+                            macroEnabled.toggle()
+                            if macroEnabled, isLocked {
+                                isLocked = false
+                                camera.setAEAFLocked(false)
+                            }
+                            camera.setMacroEnabled(macroEnabled)
+                            if macroEnabled {
+                                isManualFocusEnabled = false
+                            }
+                        }
+                        ModeControl(icon: "timer", isActive: timerSeconds > 0) {
+                            Haptics.click()
+                            if timerSeconds == 0 { timerSeconds = 3 }
+                            else if timerSeconds == 3 { timerSeconds = 10 }
+                            else { timerSeconds = 0 }
+                            syncCaptureContextToSystem()
+                        }
+                    }
+                    .frame(width: 80, height: 48, alignment: .trailing)
                 }
-                .frame(width: 88)
-
-                Spacer(minLength: 0)
 
                 FormatTogglePill(format: $captureFormat) { newFormat in
                     captureFormatRaw = newFormat.rawValue
@@ -1754,39 +1886,6 @@ struct ContentView: View {
                     case .raw: camera.captureFormat = .raw
                     }
                 }
-
-                Spacer(minLength: 0)
-
-                HStack(spacing: 2) {
-                    ModeControl(icon: "gearshape", isActive: showSettings) {
-                        Haptics.click()
-                        showSettings = true
-                    }
-                    ModeControl(icon: "camera.macro", isActive: macroEnabled) {
-                        Haptics.click()
-                        macroEnabled.toggle()
-                        if macroEnabled, isLocked {
-                            isLocked = false
-                            camera.setAEAFLocked(false)
-                        }
-                        camera.setMacroEnabled(macroEnabled)
-                        if macroEnabled {
-                            isManualFocusEnabled = false
-                        }
-                    }
-                    ModeControl(icon: "timer", isActive: timerSeconds > 0) {
-                        Haptics.click()
-                        if timerSeconds == 0 { timerSeconds = 3 }
-                        else if timerSeconds == 3 { timerSeconds = 10 }
-                        else { timerSeconds = 0 }
-                        syncCaptureContextToSystem()
-                    }
-                    ModeControl(icon: "rectangle.on.rectangle", isActive: showGrid) {
-                        Haptics.click()
-                        showGrid.toggle()
-                    }
-                }
-                .frame(width: 112, height: 48, alignment: .trailing)
             }
             .padding(.horizontal, DS.pageMargin)
             .contentShape(Rectangle())
@@ -3153,7 +3252,8 @@ private struct ShutterButtonChrome: View {
     /// Accent for armed timer / LE — warm, reads on steel.
     private let armAccent = Color(red: 1.0, green: 0.72, blue: 0.28)
     private let leAccent = Color(red: 1.0, green: 0.42, blue: 0.28)
-    private let burstAccent = Color(red: 0.55, green: 0.82, blue: 1.0)
+    /// Warm/neutral burst count — no cyan/blue glow (Build 65).
+    private let burstAccent = Color.white.opacity(0.92)
 
     var body: some View {
         ZStack {
@@ -3313,18 +3413,10 @@ private struct ShutterButtonChrome: View {
                     .stroke(armAccent.opacity(0.25), lineWidth: 4)
                     .frame(width: face + 10, height: face + 10)
             } else if isBursting {
+                // Quiet ring only — no glowing blue halo.
                 Circle()
-                    .stroke(burstAccent.opacity(0.8), lineWidth: 2.25)
+                    .stroke(Color.white.opacity(0.35), lineWidth: 1.5)
                     .frame(width: face + 6, height: face + 6)
-                Circle()
-                    .trim(from: 0, to: CGFloat(burstCount) / 6.0)
-                    .stroke(
-                        burstAccent,
-                        style: StrokeStyle(lineWidth: 2.5, lineCap: .round)
-                    )
-                    .frame(width: face + 10, height: face + 10)
-                    .rotationEffect(.degrees(-90))
-                    .animation(ShutterMotion.tick, value: burstCount)
             } else if showLERing {
                 Circle()
                     .stroke(leAccent.opacity(0.22), lineWidth: 2.5)

@@ -611,23 +611,9 @@ struct AnalogDisplayPanel: View {
     private let cornerRadius: CGFloat = 10
 
     var body: some View {
-        ZStack {
-            // Outer black frame (matches scrubbers/buttons)
-            RoundedRectangle(cornerRadius: cornerRadius)
-                .fill(Color.black)
-
-            // Inner frame (cohesive with controls)
-            RoundedRectangle(cornerRadius: cornerRadius - 2)
-                .fill(Color(hex: "1a1a1a"))
-                .padding(2)
-
-            // Inner stroke
-            RoundedRectangle(cornerRadius: cornerRadius - 2)
-                .stroke(Color(hex: "333333"), lineWidth: 0.5)
-                .padding(2)
-
+        Group {
             if compact {
-                // Minimized: interactive FOCUS + EV scrubbers (same chrome as bottom deck)
+                // Scrubbers only — no extra outer container (Build 65).
                 HStack(alignment: .center, spacing: 4) {
                     CompactFocusScrubber(
                         focusPosition: $focusPosition,
@@ -642,40 +628,47 @@ struct AnalogDisplayPanel: View {
                     )
                     .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
             } else {
-                // Content - centered vertically
-                HStack(spacing: 0) {
-                    // Left: Focus dial
-                    FocusDial(value: $focusPosition, onChanged: onFocusChanged)
-                        .frame(width: 98, height: 98)
+                ZStack {
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .fill(Color.black)
 
-                    Spacer()
+                    RoundedRectangle(cornerRadius: cornerRadius - 2)
+                        .fill(Color(hex: "1a1a1a"))
+                        .padding(2)
 
-                    // Center: Exposure meter with enhanced detail
-                    CenterDisplay(
-                        timerSeconds: timerSeconds,
-                        iso: iso,
-                        isoIsAuto: isoIsAuto,
-                        shutterLabel: shutterLabel,
-                        shutterIsAuto: shutterIsAuto,
-                        flashMode: flashMode,
-                        macroEnabled: macroEnabled,
-                        isAutoFocus: isAutoFocus,
-                        exposureValue: exposureValue,
-                        onTimerTap: onTimerTap,
-                        onMacroTap: onMacroTap
-                    )
+                    RoundedRectangle(cornerRadius: cornerRadius - 2)
+                        .stroke(Color(hex: "333333"), lineWidth: 0.5)
+                        .padding(2)
 
-                    Spacer()
+                    HStack(spacing: 0) {
+                        FocusDial(value: $focusPosition, onChanged: onFocusChanged)
+                            .frame(width: 98, height: 98)
 
-                    // Right: Shutter Speed dial
-                    ShutterSpeedDial(value: $shutterSpeedIndex, onChanged: onShutterSpeedChanged)
-                        .frame(width: 98, height: 98)
+                        Spacer()
+
+                        CenterDisplay(
+                            timerSeconds: timerSeconds,
+                            iso: iso,
+                            isoIsAuto: isoIsAuto,
+                            shutterLabel: shutterLabel,
+                            shutterIsAuto: shutterIsAuto,
+                            flashMode: flashMode,
+                            macroEnabled: macroEnabled,
+                            isAutoFocus: isAutoFocus,
+                            exposureValue: exposureValue,
+                            onTimerTap: onTimerTap,
+                            onMacroTap: onMacroTap
+                        )
+
+                        Spacer()
+
+                        ShutterSpeedDial(value: $shutterSpeedIndex, onChanged: onShutterSpeedChanged)
+                            .frame(width: 98, height: 98)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
             }
         }
     }
