@@ -148,8 +148,8 @@ enum ShutterDeepLinkCenter {
 /// Shared App Group for widgets ↔ app (looks, last mode, recent thumbs).
 enum ShutterAppGroup {
     static let id = "group.com.skylardann.filmcam"
-    /// Keep two overlapping frames for Home Screen widgets.
-    static let recentThumbnailSlots = 2
+    /// Enough frames for a contact sheet on the large widget (Build 83).
+    static let recentThumbnailSlots = 6
 
     static var defaults: UserDefaults {
         UserDefaults(suiteName: id) ?? .standard
@@ -218,23 +218,39 @@ enum ShutterAppGroup {
         let meta: WidgetRecentMeta?
     }
 
+    static let statsKey = "widget.stats"
+
+    static func saveStats(_ stats: ShutterStats) {
+        guard let data = try? JSONEncoder().encode(stats) else { return }
+        defaults.set(data, forKey: statsKey)
+    }
+
+    static func loadStats() -> ShutterStats {
+        guard let data = defaults.data(forKey: statsKey),
+              let stats = try? JSONDecoder().decode(ShutterStats.self, from: data)
+        else { return ShutterStats() }
+        return stats
+    }
+
     /// Downsample + persist newest still for widget stacks (App Group).
     static func pushRecentThumbnail(_ image: UIImage, meta: WidgetRecentMeta? = nil) {
         guard let dir = recentsDirectoryURL else { return }
         let fm = FileManager.default
-        // Shift older slot: recent-0 → recent-1 (+ sidecars)
+        // Shift every slot down one: recent-(n-2) → recent-(n-1), oldest falls off.
+        let last = recentThumbnailSlots - 1
+        try? fm.removeItem(at: dir.appendingPathComponent("recent-\(last).jpg"))
+        try? fm.removeItem(at: dir.appendingPathComponent("recent-\(last).json"))
+        for slot in stride(from: last - 1, through: 0, by: -1) {
+            for ext in ["jpg", "json"] {
+                let from = dir.appendingPathComponent("recent-\(slot).\(ext)")
+                let to = dir.appendingPathComponent("recent-\(slot + 1).\(ext)")
+                if fm.fileExists(atPath: from.path) {
+                    try? fm.moveItem(at: from, to: to)
+                }
+            }
+        }
         let newest = dir.appendingPathComponent("recent-0.jpg")
-        let older = dir.appendingPathComponent("recent-1.jpg")
         let newestJSON = dir.appendingPathComponent("recent-0.json")
-        let olderJSON = dir.appendingPathComponent("recent-1.json")
-        try? fm.removeItem(at: older)
-        try? fm.removeItem(at: olderJSON)
-        if fm.fileExists(atPath: newest.path) {
-            try? fm.moveItem(at: newest, to: older)
-        }
-        if fm.fileExists(atPath: newestJSON.path) {
-            try? fm.moveItem(at: newestJSON, to: olderJSON)
-        }
         let thumb = image.shutterWidgetThumbnail(maxSide: 360)
         guard let data = thumb.jpegData(compressionQuality: 0.78) else { return }
         try? data.write(to: newest, options: .atomic)
@@ -295,6 +311,134 @@ enum ShutterAppGroup {
             out.append(WidgetRecentFrame(image: img, meta: meta))
         }
         return out
+    }
+}
+
+// MARK: - Shooting stats for widgets (Build 83)
+
+/// What the Home and Lock Screen widgets show besides thumbnails. Rebuilt by the
+/// app on every capture and cull, so it never lags the frames beside it.
+struct ShutterStats: Codable, Equatable {
+    /// A roll of 35mm — the daily arc the Lock Screen gauge fills against.
+    static let rollLength = 36
+    static let weekSpan = 7
+
+    var framesToday: Int = 0
+    var framesWeek: Int = 0
+    var framesTotal: Int = 0
+    var keepers: Int = 0
+    var rejects: Int = 0
+    var unculled: Int = 0
+    var topFilm: String = ""
+    var topFilmCount: Int = 0
+    var lastCaptureAt: TimeInterval = 0
+    /// Frames per day, oldest first, always `weekSpan` long and ending today.
+    var week: [Int] = Array(repeating: 0, count: ShutterStats.weekSpan)
+    /// Day initials matched to `week`, so the widget never recomputes a calendar.
+    var weekLabels: [String] = []
+    var updatedAt: TimeInterval = 0
+
+    struct Entry {
+        let date: Date
+        let film: String
+        let mark: String
+
+        init(date: Date, film: String, mark: String) {
+            self.date = date
+            self.film = film
+            self.mark = mark
+        }
+    }
+
+    static func compute(
+        _ entries: [Entry],
+        now: Date = Date(),
+        calendar: Calendar = .current
+    ) -> ShutterStats {
+        var stats = ShutterStats()
+        stats.updatedAt = now.timeIntervalSince1970
+        stats.framesTotal = entries.count
+        stats.weekLabels = dayLabels(now: now, calendar: calendar)
+
+        let today = calendar.startOfDay(for: now)
+        var filmCounts: [String: Int] = [:]
+
+        for entry in entries {
+            switch entry.mark {
+            case "keep": stats.keepers += 1
+            case "reject": stats.rejects += 1
+            default: stats.unculled += 1
+            }
+
+            let name = entry.film.trimmingCharacters(in: .whitespaces)
+            if !name.isEmpty, name != "None", name != "Clean" {
+                filmCounts[name, default: 0] += 1
+            }
+
+            stats.lastCaptureAt = Swift.max(stats.lastCaptureAt, entry.date.timeIntervalSince1970)
+
+            let day = calendar.startOfDay(for: entry.date)
+            guard let back = calendar.dateComponents([.day], from: day, to: today).day,
+                  back >= 0, back < weekSpan
+            else { continue }
+            stats.week[weekSpan - 1 - back] += 1
+        }
+
+        // Ties go to the alphabetically first name so the label doesn't flicker
+        // between equally-shot stocks on every refresh.
+        if let top = filmCounts.max(by: { a, b in
+            a.value == b.value ? a.key > b.key : a.value < b.value
+        }) {
+            stats.topFilm = top.key
+            stats.topFilmCount = top.value
+        }
+        stats.framesToday = stats.week.last ?? 0
+        stats.framesWeek = stats.week.reduce(0, +)
+        return stats
+    }
+
+    static func dayLabels(now: Date = Date(), calendar: Calendar = .current) -> [String] {
+        let symbols = calendar.veryShortStandaloneWeekdaySymbols
+        let todayIndex = calendar.component(.weekday, from: now) - 1
+        return (0..<weekSpan).map { offset in
+            let back = weekSpan - 1 - offset
+            let index = ((todayIndex - back) % symbols.count + symbols.count) % symbols.count
+            return symbols[index].uppercased()
+        }
+    }
+
+    var hasHistory: Bool { framesTotal > 0 }
+    var weekPeak: Int { Swift.max(week.max() ?? 0, 1) }
+    /// 0…1 against a 36-exposure roll — the Lock Screen gauge.
+    var rollProgress: Double {
+        Swift.min(Double(framesToday) / Double(Self.rollLength), 1)
+    }
+
+    var lastCaptureRelative: String {
+        guard lastCaptureAt > 0 else { return "—" }
+        let secs = Int(Date().timeIntervalSince(Date(timeIntervalSince1970: lastCaptureAt)))
+        if secs < 60 { return "NOW" }
+        if secs < 3600 { return "\(secs / 60)m" }
+        if secs < 86_400 { return "\(secs / 3600)h" }
+        return "\(secs / 86_400)d"
+    }
+
+    /// Plausible numbers for the widget gallery, where no App Group data exists.
+    static var placeholder: ShutterStats {
+        var stats = ShutterStats()
+        stats.framesToday = 12
+        stats.framesWeek = 47
+        stats.framesTotal = 318
+        stats.keepers = 96
+        stats.rejects = 41
+        stats.unculled = 181
+        stats.topFilm = "Portra 400"
+        stats.topFilmCount = 84
+        stats.lastCaptureAt = Date().addingTimeInterval(-540).timeIntervalSince1970
+        stats.week = [4, 9, 2, 7, 6, 7, 12]
+        stats.weekLabels = dayLabels()
+        stats.updatedAt = Date().timeIntervalSince1970
+        return stats
     }
 }
 

@@ -12,20 +12,25 @@ struct ShutterWidgetsBundle: WidgetBundle {
         ShutterLooksWidget()
         ShutterLockCircularWidget()
         ShutterLockRectangularWidget()
+        ShutterLockInlineWidget()
         if #available(iOS 18.0, *) {
             ShutterControlWidget()
         }
     }
 }
 
-// MARK: - Shared: overlapping recent frames
+// MARK: - Shared chrome
 
-/// Two nicely overlapping recent stills — fills blank widget chrome.
+enum WidgetPalette {
+    static let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
+    static let fx = Color(red: 0.55, green: 0.88, blue: 0.95)
+    static let keep = Color(red: 0.55, green: 0.90, blue: 0.60)
+}
+
+/// Two nicely overlapping recent stills — the small widget's photo block.
 struct WidgetRecentStack: View {
     let images: [UIImage]
     var large: Bool = false
-
-    private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
 
     var body: some View {
         GeometryReader { geo in
@@ -87,7 +92,7 @@ struct WidgetRecentStack: View {
                     VStack(spacing: 4) {
                         Image(systemName: "camera.fill")
                             .font(.system(size: large ? 18 : 14, weight: .semibold))
-                            .foregroundStyle(accent.opacity(0.7))
+                            .foregroundStyle(WidgetPalette.accent.opacity(0.7))
                         Text("SHOOT")
                             .font(.system(size: 8, weight: .bold, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.35))
@@ -95,11 +100,144 @@ struct WidgetRecentStack: View {
                 )
                 .overlay(
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(accent.opacity(0.25), lineWidth: 0.8)
+                        .stroke(WidgetPalette.accent.opacity(0.25), lineWidth: 0.8)
                 )
                 .rotationEffect(.degrees(5))
                 .offset(x: 10, y: -4)
         }
+    }
+}
+
+/// Darkroom contact sheet — every recent frame gets a numbered cell, empty
+/// slots read as unexposed film rather than dead space (Build 83).
+struct WidgetContactSheet: View {
+    let frames: [ShutterAppGroup.WidgetRecentFrame]
+    var columns: Int = 3
+    var rows: Int = 2
+    var spacing: CGFloat = 4
+    var corner: CGFloat = 5
+    var numbered: Bool = true
+
+    var body: some View {
+        VStack(spacing: spacing) {
+            ForEach(0..<rows, id: \.self) { row in
+                HStack(spacing: spacing) {
+                    ForEach(0..<columns, id: \.self) { column in
+                        cell(at: row * columns + column)
+                    }
+                }
+            }
+        }
+        .accessibilityHidden(true)
+    }
+
+    @ViewBuilder
+    private func cell(at index: Int) -> some View {
+        let shape = RoundedRectangle(cornerRadius: corner, style: .continuous)
+        ZStack(alignment: .topLeading) {
+            if index < frames.count {
+                Color.white.opacity(0.05)
+                    .overlay(
+                        Image(uiImage: frames[index].image)
+                            .resizable()
+                            .aspectRatio(contentMode: .fill)
+                    )
+                    .clipShape(shape)
+                    .overlay(
+                        shape.stroke(
+                            index == 0
+                                ? WidgetPalette.accent.opacity(0.65)
+                                : Color.white.opacity(0.14),
+                            lineWidth: index == 0 ? 1 : 0.6
+                        )
+                    )
+                if frames[index].meta?.mark == "keep" {
+                    Circle()
+                        .fill(WidgetPalette.keep)
+                        .frame(width: 5, height: 5)
+                        .padding(4)
+                }
+            } else {
+                shape
+                    .fill(Color.white.opacity(0.04))
+                    .overlay(shape.stroke(Color.white.opacity(0.07), lineWidth: 0.6))
+            }
+
+            if numbered {
+                Text(String(format: "%02d", index + 1))
+                    .font(.system(size: 7, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(index < frames.count ? 0.55 : 0.18))
+                    .padding(.horizontal, 3)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .padding(3)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// Seven-day frame count. The bar you shot today burns accent.
+struct WidgetWeekBars: View {
+    let week: [Int]
+    var labels: [String] = []
+    var barHeight: CGFloat = 26
+    var showLabels: Bool = true
+
+    private var peak: Int { max(week.max() ?? 0, 1) }
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 4) {
+            ForEach(Array(week.enumerated()), id: \.offset) { index, count in
+                VStack(spacing: 3) {
+                    GeometryReader { geo in
+                        let ratio = CGFloat(count) / CGFloat(peak)
+                        VStack(spacing: 0) {
+                            Spacer(minLength: 0)
+                            RoundedRectangle(cornerRadius: 1.5, style: .continuous)
+                                .fill(
+                                    index == week.count - 1
+                                        ? WidgetPalette.accent
+                                        : Color.white.opacity(count > 0 ? 0.32 : 0.12)
+                                )
+                                .frame(height: max(2, geo.size.height * ratio))
+                        }
+                    }
+                    .frame(height: barHeight)
+
+                    if showLabels {
+                        Text(index < labels.count ? labels[index] : "")
+                            .font(.system(size: 7, weight: .bold, design: .monospaced))
+                            .foregroundStyle(
+                                .white.opacity(index == week.count - 1 ? 0.6 : 0.28)
+                            )
+                    }
+                }
+            }
+        }
+        .accessibilityLabel("Frames per day this week")
+    }
+}
+
+/// Number over caption — the stat row under the contact sheet.
+struct WidgetStatTile: View {
+    let value: String
+    let caption: String
+    var tint: Color = .white
+    var size: CGFloat = 15
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(value)
+                .font(.system(size: size, weight: .semibold, design: .monospaced))
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(caption)
+                .font(.system(size: 7, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.35))
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -111,7 +249,8 @@ struct ShutterLaunchProvider: TimelineProvider {
             date: Date(),
             film: "Portra 400",
             fx: "None",
-            frames: []
+            frames: [],
+            stats: ShutterStats.placeholder
         )
     }
     func getSnapshot(in context: Context, completion: @escaping (ShutterLaunchEntry) -> Void) {
@@ -124,6 +263,7 @@ struct ShutterLaunchProvider: TimelineProvider {
     private func currentEntry() -> ShutterLaunchEntry {
         let ctx = ShutterCaptureContext.loadFromAppGroup()
         let frames = ShutterAppGroup.loadRecentFrames()
+        let stats = ShutterAppGroup.loadStats()
         // Prefer film from latest unculled frame when present.
         // Explicit "None" means that frame was clean; do not relabel it with
         // whatever look happens to be selected now.
@@ -140,7 +280,8 @@ struct ShutterLaunchProvider: TimelineProvider {
             date: Date(),
             film: film,
             fx: fx,
-            frames: frames
+            frames: frames,
+            stats: stats
         )
     }
 }
@@ -150,6 +291,7 @@ struct ShutterLaunchEntry: TimelineEntry {
     let film: String
     let fx: String
     let frames: [ShutterAppGroup.WidgetRecentFrame]
+    let stats: ShutterStats
 
     var recents: [UIImage] { frames.map(\.image) }
     var latestMeta: ShutterAppGroup.WidgetRecentMeta? { frames.first?.meta }
@@ -172,7 +314,7 @@ struct ShutterLaunchWidget: Widget {
                 }
         }
         .configurationDisplayName("Shutter Cam")
-        .description("Two latest frames + tap to shoot.")
+        .description("Contact sheet, week of frames, and tap to shoot.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
@@ -181,7 +323,8 @@ struct ShutterLaunchView: View {
     var entry: ShutterLaunchEntry
     @Environment(\.widgetFamily) private var family
 
-    private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
+    private var accent: Color { WidgetPalette.accent }
+    private var stats: ShutterStats { entry.stats }
 
     var body: some View {
         switch family {
@@ -194,74 +337,97 @@ struct ShutterLaunchView: View {
         }
     }
 
+    /// Exposure of the newest frame, or the armed look before the first shot.
+    private var headline: String {
+        if let meta = entry.latestMeta, !meta.exposureLine.isEmpty {
+            return meta.exposureLine.uppercased()
+        }
+        return entry.film.uppercased()
+    }
+
     private var smallBody: some View {
         Link(destination: ShutterDeepLink.capture.url) {
             VStack(alignment: .leading, spacing: 5) {
-                HStack {
+                HStack(spacing: 4) {
                     Text("SHUTTER")
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
                         .tracking(1)
-                    Spacer()
-                    Image(systemName: "circle.fill")
-                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Spacer(minLength: 0)
+                    Text("\(stats.framesToday)")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .foregroundStyle(accent)
+                    Text("TDY")
+                        .font(.system(size: 7, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.35))
                 }
-                .foregroundStyle(.white)
 
                 WidgetRecentStack(images: entry.recents, large: false)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                if let meta = entry.latestMeta {
-                    Text(meta.exposureLine.uppercased())
-                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(accent)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
-                    Text("\(meta.relativeTime) · TAP TO SHOOT")
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.45))
-                } else {
-                    Text(entry.film.uppercased())
-                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(accent)
-                        .lineLimit(1)
-                    Text("TAP TO SHOOT")
-                        .font(.system(size: 8, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.4))
-                }
+                WidgetWeekBars(
+                    week: stats.week,
+                    labels: stats.weekLabels,
+                    barHeight: 14,
+                    showLabels: false
+                )
+
+                Text(headline)
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(accent)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                Text(footerLine)
+                    .font(.system(size: 8, weight: .medium, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
             }
             .padding(12)
         }
     }
 
+    private var footerLine: String {
+        guard stats.hasHistory else { return "TAP TO SHOOT" }
+        return "\(stats.lastCaptureRelative) · \(stats.framesWeek) THIS WEEK"
+    }
+
     private var mediumBody: some View {
         HStack(spacing: 12) {
+            // Spacing is tight on purpose: an SE medium widget only offers
+            // ~127pt of content height and this column stacks five rows.
             VStack(alignment: .leading, spacing: 6) {
-                Text("SHUTTER")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .tracking(1)
-                    .foregroundStyle(.white)
+                HStack(spacing: 4) {
+                    Text("SHUTTER")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .tracking(1)
+                        .foregroundStyle(.white)
+                    Spacer(minLength: 0)
+                    Text("\(stats.framesToday)/\(ShutterStats.rollLength)")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(accent)
+                }
+
+                WidgetWeekBars(
+                    week: stats.week,
+                    labels: stats.weekLabels,
+                    barHeight: 24
+                )
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(headline)
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(accent)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    Text(subhead)
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.45))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
 
                 Spacer(minLength: 0)
-
-                Text(entry.film.uppercased())
-                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(accent)
-                    .lineLimit(1)
-                if let meta = entry.latestMeta {
-                    Text(meta.exposureLine.uppercased())
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.75))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.75)
-                    Text("\(meta.relativeTime) AGO")
-                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.4))
-                } else if entry.fx != "None" {
-                    Text(entry.fx.uppercased())
-                        .font(.system(size: 10, weight: .medium, design: .monospaced))
-                        .foregroundStyle(Color(red: 0.55, green: 0.88, blue: 0.95))
-                }
 
                 Link(destination: ShutterDeepLink.capture.url) {
                     HStack(spacing: 6) {
@@ -272,81 +438,128 @@ struct ShutterLaunchView: View {
                     }
                     .foregroundStyle(.black)
                     .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
+                    .padding(.vertical, 6)
                     .background(Capsule().fill(accent))
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Link(destination: ShutterDeepLink.darkroom.url) {
-                VStack(spacing: 4) {
-                    WidgetRecentStack(images: entry.recents, large: false)
-                        .frame(width: 118, height: 92)
-                    Text(entry.recents.isEmpty ? "NO FRAMES" : "\(entry.recents.count) UNCULLED")
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.4))
+                VStack(spacing: 5) {
+                    WidgetContactSheet(
+                        frames: Array(entry.frames.prefix(4)),
+                        columns: 2,
+                        rows: 2,
+                        numbered: false
+                    )
+                    .frame(width: 122, height: 96)
+
+                    Text(
+                        stats.hasHistory
+                            ? "\(stats.unculled) UNCULLED · \(stats.keepers) KEEP"
+                            : "NO FRAMES YET"
+                    )
+                    .font(.system(size: 8, weight: .bold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
                 }
             }
         }
-        .padding(14)
+        .padding(12)
+    }
+
+    private var subhead: String {
+        guard stats.hasHistory else { return "TAP SHOOT TO START THE ROLL" }
+        var parts = ["\(stats.lastCaptureRelative) AGO"]
+        if let meta = entry.latestMeta, meta.focalLength > 0 {
+            parts.append("\(meta.focalLength)mm")
+        }
+        if !stats.topFilm.isEmpty {
+            parts.append(stats.topFilm.uppercased())
+        }
+        return parts.joined(separator: " · ")
     }
 
     private var largeBody: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 9) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text("SHUTTER")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .tracking(1.5)
                         .foregroundStyle(.white.opacity(0.55))
                     Text(entry.film.uppercased())
-                        .font(.system(size: 20, weight: .semibold, design: .monospaced))
+                        .font(.system(size: 19, weight: .semibold, design: .monospaced))
                         .foregroundStyle(accent)
                         .lineLimit(1)
+                        .minimumScaleFactor(0.7)
                     if let meta = entry.latestMeta {
                         Text(meta.exposureLine.uppercased())
-                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.8))
+                            .lineLimit(1)
                         Text("\(meta.relativeTime) AGO · \(meta.focalLength)mm")
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .font(.system(size: 9, weight: .medium, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.4))
                     } else if entry.fx != "None" {
                         Text(entry.fx.uppercased())
-                            .font(.system(size: 12, weight: .medium, design: .monospaced))
-                            .foregroundStyle(Color(red: 0.55, green: 0.88, blue: 0.95))
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(WidgetPalette.fx)
                     }
                 }
-                Spacer()
+                Spacer(minLength: 6)
                 Link(destination: ShutterDeepLink.capture.url) {
-                    VStack(spacing: 4) {
+                    VStack(spacing: 3) {
                         Image(systemName: "circle.fill")
-                            .font(.system(size: 28, weight: .semibold))
+                            .font(.system(size: 26, weight: .semibold))
                             .foregroundStyle(accent)
                         Text("SHOOT")
                             .font(.system(size: 9, weight: .bold, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.7))
                     }
-                    .padding(10)
+                    .padding(9)
                     .background(Circle().fill(Color.white.opacity(0.08)))
                 }
             }
 
             Link(destination: ShutterDeepLink.darkroom.url) {
-                WidgetRecentStack(images: entry.recents, large: true)
+                WidgetContactSheet(frames: entry.frames, columns: 3, rows: 2)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
-            HStack {
-                Text(entry.recents.isEmpty ? "NO UNCULLED YET" : "\(entry.recents.count) UNCULLED")
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .foregroundStyle(accent.opacity(0.8))
-                Spacer()
-                Text("TAP FRAMES · DARKROOM")
-                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.4))
+            HStack(alignment: .bottom, spacing: 10) {
+                WidgetWeekBars(week: stats.week, labels: stats.weekLabels, barHeight: 28)
+                    .frame(width: 116)
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 8) {
+                        WidgetStatTile(
+                            value: "\(stats.framesToday)",
+                            caption: "TODAY",
+                            tint: accent
+                        )
+                        WidgetStatTile(value: "\(stats.framesWeek)", caption: "WEEK")
+                        WidgetStatTile(value: "\(stats.keepers)", caption: "KEEP")
+                        WidgetStatTile(value: "\(stats.unculled)", caption: "UNCULLED")
+                    }
+                    Text(rollLine)
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.35))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                }
             }
         }
         .padding(16)
+    }
+
+    private var rollLine: String {
+        guard stats.hasHistory else { return "TAP A FRAME FOR THE DARKROOM" }
+        var parts = ["\(stats.framesTotal) TOTAL"]
+        if !stats.topFilm.isEmpty {
+            parts.append("\(stats.topFilm.uppercased()) ×\(stats.topFilmCount)")
+        }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -354,12 +567,18 @@ struct ShutterLaunchView: View {
 
 struct ShutterLooksProvider: TimelineProvider {
     func placeholder(in context: Context) -> ShutterLooksEntry {
-        ShutterLooksEntry(date: Date(), looks: [
-            ShutterLookChip(raw: "Portra 400|None", film: "Portra 400", fx: nil),
-            ShutterLookChip(raw: "Tri-X 400|None", film: "Tri-X 400", fx: nil),
-            ShutterLookChip(raw: "Velvia 50|None", film: "Velvia 50", fx: nil),
-            ShutterLookChip(raw: "None|None", film: "Clean", fx: nil)
-        ], recents: [])
+        ShutterLooksEntry(
+            date: Date(),
+            looks: [
+                ShutterLookChip(raw: "Portra 400|None", film: "Portra 400", fx: nil),
+                ShutterLookChip(raw: "Tri-X 400|None", film: "Tri-X 400", fx: nil),
+                ShutterLookChip(raw: "Velvia 50|None", film: "Velvia 50", fx: nil),
+                ShutterLookChip(raw: "None|None", film: "Clean", fx: nil)
+            ],
+            armed: "Portra 400|None",
+            frames: [],
+            stats: ShutterStats.placeholder
+        )
     }
     func getSnapshot(in context: Context, completion: @escaping (ShutterLooksEntry) -> Void) {
         completion(current())
@@ -381,10 +600,13 @@ struct ShutterLooksProvider: TimelineProvider {
             }
             return ShutterLookChip(raw: raw, film: raw == "None" ? "Clean" : raw, fx: nil)
         }
+        let ctx = ShutterCaptureContext.loadFromAppGroup()
         return ShutterLooksEntry(
             date: Date(),
             looks: looks,
-            recents: ShutterAppGroup.loadRecentThumbnails()
+            armed: ShutterAppGroup.encodeLook(film: ctx.filmName, fx: ctx.lensFXName),
+            frames: ShutterAppGroup.loadRecentFrames(),
+            stats: ShutterAppGroup.loadStats()
         )
     }
 }
@@ -404,7 +626,12 @@ struct ShutterLookChip: Hashable {
 struct ShutterLooksEntry: TimelineEntry {
     let date: Date
     let looks: [ShutterLookChip]
-    let recents: [UIImage]
+    /// Encoded `film|fx` currently loaded in the app, so one chip reads as armed.
+    let armed: String
+    let frames: [ShutterAppGroup.WidgetRecentFrame]
+    let stats: ShutterStats
+
+    var recents: [UIImage] { frames.map(\.image) }
 }
 
 struct ShutterLooksWidget: Widget {
@@ -420,7 +647,7 @@ struct ShutterLooksWidget: Widget {
                 }
         }
         .configurationDisplayName("Shutter Looks")
-        .description("One-tap film + FX looks, with recent frames.")
+        .description("One-tap film + FX looks, armed look, and recent frames.")
         .supportedFamilies([.systemMedium, .systemLarge])
     }
 }
@@ -429,20 +656,21 @@ struct ShutterLooksView: View {
     var entry: ShutterLooksEntry
     @Environment(\.widgetFamily) private var family
 
-    private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
+    private var accent: Color { WidgetPalette.accent }
+    private var stats: ShutterStats { entry.stats }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: family == .systemLarge ? 12 : 10) {
+        VStack(alignment: .leading, spacing: family == .systemLarge ? 10 : 6) {
             HStack {
                 Text("LOOKS")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.5))
                 Spacer()
-                if family == .systemLarge {
-                    Text("LCD")
-                        .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .foregroundStyle(accent.opacity(0.7))
-                }
+                Text(armedTitle.uppercased())
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(accent.opacity(0.85))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
             }
             .padding(.horizontal, 4)
 
@@ -452,55 +680,80 @@ struct ShutterLooksView: View {
                         film: chip.film == "Clean" ? "None" : chip.film,
                         fx: chip.fx
                     ).url) {
-                        Text(chip.title.uppercased())
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(.white)
-                            .lineLimit(2)
-                            .minimumScaleFactor(0.8)
-                            .frame(maxWidth: .infinity, minHeight: family == .systemLarge ? 40 : 36)
-                            .background(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .fill(Color.white.opacity(0.08))
-                            )
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 8)
-                                    .stroke(Color.white.opacity(0.08), lineWidth: 0.6)
-                            )
+                        chipBody(chip)
                     }
                 }
             }
 
             if family == .systemLarge {
-                // Fill the large blank — overlapping recents + open darkroom.
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 7) {
                     HStack {
                         Text("RECENTS")
                             .font(.system(size: 10, weight: .bold, design: .monospaced))
                             .foregroundStyle(accent.opacity(0.85))
                         Spacer()
-                        Text(entry.recents.isEmpty ? "SHOOT TO FILL" : "TAP STACK")
+                        Text(entry.recents.isEmpty ? "SHOOT TO FILL" : "TAP THE SHEET")
                             .font(.system(size: 9, weight: .medium, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.35))
                     }
                     .padding(.horizontal, 4)
 
                     Link(destination: ShutterDeepLink.darkroom.url) {
-                        WidgetRecentStack(images: entry.recents, large: true)
+                        WidgetContactSheet(frames: entry.frames, columns: 3, rows: 2)
                             .frame(maxWidth: .infinity)
-                            .frame(height: 150)
+                            .frame(height: 132)
                     }
+
+                    HStack(alignment: .bottom, spacing: 10) {
+                        WidgetWeekBars(
+                            week: stats.week,
+                            labels: stats.weekLabels,
+                            barHeight: 22
+                        )
+                        .frame(width: 110)
+                        HStack(spacing: 8) {
+                            WidgetStatTile(
+                                value: "\(stats.framesToday)",
+                                caption: "TODAY",
+                                tint: accent,
+                                size: 13
+                            )
+                            WidgetStatTile(
+                                value: "\(stats.framesWeek)",
+                                caption: "WEEK",
+                                size: 13
+                            )
+                            WidgetStatTile(
+                                value: "\(stats.unculled)",
+                                caption: "UNCULLED",
+                                size: 13
+                            )
+                        }
+                    }
+                    .padding(.horizontal, 4)
                 }
-                .padding(.top, 4)
-            } else if !entry.recents.isEmpty {
-                // Medium: slim overlapping strip so it isn't empty under the chips.
+                .padding(.top, 2)
+            } else {
+                // Medium: slim sheet + counts so the space under the chips works.
                 Link(destination: ShutterDeepLink.darkroom.url) {
                     HStack(spacing: 8) {
-                        WidgetRecentStack(images: entry.recents, large: false)
-                            .frame(width: 72, height: 44)
+                        WidgetContactSheet(
+                            frames: Array(entry.frames.prefix(3)),
+                            columns: 3,
+                            rows: 1,
+                            numbered: false
+                        )
+                        .frame(width: 132, height: 34)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("RECENTS")
-                                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                                .foregroundStyle(accent.opacity(0.8))
+                            Text(
+                                stats.hasHistory
+                                    ? "\(stats.framesToday) TODAY · \(stats.framesWeek) WK"
+                                    : "RECENTS"
+                            )
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(accent.opacity(0.85))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                             Text("OPEN DARKROOM")
                                 .font(.system(size: 8, weight: .medium, design: .monospaced))
                                 .foregroundStyle(.white.opacity(0.4))
@@ -513,22 +766,64 @@ struct ShutterLooksView: View {
         }
         .padding(12)
     }
+
+    private var armedTitle: String {
+        let decoded = ShutterAppGroup.decodeLook(entry.armed)
+        let film = decoded.film == "None" ? "Clean" : decoded.film
+        if let fx = decoded.fx {
+            return "ARMED \(film) · \(fx)"
+        }
+        return "ARMED \(film)"
+    }
+
+    private func chipBody(_ chip: ShutterLookChip) -> some View {
+        let isArmed = chip.raw == entry.armed
+        return HStack(spacing: 5) {
+            Circle()
+                .fill(isArmed ? accent : Color.white.opacity(0.18))
+                .frame(width: 5, height: 5)
+            Text(chip.title.uppercased())
+                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                .foregroundStyle(isArmed ? accent : .white)
+                .lineLimit(2)
+                .minimumScaleFactor(0.75)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, minHeight: family == .systemLarge ? 38 : 28)
+        .background(
+            RoundedRectangle(cornerRadius: 8)
+                .fill(Color.white.opacity(isArmed ? 0.13 : 0.08))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(
+                    isArmed ? accent.opacity(0.55) : Color.white.opacity(0.08),
+                    lineWidth: isArmed ? 1 : 0.6
+                )
+        )
+    }
 }
 
 // MARK: - Lock Screen accessories
 
 struct ShutterLockCircularWidget: Widget {
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: "ShutterLockCircular", provider: ShutterLaunchProvider()) { _ in
+        StaticConfiguration(kind: "ShutterLockCircular", provider: ShutterLaunchProvider()) { entry in
             ZStack {
                 AccessoryWidgetBackground()
-                Image(systemName: "camera.fill")
-                    .font(.system(size: 18, weight: .semibold))
+                Gauge(value: entry.stats.rollProgress) {
+                    Image(systemName: "camera.fill")
+                } currentValueLabel: {
+                    Text("\(entry.stats.framesToday)")
+                        .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                }
+                .gaugeStyle(.accessoryCircularCapacity)
             }
             .widgetURL(ShutterDeepLink.capture.url)
         }
-        .configurationDisplayName("Shutter")
-        .description("Tap to shoot from Lock Screen.")
+        .configurationDisplayName("Shutter Roll")
+        .description("Frames shot today against a 36-exposure roll.")
         .supportedFamilies([.accessoryCircular])
     }
 }
@@ -536,28 +831,61 @@ struct ShutterLockCircularWidget: Widget {
 struct ShutterLockRectangularWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: "ShutterLockRectangular", provider: ShutterLaunchProvider()) { entry in
-            HStack(spacing: 8) {
-                Image(systemName: "camera.fill")
-                VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Image(systemName: "camera.fill")
+                        .font(.system(size: 11, weight: .semibold))
                     Text("SHUTTER")
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    if let meta = entry.latestMeta {
-                        Text(meta.exposureLine)
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    } else {
-                        Text(entry.film)
-                            .font(.system(size: 11, weight: .medium, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
+                    Spacer(minLength: 0)
+                    Text("\(entry.stats.framesToday)/\(ShutterStats.rollLength)")
+                        .font(.system(size: 11, weight: .bold, design: .monospaced))
+                }
+                if let meta = entry.latestMeta {
+                    Text(meta.exposureLine)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                    Text("\(meta.relativeTime) · \(entry.film.uppercased())")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                } else {
+                    Text(entry.film)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .lineLimit(1)
+                    Text("TAP TO SHOOT")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.secondary)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .widgetURL(ShutterDeepLink.capture.url)
         }
-        .configurationDisplayName("Shutter Look")
-        .description("Latest exposure + tap to shoot.")
+        .configurationDisplayName("Shutter Frame")
+        .description("Last exposure, roll count, and tap to shoot.")
         .supportedFamilies([.accessoryRectangular])
+    }
+}
+
+struct ShutterLockInlineWidget: Widget {
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: "ShutterLockInline", provider: ShutterLaunchProvider()) { entry in
+            Label(inlineText(entry), systemImage: "camera.fill")
+                .widgetURL(ShutterDeepLink.capture.url)
+        }
+        .configurationDisplayName("Shutter Count")
+        .description("Today's frame count above the clock.")
+        .supportedFamilies([.accessoryInline])
+    }
+
+    private func inlineText(_ entry: ShutterLaunchEntry) -> String {
+        guard entry.stats.hasHistory else { return "Shutter · tap to shoot" }
+        if let meta = entry.latestMeta, !meta.exposureLine.isEmpty {
+            return "\(entry.stats.framesToday) today · \(meta.exposureLine)"
+        }
+        return "\(entry.stats.framesToday) today · \(entry.film)"
     }
 }
 

@@ -32,6 +32,19 @@ def check(name: str, cond: bool, detail: str = "") -> None:
         ERRORS.append(msg)
 
 
+def source_chunk(content: str, start: str, end: str) -> str:
+    """Slice between two struct anchors, failing loudly if either moved.
+
+    A missing anchor used to silently widen the slice, which turned every
+    check on that chunk into a no-op instead of a failure.
+    """
+    ok = start in content and end in content.split(start, 1)[-1]
+    check(f"anchors present: {start} → {end}", ok)
+    if not ok:
+        return ""
+    return content.split(start, 1)[1].split(end, 1)[0]
+
+
 # ── Deep links (mirror ShutterDeepLink.swift) ───────────────────────────────
 
 SCHEMES = {"shuttercam", "procamera"}
@@ -289,7 +302,7 @@ def test_source_guards() -> None:
         "shutter 3d press no shrink",
         "NO scaleEffect shrink" in shutter_chrome
         and "scaleEffect(isPressed" not in shutter_chrome
-        and "3D press-in: face keeps size" in shutter_chrome,
+        and "Press-in: face keeps size" in shutter_chrome,
     )
     check(
         "shutter LE ring on button",
@@ -344,8 +357,8 @@ def test_source_guards() -> None:
     check("ContentView body split for type-checker", "finderCanvas(geo:" in content and "struct FinderStatusOverlays" in content and "struct ContentViewLifecycle" in content)
 
     # Build 51 — deep device-breaker guards (not just "string exists")
-    overlays = content.split('struct FinderStatusOverlays')[1].split('struct ContentViewLifecycle')[0]
-    night = overlays.split("if nightAssistVisible")[1].split("if let cameraError")[0]
+    overlays = source_chunk(content, "struct FinderStatusOverlays", "struct ContentViewLifecycle")
+    night = source_chunk(overlays, "if nightAssistVisible", "if let cameraError")
     check("Night chip has no maxHeight infinity hit sink", "maxHeight: .infinity" not in night)
     check("Night chip not full-bleed width frame", ".frame(maxWidth: .infinity" not in night)
     check("Night chip dismiss is 44pt", "minWidth: 44, minHeight: 44" in night)
@@ -492,9 +505,9 @@ def test_source_guards() -> None:
     )
     check("Flash/Thumb/WB use ProButtonStyle not DragGesture0", content.count("DragGesture(minimumDistance: 0)") == 0 or "FlashButtonPill" in content)
     # Count DragGesture(0) outside shutter comments — should be zero in pill structs
-    flash_chunk = content.split("struct FlashButtonPill")[1].split("struct ModeIcon")[0] if "struct FlashButtonPill" in content else ""
-    thumb_chunk = content.split("struct ThumbnailPill")[1].split("struct FormatTogglePill")[0] if "struct ThumbnailPill" in content else ""
-    wb_chunk = content.split("struct WBPill")[1].split("struct ExposureKnob")[0] if "struct WBPill" in content else ""
+    flash_chunk = source_chunk(content, "struct FlashButtonPill", "struct ModeControl")
+    thumb_chunk = source_chunk(content, "struct ThumbnailPill", "struct FormatTogglePill")
+    wb_chunk = source_chunk(content, "struct WBPill", "struct ExposureKnob")
     check("FlashPill no DragGesture0", "DragGesture(minimumDistance: 0)" not in flash_chunk)
     check("ThumbnailPill no DragGesture0", "DragGesture(minimumDistance: 0)" not in thumb_chunk)
     check("WBPill no DragGesture0", "DragGesture(minimumDistance: 0)" not in wb_chunk)
@@ -519,7 +532,14 @@ def test_source_guards() -> None:
     check("switchCamera gates HW token", "func capturePipelineBusy" in cam and "hwLongExposureToken != nil" in cam[cam.find("func capturePipelineBusy"):cam.find("func capturePipelineBusy")+500])
     check("STACK accumulate autoreleasepool", "autoreleasepool" in cam[cam.find("accumulationFrame"):cam.find("accumulationFrame")+500] or "autoreleasepool" in cam)
     check("clearStickyTouch API", "func clearStickyTouch" in (ROOT / "LensFXEngine.swift").read_text())
-    check("Night chip not full-width hit", ".frame(maxWidth: .infinity" not in content.split("if nightAssistVisible")[1].split("if let cameraError")[0])
+    # Scope to the chip's view, not the visibility state machine that shares
+    # the `if nightAssistVisible` spelling higher up the file.
+    night_chip = source_chunk(
+        source_chunk(content, "struct FinderStatusOverlays", "struct ContentViewLifecycle"),
+        "if nightAssistVisible",
+        "if let cameraError",
+    )
+    check("Night chip not full-width hit", ".frame(maxWidth: .infinity" not in night_chip)
     check("FinishDone onDismiss handled", "handledFinishDone" in (ROOT / "CullGallery.swift").read_text())
     check("loupeSessionActive cleared only by cull drag", "Keep loupeSessionActive" in (ROOT / "CullGallery.swift").read_text() or "only cull drag onEnded clears" in (ROOT / "CullGallery.swift").read_text())
     check("contact loupeArmed", "loupedShotID" in (ROOT / "CullGallery.swift").read_text())
@@ -580,7 +600,7 @@ def test_source_guards() -> None:
     check("didFinish clears pending RAW", "pendingRawData = nil" in cam[cam.find("didFinishCaptureFor"):cam.find("didFinishCaptureFor")+800])
 
     # Build 58–64 — pickers NEVER in Metal / SwiftUI camera tree
-    overlay_chrome = vf.split("struct ViewfinderOverlay")[1].split("struct UIKitChromeLookButtons")[0]
+    overlay_chrome = source_chunk(vf, "struct ViewfinderOverlay", "struct UIKitChromeLookButtons")
     check("ChromePickerMenu enum", "enum ChromePickerMenu" in vf)
     check("ChromePickerGate UIKit", "enum ChromePickerGate" in vf and "ChromePickerViewController" in vf)
     check("pure UIKit picker VC", "final class ChromePickerViewController" in vf)
@@ -671,7 +691,7 @@ def test_source_guards() -> None:
     check("night clears looks", "filmFilter = .none" in content[content.find("case .night:"):content.find("case .night:")+700])
     check("night no peaking", "focusPeaking = false" in content[content.find("case .night:"):content.find("case .night:")+500])
     check("night 1/15 not 1 inch", "shutterSpeedIndex = 6" in content[content.find("case .night:"):content.find("case .night:")+500])
-    check("EV drag anytime AUTO", "exposureDragEnabled: !isLocked && !camera.isManualExposure" in content)
+    check("EV drag anytime unlocked", "exposureDragEnabled: !isLocked," in content)
     check("EV drag seeds without tap", "park the sun reticle mid-finder" in content)
     check("pan waits for direction", "Wait for direction" in (ROOT / "FilteredCameraPreview.swift").read_text())
 
@@ -683,14 +703,14 @@ def test_source_guards() -> None:
     check("shutter face sink offset", "offset(y: isPressed ? sink : -proud)" in content)
     check("shutter face clipped to well", ".clipShape(Circle())" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
     check("shutter constant face fill", "Face fill is CONSTANT" in content)
-    check("shutter press dim overlay", "isPressed ? 0.42 : 0" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
+    check("shutter press dim overlay", "isPressed ? 0.38 : 0" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
     check("shutter top lip inset shadow", "Top lip inset shadow" in content)
 
-    # Build 79 — extruded cap so the press is unmistakably 3D
-    check("shutter barrel side wall", "Button barrel" in content and "barrelFill" in content)
-    check("shutter barrel collapses", "opacity(isPressed ? 0 : 1)" in shutter_chrome)
+    # Build 80 — round silhouette restored: no extruded barrel behind a round cap
+    check("shutter no barrel capsule", "barrelFill" not in content and "Button barrel" not in content)
+    check("shutter idle silhouette unchanged", "Only shows while pressed" in shutter_chrome)
     check("shutter proud/sink travel", "private var proud" in content and "private var sink" in content)
-    check("shutter crown sheen dies on press", "Crown sheen" in content)
+    check("shutter face clipped by well edge", ".frame(width: well, height: well)" in shutter_chrome)
 
     # Build 68 — Nikon LCD chrome + tighter deck + no white shutter flash
     check("shutter no white top glow", "Color.white.opacity(isPressed ? 0 : 0.06)" not in content)
@@ -731,10 +751,26 @@ def test_source_guards() -> None:
     check("scrub edge kind enum", "enum ScrubEdgeKind" in content)
     check("scrubber moving tick phase", "tickPhase" in content and "Moving tick strip" in content)
     check("scrubber onActiveChanged", "onActiveChanged:" in content[content.find("struct NativeSnapScrubber"):content.find("struct ISOScrubberHorizontal")])
-    check("ISO scrub feeds arch", "setScrubEdge(.iso" in content)
-    check("shutter scrub feeds arch", "setScrubEdge(.shutter" in content)
-    check("focus scrub active wiring", "onFocusScrubActive" in content and "onFocusScrubActive" in gauge)
     check("active edge readout helper", "activeEdgeReadout" in content)
+
+    # Build 81 — viewfinder sun-drag owns the arch; scrubbers no longer peel it
+    preview_src = (ROOT / "FilteredCameraPreview.swift").read_text()
+    check("sun drag feeds arch", "setScrubEdge(.ev, active: true" in content)
+    check("manual sun drag feeds arch", "setScrubEdge(.iso, active: true" in content)
+    check(
+        "arch reserved for viewfinder",
+        "onFocusScrubActive:" not in content and "onEVScrubActive:" not in content,
+    )
+    check("sun drag not gated on manual", "exposureDragEnabled: !isLocked," in content)
+    check("manual sun drag moves gain", "dragStartISO" in content and "powf(2, stops)" in content)
+    check("half stop detents", "func halfStopDetent" in content and "exposureDetentHaptic" in content)
+    check(
+        "manual detents track applied gain",
+        "exposureDetentHaptic(log2(Float(capped) / Float(max(1, dragStartISO))))" in content
+        and "manual ? 0 : halfStopDetent(exposureValue)" in content,
+    )
+    check("sun drag dead zone is a strip", "view.bounds.height - 64" in preview_src)
+    check("vertical wins over morph", "abs(translation.x) * 0.6" in preview_src)
 
     # Build 72 — DSLR settings + deck spacing
     check("dslr toggle row type", "struct DSLRToggleRow" in (ROOT / "ShutterSettings.swift").read_text())
@@ -759,7 +795,7 @@ def test_source_guards() -> None:
     preview = (ROOT / "FilteredCameraPreview.swift").read_text()
     deep = (ROOT / "ShutterDeepLink.swift").read_text()
     widgets = (ROOT / "ShutterWidgets" / "ShutterWidgetsBundle.swift").read_text()
-    check("EV pan dead zone 80%", "view.bounds.height * 0.80" in preview)
+    check("EV pan dead zone is a 64pt strip", "view.bounds.height - 64" in preview)
     check("EV cancels compare", "cancelCompareIfNeeded" in preview)
     check("long press no fight pan", "UILongPressGestureRecognizer" in preview and "return false" in preview)
     check("unsuspend resets preview clock", "lastPreviewFrameTime = 0" in cam)
@@ -898,10 +934,168 @@ def test_project_sanity() -> None:
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
     check("pbx CURRENT_PROJECT_VERSION 77+", any(v >= 77 for v in vers), f"versions={sorted(set(vers))}")
+    # iOS refuses to install an extension whose CFBundleVersion differs from the
+    # host app. Bumping only Info.plist silently drifted widgets/capture to 77.
+    check(
+        "app plist matches pbx build",
+        m is not None and set(vers) == {int(ver)},
+        f"plist={ver} pbx={sorted(set(vers))}",
+    )
+    for ext in ("ShutterWidgets/Info.plist", "ShutterCaptureExtension/Info.plist"):
+        ext_plist = (ROOT / ext).read_text()
+        em = re.search(r"<key>CFBundleVersion</key>\s*<string>([^<]+)</string>", ext_plist)
+        found = em.group(1) if em else "?"
+        check(
+            f"{ext.split('/')[0]} build tracks app",
+            found in ("$(CURRENT_PROJECT_VERSION)", ver),
+            found,
+        )
+        es = re.search(r"<key>CFBundleShortVersionString</key>\s*<string>([^<]+)</string>", ext_plist)
+        app_short = re.search(r"<key>CFBundleShortVersionString</key>\s*<string>([^<]+)</string>", plist)
+        check(
+            f"{ext.split('/')[0]} short version matches app",
+            es is not None and app_short is not None and es.group(1) == app_short.group(1),
+            f"{es.group(1) if es else '?'} vs {app_short.group(1) if app_short else '?'}",
+        )
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)
     check("landscape in INFOPLIST_KEY", "LandscapeLeft" in pbx)
+
+
+# ── Widget content + layout budget (Build 83) ───────────────────────────────
+
+# Smallest content rects we support (iPhone SE), in points.
+WIDGET_BOX = {"small": (155, 155), "medium": (329, 155), "large": (329, 345)}
+
+
+def text_line(pt: float) -> float:
+    """Rendered height of one line at `pt`, the ~1.25 leading SwiftUI uses."""
+    return round(pt * 1.25)
+
+
+def parse_int(chunk: str, pattern: str, name: str, fallback: int = 0, last: bool = False) -> int:
+    """`last` picks the outer container padding over inner chrome padding."""
+    found = re.findall(pattern, chunk)
+    check(f"widget parses {name}", bool(found), pattern)
+    if not found:
+        return fallback
+    return int(found[-1] if last else found[0])
+
+
+def test_widget_content() -> None:
+    print("\n== Widget content ==")
+    wsrc = (ROOT / "ShutterWidgets/ShutterWidgetsBundle.swift").read_text()
+    link = (ROOT / "ShutterDeepLink.swift").read_text()
+    content = (ROOT / "ContentView.swift").read_text()
+
+    # Data the widgets have to show something with
+    check("six recent slots", "recentThumbnailSlots = 6" in link)
+    check("push shifts every slot", "stride(from: last - 1, through: 0, by: -1)" in link)
+    for field in (
+        "framesToday", "framesWeek", "framesTotal", "keepers",
+        "rejects", "unculled", "topFilm", "week", "weekLabels",
+    ):
+        check(f"stats field {field}", f"var {field}" in link)
+    check("roll is 36 exposures", "rollLength = 36" in link)
+    check("week spans 7 days", "weekSpan = 7" in link)
+    check("week bucketed by day", "week[weekSpan - 1 - back] += 1" in link)
+    check("today is the last bucket", "stats.framesToday = stats.week.last" in link)
+    check("stats persist in app group", "func saveStats" in link and "func loadStats" in link)
+    check("gallery preview has numbers", "static var placeholder: ShutterStats" in link)
+    check(
+        "app rebuilds stats with recents",
+        "ShutterAppGroup.saveStats(" in content and "ShutterStats.compute(" in content,
+    )
+    # Without this an upgrade shows 2 frames in a 6-cell sheet and no numbers
+    # until the user happens to shoot again.
+    check(
+        "upgrade backfills the sheet",
+        "ShutterAppGroup.loadStats().framesTotal != shots" in content,
+    )
+
+    # Every family has to carry more than a thumbnail and a caption
+    check("contact sheet exists", "struct WidgetContactSheet" in wsrc)
+    check("week bars exist", "struct WidgetWeekBars" in wsrc)
+    check("stat tiles exist", "struct WidgetStatTile" in wsrc)
+
+    small = source_chunk(wsrc, "private var smallBody", "private var footerLine")
+    check("small shows a sparkline", "WidgetWeekBars" in small)
+    check("small shows today's count", "stats.framesToday" in small)
+
+    medium = source_chunk(wsrc, "private var mediumBody", "private var subhead")
+    check("medium shows week bars", "WidgetWeekBars" in medium)
+    check("medium shows a contact sheet", "WidgetContactSheet" in medium)
+    check("medium shows cull counts", "UNCULLED" in medium)
+
+    large = source_chunk(wsrc, "private var largeBody", "private var rollLine")
+    check("large shows a 3x2 sheet", "columns: 3, rows: 2" in large)
+    check("large shows labelled week", "WidgetWeekBars" in large)
+    check("large shows stat tiles", "WidgetStatTile" in large)
+
+    check("looks marks the armed look", "chip.raw == entry.armed" in wsrc)
+    check("inline accessory registered", "ShutterLockInlineWidget()" in wsrc)
+    check("lock circular is a roll gauge", "gaugeStyle(.accessoryCircularCapacity)" in wsrc)
+    check("lock rectangular shows the roll", "ShutterStats.rollLength)" in wsrc)
+
+    # Layout budget — these stacks are dense enough to clip on an SE
+    _, med_h = WIDGET_BOX["medium"]
+    _, large_h = WIDGET_BOX["large"]
+
+    pad = parse_int(medium, r"\.padding\((\d+)\)", "launch medium padding", 12, last=True)
+    gap = parse_int(medium, r"VStack\(alignment: \.leading, spacing: (\d+)\)", "launch medium gap", 6)
+    bars = parse_int(medium, r"barHeight: (\d+)", "launch medium bar height", 24)
+    sheet = parse_int(medium, r"\.frame\(width: 122, height: (\d+)\)", "launch medium sheet", 96)
+    left = (
+        text_line(10)                       # SHUTTER / roll count row
+        + bars + 3 + text_line(7)           # week bars + day letters
+        + text_line(11) + 1 + text_line(9)  # headline + subhead
+        + text_line(11) + 12                # SHOOT capsule
+        + gap * 4
+    )
+    right = sheet + 5 + text_line(8)
+    budget = med_h - pad * 2
+    check("launch medium fits SE", left <= budget, f"{left}pt in {budget}pt")
+    check("launch medium sheet fits", right <= budget, f"{right}pt in {budget}pt")
+
+    looks = source_chunk(wsrc, "struct ShutterLooksView", "// MARK: - Lock Screen")
+    lpad = parse_int(looks, r"\.padding\((\d+)\)", "looks padding", 12, last=True)
+    lgap = parse_int(looks, r"spacing: family == \.systemLarge \? \d+ : (\d+)", "looks medium gap", 6)
+    chip = parse_int(looks, r"minHeight: family == \.systemLarge \? \d+ : (\d+)", "looks chip", 30)
+    strip = parse_int(looks, r"\.frame\(width: 132, height: (\d+)\)", "looks strip", 34)
+    looks_medium = text_line(10) + (chip * 2 + 8) + (strip + 2) + lgap * 2
+    check(
+        "looks medium fits SE",
+        looks_medium <= med_h - lpad * 2,
+        f"{looks_medium}pt in {med_h - lpad * 2}pt",
+    )
+
+    lchip = parse_int(looks, r"minHeight: family == \.systemLarge \? (\d+)", "looks large chip", 38)
+    lsheet = parse_int(looks, r"\.frame\(height: (\d+)\)", "looks large sheet", 132)
+    lbars = parse_int(looks, r"barHeight: (\d+)", "looks large bars", 22)
+    looks_large = (
+        text_line(10)
+        + (lchip * 2 + 8)
+        + (text_line(10) + 7 + lsheet + 7 + lbars + 3 + text_line(7) + 2)
+        + 10 * 2
+    )
+    check(
+        "looks large fits SE",
+        looks_large <= large_h - lpad * 2,
+        f"{looks_large}pt in {large_h - lpad * 2}pt",
+    )
+
+    lgpad = parse_int(large, r"\.padding\((\d+)\)", "launch large padding", 16, last=True)
+    lggap = parse_int(large, r"VStack\(alignment: \.leading, spacing: (\d+)\)", "launch large gap", 9)
+    lgbars = parse_int(large, r"barHeight: (\d+)", "launch large bars", 28)
+    header = max(
+        text_line(11) + text_line(19) + text_line(11) + text_line(9) + 9,
+        text_line(26) + 3 + text_line(9) + 18,
+    )
+    footer = max(lgbars + 3 + text_line(7), text_line(15) + 1 + text_line(7) + 5 + text_line(8))
+    sheet_room = (large_h - lgpad * 2) - lggap * 3 - header - footer
+    # Below ~110pt the 3x2 sheet stops reading as photographs.
+    check("large sheet keeps its room", sheet_room >= 110, f"{sheet_room}pt for 2 rows")
 
 
 def main() -> int:
@@ -912,6 +1106,7 @@ def main() -> int:
     test_source_guards()
     test_landscape_layout()
     test_natural_truth()
+    test_widget_content()
     test_project_sanity()
 
     # Also run layout regression
@@ -925,6 +1120,21 @@ def main() -> int:
     check("visual film dock case", "film dock clears shutter: yes" in viz_report)
     check("visual shutter z-order", "shutter z-order above histogram: yes" in viz_report)
     check("visual landscape expanded", "landscape expanded hist↔shutter gap:" in viz_report)
+    print("\n== Widget preview render ==")
+    w = subprocess.run([sys.executable, str(ROOT / "scripts/widget_layout_preview.py")], cwd=ROOT)
+    check("widget_layout_preview.py", w.returncode == 0, f"exit {w.returncode}")
+    widget_dir = ROOT / "docs" / "widget-preview"
+    for name in (
+        "launch-small.png",
+        "launch-medium.png",
+        "launch-large.png",
+        "looks-medium.png",
+        "looks-large.png",
+        "lock-accessories.png",
+        "widget-preview.png",
+    ):
+        check(f"widget artifact {name}", (widget_dir / name).is_file())
+
     viz_dir = ROOT / "docs" / "visual-regression"
     for name in (
         "expanded-layout.png",

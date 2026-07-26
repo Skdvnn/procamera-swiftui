@@ -8,14 +8,27 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 79 phone test pack (yellow level ticks + extruded shutter cap):**
+**Build 83 phone test pack (loaded widgets + viewfinder sun-drag):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **79**.
-Level ticks burn yellow from center out to your tilt (leading mark pulses, all
-lock yellow at level); the shutter cap is extruded and its side wall collapses
-on press; gear / macro / timer are spaced across one WB-pill width.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **83**.
+Press anywhere on the finder and scrub up/down for brightness — expanded or
+collapsed, AUTO or MANUAL — and the trailing arch peels while you do it. The
+shutter keeps its old round silhouette with a no-shrink press.
+
+Build 82 is 81 plus a fix found by the test sweep: the widget and Lock Screen
+capture extensions were still stamped build 77 while the app moved to 81, which
+iOS treats as a bad bundle at install time. Both now inherit
+`$(CURRENT_PROJECT_VERSION)`, so they can never drift again.
+
+Build 83 fills the widgets. The App Group keeps six frames instead of two and
+carries a stats blob, so the Home Screen shows a numbered contact sheet, a
+seven-day frame histogram, and keep / unculled counts; the Looks widget marks
+which look is armed; and the Lock Screen circular becomes a 36-exposure roll
+gauge with a new inline accessory for the count above the clock. Widgets need a
+**Release / TestFlight** build to read the App Group — Cmd+R Debug entitlements
+are empty, so widget content stays on placeholders there.
 
 **Note:** Cmd+R uses empty Debug entitlements — widgets / Lock Screen capture
 need a Release or TestFlight build with App Groups enabled in the developer
