@@ -193,7 +193,7 @@ struct HistogramHorizonOverlay: View {
     }
 }
 
-/// Metal spirit level for the info-bar glass middle (Build 72) — sits with hist, not instead.
+/// Metal spirit level under the top EV meter (Build 73) — replaces ISO/S there.
 struct InfoBarMetalLevel: View {
     @StateObject private var motion = HorizonMotion()
     var compact: Bool = false

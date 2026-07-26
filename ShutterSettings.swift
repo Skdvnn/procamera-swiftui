@@ -76,7 +76,7 @@ struct ShutterSettingsSheet: View {
                         DSLRDivider()
                         DSLRToggleRow(title: "ZEBRA", blurb: "Highlight warning", isOn: $zebraEnabled)
                         DSLRDivider()
-                        DSLRToggleRow(title: "HORIZON LEVEL", blurb: "Spirit bar in the info glass", isOn: $showLevel)
+                        DSLRToggleRow(title: "HORIZON LEVEL", blurb: "Spirit bar under the EV meter", isOn: $showLevel)
                     }
 
                     dslrSection("ASSIST") {

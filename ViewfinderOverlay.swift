@@ -591,8 +591,10 @@ struct ViewfinderOverlay: View {
     /// Landscape: tuck chrome padding.
     var compactChrome: Bool = false
     var onFlipCamera: (() -> Void)? = nil
-    /// Tap film / FX / looks — ContentView presents via UIKit (no @State flip).
+    /// Tap film / FX — ContentView presents via UIKit (no @State flip).
     var onTogglePicker: ((ChromePickerMenu) -> Void)? = nil
+    /// Long-press film / FX clears the look (Build 73 — tap always opens).
+    var onClearLook: ((ChromePickerMenu) -> Void)? = nil
 
     var body: some View {
         // Chrome ONLY — pickers are pure UIKit (ChromePickerGate).
@@ -637,13 +639,15 @@ struct ViewfinderOverlay: View {
 
                     Spacer().allowsHitTesting(false)
 
-                    // Film + FX only — looks live in Settings (Build 65).
+                    // Film + FX — tap opens, long-press clears (Build 73).
                     UIKitChromeLookButtons(
                         filmActive: filmFilter != .none,
                         fxActive: lensFX != .none,
                         peakingOnly: focusPeaking && lensFX == .none,
                         onFilm: { onTogglePicker?(.film) },
-                        onFX: { onTogglePicker?(.fx) }
+                        onFX: { onTogglePicker?(.fx) },
+                        onFilmClear: { onClearLook?(.film) },
+                        onFXClear: { onClearLook?(.fx) }
                     )
                     .frame(width: 32, height: 32 * 2 + 8)
                     .padding(compactChrome ? 10 : 16)
@@ -674,23 +678,52 @@ struct ViewfinderOverlay: View {
 }
 
 /// UIKit film / FX toggles — never SwiftUI `Button` next to MTKView.
+/// Tap opens menu; long-press clears (Build 73).
 struct UIKitChromeLookButtons: UIViewRepresentable {
     var filmActive: Bool
     var fxActive: Bool
     var peakingOnly: Bool
     var onFilm: () -> Void
     var onFX: () -> Void
+    var onFilmClear: () -> Void = {}
+    var onFXClear: () -> Void = {}
 
-    final class Coordinator {
+    final class Coordinator: NSObject {
         var onFilm: () -> Void = {}
         var onFX: () -> Void = {}
+        var onFilmClear: () -> Void = {}
+        var onFXClear: () -> Void = {}
+        /// Suppress tap after a successful long-press clear.
+        var suppressFilmTap = false
+        var suppressFXTap = false
+
         @objc func film() {
+            if suppressFilmTap {
+                suppressFilmTap = false
+                return
+            }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             onFilm()
         }
         @objc func fx() {
+            if suppressFXTap {
+                suppressFXTap = false
+                return
+            }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             onFX()
+        }
+        @objc func filmLong(_ gr: UILongPressGestureRecognizer) {
+            guard gr.state == .began else { return }
+            suppressFilmTap = true
+            UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.85)
+            onFilmClear()
+        }
+        @objc func fxLong(_ gr: UILongPressGestureRecognizer) {
+            guard gr.state == .began else { return }
+            suppressFXTap = true
+            UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.85)
+            onFXClear()
         }
     }
 
@@ -703,8 +736,18 @@ struct UIKitChromeLookButtons: UIViewRepresentable {
         stack.alignment = .center
         stack.distribution = .equalSpacing
 
-        let film = makeCircleButton(systemName: "film", action: #selector(Coordinator.film), coord: context.coordinator)
-        let fx = makeCircleButton(systemName: "water.waves", action: #selector(Coordinator.fx), coord: context.coordinator)
+        let film = makeCircleButton(
+            systemName: "film",
+            tap: #selector(Coordinator.film),
+            longPress: #selector(Coordinator.filmLong(_:)),
+            coord: context.coordinator
+        )
+        let fx = makeCircleButton(
+            systemName: "water.waves",
+            tap: #selector(Coordinator.fx),
+            longPress: #selector(Coordinator.fxLong(_:)),
+            coord: context.coordinator
+        )
         film.tag = 1
         fx.tag = 2
         stack.addArrangedSubview(film)
@@ -715,6 +758,8 @@ struct UIKitChromeLookButtons: UIViewRepresentable {
     func updateUIView(_ stack: UIStackView, context: Context) {
         context.coordinator.onFilm = onFilm
         context.coordinator.onFX = onFX
+        context.coordinator.onFilmClear = onFilmClear
+        context.coordinator.onFXClear = onFXClear
         if let film = stack.viewWithTag(1) as? UIButton {
             film.tintColor = filmActive
                 ? UIColor(red: 1, green: 0.85, blue: 0.35, alpha: 1)
@@ -731,7 +776,12 @@ struct UIKitChromeLookButtons: UIViewRepresentable {
         }
     }
 
-    private func makeCircleButton(systemName: String, action: Selector, coord: Coordinator) -> UIButton {
+    private func makeCircleButton(
+        systemName: String,
+        tap: Selector,
+        longPress: Selector,
+        coord: Coordinator
+    ) -> UIButton {
         let b = UIButton(type: .system)
         let config = UIImage.SymbolConfiguration(pointSize: 12, weight: .medium)
         b.setImage(UIImage(systemName: systemName, withConfiguration: config), for: .normal)
@@ -744,7 +794,10 @@ struct UIKitChromeLookButtons: UIViewRepresentable {
             b.widthAnchor.constraint(equalToConstant: 32),
             b.heightAnchor.constraint(equalToConstant: 32)
         ])
-        b.addTarget(coord, action: action, for: .touchUpInside)
+        b.addTarget(coord, action: tap, for: .touchUpInside)
+        let lp = UILongPressGestureRecognizer(target: coord, action: longPress)
+        lp.minimumPressDuration = 0.38
+        b.addGestureRecognizer(lp)
         return b
     }
 }

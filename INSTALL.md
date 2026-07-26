@@ -8,12 +8,13 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 72 phone test pack (DSLR settings + metal level mid info bar):**
+**Build 73 phone test pack (level under EV + shutter push-in + film/FX long-press clear):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **72**.
-Settings = frosted glass + DSLR ON/OFF menu (no List toggles). Level = metal well in the middle of the info glass.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **73**.
+Horizon level sits under the top EV meter (Settings → Horizon level). Shutter face
+pushes into the well — no white flash. Film/FX: tap opens menu, long-press clears.
 
 **Note:** Cmd+R uses empty Debug entitlements — widgets / Lock Screen capture
 need a Release or TestFlight build with App Groups enabled in the developer

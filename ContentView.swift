@@ -542,28 +542,8 @@ struct ContentView: View {
     }
 
     /// Separate UIWindow + UIKit table — never touch Metal on the button turn.
+    /// Tap always opens the menu; long-press clears (Build 73).
     private func toggleChromePicker(_ menu: ChromePickerMenu) {
-        // Retap while active (picker closed) clears the look — no need to open None.
-        if !ChromePickerGate.isPresented {
-            switch menu {
-            case .film where filmFilter != .none:
-                clearChromeLook(film: true, fx: false)
-                return
-            case .fx where lensFX != .none:
-                clearChromeLook(film: false, fx: true)
-                return
-            case .fx where focusPeaking && lensFX == .none:
-                // Peaking-only tint — second tap clears the aid.
-                focusPeaking = false
-                camera.focusPeakingEnabled = false
-                Haptics.click()
-                syncCaptureContextToSystem()
-                return
-            default:
-                break
-            }
-        }
-
         ChromePickerGate.toggle(
             menu,
             filmFilter: filmFilter,
@@ -586,7 +566,7 @@ struct ContentView: View {
     }
 
     private func clearChromeLook(film: Bool, fx: Bool) {
-        Haptics.click()
+        Haptics.medium()
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
@@ -594,6 +574,11 @@ struct ContentView: View {
             if fx {
                 lensFX = .none
                 LensFXEngine.shared.clearStickyTouch()
+                // Long-press FX also clears peaking-only tint.
+                if focusPeaking {
+                    focusPeaking = false
+                    camera.focusPeakingEnabled = false
+                }
             }
         }
         if film { camera.selectedFilmFilter = .none }
@@ -710,6 +695,7 @@ struct ContentView: View {
                             macroEnabled: macroEnabled,
                             isAutoFocus: !isManualFocusEnabled,
                             compact: effectiveTopCollapsed,
+                            showLevel: showLevel,
                             onFocusChanged: { val in
                                 guard !isLocked else { return }
                                 camera.setManualFocus(val)
@@ -873,12 +859,19 @@ struct ContentView: View {
                                     zoomValue = camera.zoomFactor
                                 }
                             },
-                            onTogglePicker: { toggleChromePicker($0) }
+                            onTogglePicker: { toggleChromePicker($0) },
+                            onClearLook: { menu in
+                                switch menu {
+                                case .film: clearChromeLook(film: true, fx: false)
+                                case .fx: clearChromeLook(film: false, fx: true)
+                                case .looks: break
+                                }
+                            }
                         )
                         .padding(.horizontal, effectiveBottomCollapsed ? 6 : DS.pageMargin)
                         .zIndex(5)
 
-                        // Horizon level lives mid info-bar glass (metal well), with hist.
+                        // Level lives under the top EV meter (replaces ISO/S there).
 
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -914,10 +907,10 @@ struct ContentView: View {
                 // Animate only chrome commits via withAnimation(ShutterMotion.deck) —
                 // never attach .animation to this VStack (it owns the Metal preview).
 
-                // Flash wash stays in-tree so opacity can ease; never hits Metal params.
+                // Soft clap wash — brief, low white (not a phone-camera flash bang).
                 Color.white
                     .ignoresSafeArea()
-                    .opacity(showFlash ? 0.92 : 0)
+                    .opacity(showFlash ? 0.28 : 0)
                     .allowsHitTesting(false)
                     .animation(ShutterMotion.flash, value: showFlash)
 
@@ -2522,7 +2515,7 @@ struct RefractiveGlassInfoBar: View {
     var isLocked: Bool = false
     var isManualExposure: Bool = false
     var naturalCapture: Bool = true
-    /// Horizon level in the info-bar glass middle (metal well) — with hist, not instead.
+    /// Kept for call-site compatibility; level moved to top AnalogDisplayPanel (Build 73).
     var showLevel: Bool = false
     /// Landscape: denser readout, smaller histogram.
     var compact: Bool = false
@@ -2586,16 +2579,9 @@ struct RefractiveGlassInfoBar: View {
             }
             .foregroundColor(.white)
 
-            Spacer(minLength: 4)
+            Spacer()
 
-            // Metal spirit level — middle of the blurred info glass (Build 72).
-            if showLevel {
-                InfoBarMetalLevel(compact: compact)
-            }
-
-            Spacer(minLength: 4)
-
-            // ISO & Shutter
+            // ISO & Shutter (level lives in the top panel under EV — Build 73)
             VStack(alignment: .trailing, spacing: 2) {
                 HStack(spacing: 3) {
                     Button {
@@ -2646,7 +2632,7 @@ struct RefractiveGlassInfoBar: View {
     }
 }
 
-// MARK: - Glass Histogram (Clean container — level lives mid info bar)
+// MARK: - Glass Histogram (Clean container — level lives under top EV meter)
 struct GlassHistogram: View {
     let exposureValue: Float
     var bins: [Float] = []
@@ -3423,15 +3409,15 @@ private struct ShutterPressStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         // Collar stays solid — only the inner face reads `shutterPressed`.
+        // No label-wide animation: color interpolation on the whole chrome was the white flash.
         configuration.label
             .environment(\.shutterPressed, configuration.isPressed)
-            .animation(ShutterMotion.press, value: configuration.isPressed)
             .onChange(of: configuration.isPressed) { _, pressed in
                 if pressed {
-                    let style: UIImpactFeedbackGenerator.FeedbackStyle = armed ? .rigid : .medium
-                    UIImpactFeedbackGenerator(style: style).impactOccurred(intensity: armed ? 0.7 : 0.85)
+                    let style: UIImpactFeedbackGenerator.FeedbackStyle = armed ? .rigid : .heavy
+                    UIImpactFeedbackGenerator(style: style).impactOccurred(intensity: armed ? 0.75 : 1.0)
                 } else if !armed {
-                    UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.4)
+                    UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.35)
                 }
             }
     }
@@ -3446,6 +3432,7 @@ private struct ShutterButtonChrome: View {
     @Environment(\.shutterPressed) private var isPressed
 
     private var outer: CGFloat { compact ? 64 : 76 }
+    /// Face sits proud of the well when idle; sinks flush on press.
     private var face: CGFloat { compact ? 50 : 60 }
     private var well: CGFloat { compact ? 56 : 66 }
     private var hitPad: CGFloat { compact ? 8 : 10 }
@@ -3461,22 +3448,36 @@ private struct ShutterButtonChrome: View {
     private let armAccent = Color(red: 1.0, green: 0.72, blue: 0.28)
     private let leAccent = Color(red: 1.0, green: 0.42, blue: 0.28)
     /// Warm/neutral burst count — no cyan/blue glow (Build 65).
-    private let burstAccent = Color.white.opacity(0.92)
+    private let burstAccent = Color(red: 0.92, green: 0.90, blue: 0.86)
+
+    /// Face fill is CONSTANT — never animate gradient stops (that flashed white).
+    private var faceFill: RadialGradient {
+        RadialGradient(
+            colors: [
+                Color(red: 0.20, green: 0.21, blue: 0.22),
+                Color(red: 0.13, green: 0.14, blue: 0.15),
+                Color(red: 0.08, green: 0.09, blue: 0.10)
+            ],
+            center: UnitPoint(x: 0.38, y: 0.32),
+            startRadius: 0,
+            endRadius: face * 0.72
+        )
+    }
 
     var body: some View {
         ZStack {
-            // Knurled collar — SOLID matte steel, not chrome. Never scales/offsets with press.
-            // No brightness shift — only the inner face pushes in. Soften whites (no flash crescent).
+            // Outer collar — SOLID. Matte dark steel only. Never moves / never brightens.
+            // No isPressed dependency — housing stays put.
             Circle()
                 .fill(
                     AngularGradient(
                         colors: [
-                            Color(red: 0.30, green: 0.31, blue: 0.33),
+                            Color(red: 0.20, green: 0.21, blue: 0.22),
+                            Color(red: 0.11, green: 0.12, blue: 0.13),
                             Color(red: 0.18, green: 0.19, blue: 0.20),
-                            Color(red: 0.26, green: 0.27, blue: 0.29),
-                            Color(red: 0.15, green: 0.16, blue: 0.17),
-                            Color(red: 0.28, green: 0.29, blue: 0.31),
-                            Color(red: 0.30, green: 0.31, blue: 0.33)
+                            Color(red: 0.09, green: 0.10, blue: 0.11),
+                            Color(red: 0.19, green: 0.20, blue: 0.21),
+                            Color(red: 0.20, green: 0.21, blue: 0.22)
                         ],
                         center: .center
                     )
@@ -3484,150 +3485,60 @@ private struct ShutterButtonChrome: View {
                 .frame(width: outer, height: outer)
                 .overlay {
                     Circle()
-                        .fill(Color(red: 0.22, green: 0.23, blue: 0.25).opacity(0.55))
-                        .allowsHitTesting(false)
+                        .stroke(Color.black.opacity(0.80), lineWidth: 1.6)
                 }
-                // Whole-button press cue: collar stays put but dims slightly.
+                // Fixed dark lip — matte steel rim into the well (no bright white).
                 .overlay {
                     Circle()
-                        .fill(Color.black.opacity(isPressed ? 0.18 : 0))
-                        .allowsHitTesting(false)
-                }
-                .overlay {
-                    Circle()
-                        .stroke(
-                            LinearGradient(
-                                colors: [
-                                    Color(white: 0.55).opacity(0.35),
-                                    Color(white: 0.35).opacity(0.08),
-                                    Color.black.opacity(0.70)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: compact ? 1.1 : 1.2
-                        )
-                }
-                .overlay {
-                    Circle()
-                        .stroke(
-                            LinearGradient(
-                                colors: [
-                                    Color.black.opacity(0.55),
-                                    Color.clear,
-                                    Color(white: 0.45).opacity(0.10)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1.0
-                        )
-                        .padding(compact ? 2 : 2.5)
+                        .stroke(Color.black.opacity(0.55), lineWidth: 2.2)
+                        .padding(compact ? 3.5 : 4.0)
                 }
                 .shadow(
                     color: (isTimerArmed ? armAccent : showLERing ? leAccent : .clear)
-                        .opacity(isTimerArmed || showLERing ? 0.45 : 0),
-                    radius: 6,
+                        .opacity(isTimerArmed || showLERing ? 0.40 : 0),
+                    radius: 5,
                     y: 0
                 )
-                // Collar drop shadow stays constant — mechanical housing.
-                .shadow(color: Color.black.opacity(0.55), radius: 5.5, y: 2.5)
+                .shadow(color: Color.black.opacity(0.70), radius: 7, y: 3)
 
-            // Fixed dark lip — matte steel, no bright white that flashes when the face moves.
+            // Deep well — constant dark pit (opacity only, never brightens).
             Circle()
-                .strokeBorder(
-                    LinearGradient(
-                        colors: [
-                            Color(white: 0.28).opacity(0.55),
-                            Color.black.opacity(0.75),
-                            Color(white: 0.18).opacity(0.35)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    ),
-                    lineWidth: compact ? 1.6 : 2.0
-                )
-                .frame(width: well + 1, height: well + 1)
-
-            // Well recess — darkens as the face pushes in (collar stays put).
-            Circle()
-                .fill(
-                    RadialGradient(
-                        colors: [
-                            Color.black.opacity(isPressed ? 0.78 : 0.42),
-                            Color.black.opacity(isPressed ? 0.55 : 0.28),
-                            Color.black.opacity(0.18)
-                        ],
-                        center: .center,
-                        startRadius: face * 0.12,
-                        endRadius: well * 0.52
-                    )
-                )
+                .fill(Color.black.opacity(isPressed ? 0.95 : 0.82))
                 .frame(width: well, height: well)
                 .overlay {
                     Circle()
-                        .stroke(Color.black.opacity(isPressed ? 0.90 : 0.60), lineWidth: compact ? 1.4 : 1.75)
+                        .stroke(Color.black.opacity(0.95), lineWidth: 2.2)
                 }
 
-            // Inner shutter face — presses as one unit into the well (clipped so no crescent flash).
+            // Inner face — the ONLY moving part. Proud idle → sunk pressed.
             ZStack {
                 Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                Color(red: isPressed ? 0.22 : 0.28, green: isPressed ? 0.23 : 0.29, blue: isPressed ? 0.25 : 0.31),
-                                Color(red: isPressed ? 0.14 : 0.19, green: isPressed ? 0.15 : 0.20, blue: isPressed ? 0.17 : 0.22),
-                                Color(red: isPressed ? 0.09 : 0.14, green: isPressed ? 0.10 : 0.15, blue: isPressed ? 0.12 : 0.17)
-                            ],
-                            center: UnitPoint(x: 0.38, y: 0.32),
-                            startRadius: 0,
-                            endRadius: face * 0.72
-                        )
-                    )
+                    .fill(faceFill)
                     .frame(width: face, height: face)
 
-                // Soft steel sheen — keep low so it never reads as a white flash.
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                Color(white: 0.75).opacity(isBusy ? 0.02 : (isPressed ? 0.015 : 0.045)),
-                                Color.clear
-                            ],
-                            center: UnitPoint(x: 0.34, y: 0.30),
-                            startRadius: 0,
-                            endRadius: face * 0.48
-                        )
-                    )
-                    .frame(width: face, height: face)
-
-                ForEach(0..<4, id: \.self) { i in
+                // Matte rings only — black strokes, never white sheen.
+                ForEach(0..<3, id: \.self) { i in
                     Circle()
-                        .stroke(Color.white.opacity(isPressed ? 0.015 : 0.028), lineWidth: 0.5)
+                        .stroke(Color.black.opacity(0.22), lineWidth: 0.65)
                         .frame(
-                            width: face - 10 - CGFloat(i) * (face * 0.15),
-                            height: face - 10 - CGFloat(i) * (face * 0.15)
+                            width: face - 12 - CGFloat(i) * (face * 0.16),
+                            height: face - 12 - CGFloat(i) * (face * 0.16)
                         )
                 }
 
+                // Dark bevel rim — thickness, not a highlight.
                 Circle()
-                    .stroke(
-                        LinearGradient(
-                            colors: [
-                                Color(white: 0.55).opacity(isPressed ? 0.06 : 0.14),
-                                Color.clear,
-                                Color.black.opacity(isPressed ? 0.70 : 0.50)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        ),
-                        lineWidth: 0.85
-                    )
-                    .frame(width: face - 2, height: face - 2)
+                    .stroke(Color.black.opacity(0.45), lineWidth: 1.2)
+                    .frame(width: face - 1, height: face - 1)
+
+                // Press dim — black overlay only (opacity animates; colors stay put).
+                Circle()
+                    .fill(Color.black.opacity(isPressed ? 0.38 : 0))
+                    .frame(width: face, height: face)
 
                 if isBusy && !isTimerArmed {
                     Circle()
-                        .fill(Color.black.opacity(0.28))
+                        .fill(Color.black.opacity(0.40))
                         .frame(width: face, height: face)
                 }
 
@@ -3647,21 +3558,25 @@ private struct ShutterButtonChrome: View {
                         .animation(ShutterMotion.tick, value: burstCount)
                 }
             }
-            // Face travels as one unit into the well. Mild scale + sink — no white halo.
-            // Outer knurled ring never moves; collar only dims (above).
-            .scaleEffect(isPressed ? 0.92 : 1.0)
-            .offset(y: isPressed ? (compact ? 2.2 : 2.8) : 0)
+            // Real push-in: shrink + drop into the well. Idle sits slightly proud.
+            // Outer collar never moves. No white halo. No brightness shift on fills.
+            .scaleEffect(isPressed ? 0.78 : 1.0)
+            .offset(y: isPressed ? (compact ? 5.0 : 6.0) : (compact ? -1.2 : -1.5))
             .shadow(
-                color: Color.black.opacity(isPressed ? 0.10 : 0.50),
-                radius: isPressed ? 0.5 : 2.8,
-                y: isPressed ? 0 : 1.8
+                color: Color.black.opacity(isPressed ? 0.02 : 0.75),
+                radius: isPressed ? 0.5 : 6,
+                y: isPressed ? 0 : 4
             )
-            .animation(ShutterMotion.press, value: isPressed)
-            // Clip to the well so press travel never exposes a bright lip crescent.
+            .animation(
+                isPressed
+                    ? .easeOut(duration: 0.055)
+                    : .interpolatingSpring(stiffness: 420, damping: 32),
+                value: isPressed
+            )
             .frame(width: well, height: well)
             .clipShape(Circle())
 
-            // Status rings outside the face — collar-relative, not pressed with face.
+            // Status rings — collar-relative, not pressed with face.
             if isTimerArmed {
                 Circle()
                     .stroke(armAccent.opacity(0.85), lineWidth: 2.25)
@@ -3671,7 +3586,7 @@ private struct ShutterButtonChrome: View {
                     .frame(width: face + 10, height: face + 10)
             } else if isBursting {
                 Circle()
-                    .stroke(Color.white.opacity(0.35), lineWidth: 1.5)
+                    .stroke(burstAccent.opacity(0.45), lineWidth: 1.5)
                     .frame(width: face + 6, height: face + 6)
             } else if showLERing {
                 Circle()
@@ -3690,11 +3605,11 @@ private struct ShutterButtonChrome: View {
                 TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
                     let t = context.date.timeIntervalSinceReferenceDate
                     let spin = t.truncatingRemainder(dividingBy: 1.2) / 1.2
-                    let pulse = 0.4 + 0.45 * (0.5 + 0.5 * sin(t * 7))
+                    let pulse = 0.35 + 0.40 * (0.5 + 0.5 * sin(t * 7))
                     Circle()
                         .trim(from: spin, to: min(1, spin + 0.28))
                         .stroke(
-                            Color.white.opacity(pulse),
+                            armAccent.opacity(pulse * 0.75),
                             style: StrokeStyle(lineWidth: 2.2, lineCap: .round)
                         )
                         .frame(width: face + 8, height: face + 8)
@@ -3704,10 +3619,6 @@ private struct ShutterButtonChrome: View {
         }
         .frame(width: outer + hitPad, height: outer + hitPad)
         .contentShape(Circle())
-        // Allow press animation on the face; don't inherit unrelated chrome anims.
-        .transaction { t in
-            if !isPressed { t.animation = nil }
-        }
     }
 }
 

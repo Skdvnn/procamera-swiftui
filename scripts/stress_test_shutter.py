@@ -279,7 +279,7 @@ def test_source_guards() -> None:
     check(
         "shutter face-only push-in",
         "shutterPressed" in content
-        and "scaleEffect(isPressed ? 0.92" in content
+        and "scaleEffect(isPressed ? 0.78" in content
         and "Collar stays solid" in shutter_press
         and "Shader roughness / size / lightPos args are CONSTANT" in content
         and "scaleEffect(configuration.isPressed" not in shutter_press
@@ -390,7 +390,7 @@ def test_source_guards() -> None:
     check("Metal preview freezes animation", ".transaction { $0.animation = nil }" in content)
     check("no picker entrance over Metal", "struct PickerEntrance" not in (ROOT / "ViewfinderOverlay.swift").read_text())
     check("deck uses ShutterMotion", "withAnimation(ShutterMotion.deck)" in content)
-    check("flash opacity wash", "opacity(showFlash ? 0.92 : 0)" in content)
+    check("flash opacity wash", "opacity(showFlash ? 0.28 : 0)" in content)
     check("scrub no bounce spring", "withAnimation(ShutterMotion.scrub)" in content)
     check("no Street chip overlay", "cycleShootMode" not in content)
     check("scenes in film dock", "sectionLabel(\"SCENE\")" in (ROOT / "ViewfinderOverlay.swift").read_text())
@@ -535,7 +535,7 @@ def test_source_guards() -> None:
     check("scrubber white majors only", "yellow is reserved for the center indicator" in content)
     check("scrubber value spring", "scaleEffect(isScrolling ? 1.12" in content)
     check("shutter no press brightness", "No brightness shift" in content)
-    check("shutter matte collar", "matte steel, not chrome" in content)
+    check("shutter matte collar", "Matte dark steel" in content or "matte steel, not chrome" in content)
     check("metal shader no cool blue", "Neutral steel cast" in (ROOT / "Shaders.metal").read_text())
     # Build 55 — hard film crash fix
     check("no vulcanite Metal on camera", "LeicaVulcaniteTexture(scale: 20" not in content)
@@ -644,9 +644,7 @@ def test_source_guards() -> None:
     check("asyncAfter present delay", "asyncAfter(deadline: .now() + 0.05)" in vf)
     check("UITableView picker", "UITableView" in vf and "UITableViewDataSource" in vf)
 
-    # Build 65 — polish: exclusive looks, retap clear, burst calm, settings looks
-    check("retap clears film", "case .film where filmFilter != .none" in content and "clearChromeLook" in content)
-    check("retap clears fx", "case .fx where lensFX != .none" in content)
+    # Build 65 — polish: exclusive looks, burst calm, settings looks
     check("exclusive film clears FX", "if filter != .none { session.lensFX = .none }" in vf)
     check("exclusive FX clears film", "if fx != .none { session.filmFilter = .none }" in vf)
     check("applyExclusiveLook helper", "func applyExclusiveLook" in content)
@@ -667,17 +665,19 @@ def test_source_guards() -> None:
     check("EV drag seeds without tap", "park the sun reticle mid-finder" in content)
     check("pan waits for direction", "Wait for direction" in (ROOT / "FilteredCameraPreview.swift").read_text())
 
-    # Build 67 — real shutter push-in (inner face only; outer collar solid)
+    # Build 67/73 — real shutter push-in (inner face only; outer collar solid)
     check("shutter pressed env key", "ShutterPressedKey" in content)
     check("shutter press style sets env", ".environment(\\shutterPressed" in content or ".environment(\\.shutterPressed" in content)
     check("shutter fixed dark lip", "Fixed dark lip" in content)
-    check("shutter well darkens on press", "isPressed ? 0.78 : 0.42" in content)
-    check("shutter face sink offset", "offset(y: isPressed ? (compact ? 2.2 : 2.8)" in content)
+    check("shutter well darkens on press", "isPressed ? 0.95 : 0.82" in content)
+    check("shutter face sink offset", "offset(y: isPressed ? (compact ? 5.0 : 6.0)" in content)
     check("shutter face clipped to well", ".clipShape(Circle())" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
+    check("shutter constant face fill", "Face fill is CONSTANT" in content)
+    check("shutter press dim overlay", "isPressed ? 0.38 : 0" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
 
     # Build 68 — Nikon LCD chrome + tighter deck + no white shutter flash
     check("shutter no white top glow", "Color.white.opacity(isPressed ? 0 : 0.06)" not in content)
-    check("shutter collar dims on press", "isPressed ? 0.18 : 0" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
+    check("shutter no collar dim flash", "isPressed ? 0.18 : 0" not in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
     check("scrubber flash breathing room", "Breathing room from scrubbers" in content)
     check("flash snug on preview row", ".padding(.bottom, -6)" in content)
     check("pill height 44", "pillHeight: CGFloat = 44" in content)
@@ -690,15 +690,6 @@ def test_source_guards() -> None:
     check("settings dslr menu", "DSLRToggleRow" in settings and "presentationBackground(.ultraThinMaterial)" in settings)
     check("settings no List toggles", "Toggle(" not in settings and "List {" not in settings)
     check("cull amber matches DS.accent", "1.0, green: 0.85, blue: 0.35" in cull)
-
-    # Build 69/72 — level in info-bar glass middle (with hist, not instead)
-    aids = (ROOT / "ViewfinderAids.swift").read_text()
-    check("histogram horizon overlay", "struct HistogramHorizonOverlay" in aids)
-    check("info bar metal level", "struct InfoBarMetalLevel" in aids)
-    check("info bar passes showLevel", "showLevel: showLevel" in content)
-    check("no floating top level chip", "HorizonLevelIndicator()" not in content)
-    check("level mid info glass", "Metal spirit level — middle of the blurred info glass" in content)
-    check("hist without showLevel", "showLevel" not in content[content.find("struct GlassHistogram"):content.find("struct ResponsiveHistogram")])
 
     # Build 70 — widget overlapping recent photos
     deep = (ROOT / "ShutterDeepLink.swift").read_text()
@@ -728,10 +719,24 @@ def test_source_guards() -> None:
     check("focus scrub active wiring", "onFocusScrubActive" in content and "onFocusScrubActive" in gauge)
     check("active edge readout helper", "activeEdgeReadout" in content)
 
-    # Build 72 — DSLR settings + metal level mid + deck spacing
+    # Build 72 — DSLR settings + deck spacing
     check("dslr toggle row type", "struct DSLRToggleRow" in (ROOT / "ShutterSettings.swift").read_text())
     check("settings frosted glass bg", "presentationBackground(.ultraThinMaterial)" in (ROOT / "ShutterSettings.swift").read_text())
     check("settings cycle format row", "DSLRCycleRow" in (ROOT / "ShutterSettings.swift").read_text())
+
+    # Build 73 — level under top EV, shutter deep push-in, film/FX long-press clear
+    check("info bar metal level", "struct InfoBarMetalLevel" in aids)
+    check("level under EV meter", "InfoBarMetalLevel" in gauge and "showLevel: showLevel" in gauge)
+    check("top panel showLevel wiring", "showLevel: showLevel" in content[content.find("AnalogDisplayPanel("):content.find("AnalogDisplayPanel(")+900])
+    check("info bar no mid level", "InfoBarMetalLevel" not in content[content.find("struct RefractiveGlassInfoBar"):content.find("struct GlassHistogram")])
+    check("hist without showLevel", "showLevel" not in content[content.find("struct GlassHistogram"):content.find("struct ResponsiveHistogram")])
+    check("no floating top level chip", "HorizonLevelIndicator()" not in content)
+    check("settings level under EV blurb", "Spirit bar under the EV meter" in settings)
+    check("long-press clears look", "onClearLook" in content and "onClearLook" in overlay)
+    check("UIKit film long press", "filmLong" in overlay and "minimumPressDuration = 0.38" in overlay)
+    check("tap always opens picker", "Tap always opens the menu" in content)
+    check("no retap-clear in toggle", "case .film where filmFilter != .none" not in content[content.find("func toggleChromePicker"):content.find("func toggleChromePicker")+900])
+    check("clearChromeLook helper", "func clearChromeLook" in content)
 
 
 
@@ -811,11 +816,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 72", m is not None and int(ver) >= 72, ver)
+    check("Info.plist build >= 73", m is not None and int(ver) >= 73, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 72+", any(v >= 72 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 73+", any(v >= 73 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)
