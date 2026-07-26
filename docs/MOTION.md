@@ -11,6 +11,8 @@ Camera chrome uses **timing curves**, not bouncy springs. Cull/Darkroom keeps it
 4. Deck expand/collapse commits via `withAnimation(ShutterMotion.deck)` on chrome state only.
 5. Shutter press travel / busy rings / timer digits are SwiftUI-only — Metal `metallicSurface` args stay constant.
 6. Shutter face **never** uses `scaleEffect` for press — constant diameter, offset + bevel only (Build 78).
+7. Shutter travel is an extruded cap: barrel side wall visible when proud, collapsed when pressed (Build 79).
+8. Horizon level ticks render in **one Canvas** driven by a 15fps `TimelineView` — 13 animated tick views thrashed SwiftUI (Build 79).
 
 ## Curves
 | Token | Use |

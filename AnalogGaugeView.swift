@@ -443,11 +443,15 @@ struct HorizontalExposureMeter: View {
 
                 // Scale with ticks
                 VStack(spacing: 0) {
-                    // Tick marks row
+                    // Tick marks row — marks between 0 EV and the needle burn yellow,
+                    // so the lit run reads as how far off the meter you are (Build 79).
                     HStack(spacing: 0) {
                         ForEach(0..<13, id: \.self) { i in
                             let isMajor = i % 3 == 0
                             let stopIndex = i / 3
+                            let markEV = Float(i - 6) / 3.0
+                            let swept = markEV <= max(0, value) && markEV >= min(0, value)
+                            let leading = abs(markEV - value) <= 1.0 / 6.0
                             let edgeFade: Double = {
                                 if stopIndex == 0 || stopIndex == 4 { return 0.5 }
                                 if stopIndex == 1 || stopIndex == 3 { return 0.75 }
@@ -456,16 +460,34 @@ struct HorizontalExposureMeter: View {
 
                             VStack(spacing: 1) {
                                 Rectangle()
-                                    .fill(Color.white.opacity((isMajor ? 0.8 : 0.35) * edgeFade))
-                                    .frame(width: isMajor ? 1.5 : 1, height: isMajor ? 10 : 5)
+                                    .fill(
+                                        leading
+                                            ? DS.accent
+                                            : swept
+                                                ? DS.accent.opacity(0.60)
+                                                : Color.white.opacity((isMajor ? 0.8 : 0.35) * edgeFade)
+                                    )
+                                    .frame(
+                                        width: isMajor ? 1.5 : 1,
+                                        height: (isMajor ? 10 : 5) + (leading ? 3 : swept ? 1.5 : 0)
+                                    )
+                                    // Fixed slot, bottom-aligned: ticks grow off a shared
+                                    // baseline so the degree labels never jitter.
+                                    .frame(height: 13, alignment: .bottom)
 
                                 if isMajor {
                                     Text(majorMarks[stopIndex])
                                         .font(.system(size: 7, weight: stopIndex == 2 ? .bold : .medium, design: .monospaced))
-                                        .foregroundColor(.white.opacity(0.7 * edgeFade))
+                                        .foregroundColor(
+                                            swept || leading
+                                                ? DS.accent.opacity(0.85)
+                                                : .white.opacity(0.7 * edgeFade)
+                                        )
                                 }
                             }
                             .frame(width: 8.5)
+                            .animation(.easeOut(duration: 0.12), value: swept)
+                            .animation(.easeOut(duration: 0.12), value: leading)
                         }
                     }
 

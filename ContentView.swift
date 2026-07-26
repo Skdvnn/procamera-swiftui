@@ -2035,10 +2035,11 @@ struct ContentView: View {
                         Haptics.click()
                         camera.cycleFlash()
                     }
-                    .frame(width: 80, alignment: .leading)
+                    .frame(width: 84, alignment: .leading)
 
                     Spacer(minLength: 0)
 
+                    // Trio spans exactly one pill width so it lines up with WB below.
                     HStack(spacing: 0) {
                         ModeControl(icon: "gearshape", isActive: showSettings) {
                             Haptics.click()
@@ -2064,7 +2065,7 @@ struct ContentView: View {
                             syncCaptureContextToSystem()
                         }
                     }
-                    .frame(width: 80, height: 40, alignment: .trailing)
+                    .frame(width: 84, height: 40, alignment: .trailing)
                 }
 
                 FormatTogglePill(format: $captureFormat) { newFormat in
@@ -3489,6 +3490,26 @@ private struct ShutterButtonChrome: View {
     /// Warm/neutral burst count — no cyan/blue glow (Build 65).
     private let burstAccent = Color(red: 0.92, green: 0.90, blue: 0.86)
 
+    /// How far the cap stands above the housing plane when idle.
+    private var proud: CGFloat { compact ? 5.0 : 6.0 }
+    /// How far below the housing plane the cap sits when pressed.
+    private var sink: CGFloat { compact ? 3.0 : 3.5 }
+    /// Visible side wall of the extruded cap (idle only).
+    private var barrelHeight: CGFloat { proud }
+
+    /// Cap side wall — vertical steel falloff so the extrusion reads as a cylinder.
+    private var barrelFill: LinearGradient {
+        LinearGradient(
+            colors: [
+                Color(red: 0.11, green: 0.12, blue: 0.13),
+                Color(red: 0.07, green: 0.08, blue: 0.09),
+                Color.black
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+    }
+
     /// Face fill is CONSTANT — never animate gradient stops (that flashed white).
     private var faceFill: RadialGradient {
         RadialGradient(
@@ -3549,6 +3570,17 @@ private struct ShutterButtonChrome: View {
                         .stroke(Color.black.opacity(0.95), lineWidth: 2.2)
                 }
 
+            // Button barrel — the extruded side wall that exists only because the face
+            // stands proud of the housing. It collapses on press; that's the travel.
+            Capsule()
+                .fill(barrelFill)
+                .frame(width: face - 1, height: face + barrelHeight)
+                .offset(y: -barrelHeight / 2)
+                .opacity(isPressed ? 0 : 1)
+                .frame(width: outer, height: outer)
+                .clipShape(Circle())
+                .animation(ShutterMotion.press, value: isPressed)
+
             // Inner face — constant diameter 3D press. Proud idle → sunk into the well.
             // NO scaleEffect shrink — travel is offset + bevel only (Build 78).
             ZStack {
@@ -3571,25 +3603,36 @@ private struct ShutterButtonChrome: View {
                     .stroke(Color.black.opacity(isPressed ? 0.70 : 0.45), lineWidth: isPressed ? 2.0 : 1.2)
                     .frame(width: face - 1, height: face - 1)
 
-                // Top lip inset shadow — sells the 3D button recess when pressed.
+                // Top lip inset shadow — the housing casting onto a sunk face.
                 Circle()
                     .stroke(
                         LinearGradient(
                             colors: [
-                                Color.black.opacity(isPressed ? 0.55 : 0.12),
+                                Color.black.opacity(isPressed ? 0.70 : 0.10),
                                 Color.black.opacity(0)
                             ],
                             startPoint: .top,
                             endPoint: .center
                         ),
-                        lineWidth: isPressed ? 5 : 2
+                        lineWidth: isPressed ? 7 : 2
                     )
                     .frame(width: face - 2, height: face - 2)
-                    .blur(radius: isPressed ? 0.6 : 0)
+                    .blur(radius: isPressed ? 1.2 : 0)
+
+                // Crown sheen on the proud cap — dies as the button goes down.
+                // Warm steel, low opacity: depth cue, not the old white flash.
+                Circle()
+                    .trim(from: 0.60, to: 0.90)
+                    .stroke(
+                        Color(red: 0.62, green: 0.63, blue: 0.65).opacity(isPressed ? 0 : 0.30),
+                        style: StrokeStyle(lineWidth: 1.6, lineCap: .round)
+                    )
+                    .frame(width: face - 4, height: face - 4)
+                    .blur(radius: 0.8)
 
                 // Press dim — black overlay only (opacity animates; colors stay put).
                 Circle()
-                    .fill(Color.black.opacity(isPressed ? 0.32 : 0))
+                    .fill(Color.black.opacity(isPressed ? 0.42 : 0))
                     .frame(width: face, height: face)
 
                 if isBusy && !isTimerArmed {
@@ -3614,16 +3657,16 @@ private struct ShutterButtonChrome: View {
                         .animation(ShutterMotion.tick, value: burstCount)
                 }
             }
-            // 3D press-in: face keeps size, drops into the well, clip eats the proud lip.
+            // 3D press-in: face keeps size, rides the barrel down past the housing plane.
             // Outer collar never moves. No shrink. No white halo. No brightness shift on fills.
-            .offset(y: isPressed ? (compact ? 4.0 : 5.0) : (compact ? -2.0 : -2.4))
+            .offset(y: isPressed ? sink : -proud)
             .shadow(
                 color: Color.black.opacity(isPressed ? 0.05 : 0.80),
-                radius: isPressed ? 0.5 : 7,
-                y: isPressed ? 0 : 5
+                radius: isPressed ? 0.5 : 8,
+                y: isPressed ? 0 : 6
             )
             .animation(ShutterMotion.press, value: isPressed)
-            .frame(width: well, height: well)
+            .frame(width: outer, height: outer)
             .clipShape(Circle())
 
             // Status rings — collar-relative, not pressed with face.
@@ -3793,20 +3836,37 @@ struct ModeIcon: View {
     }
 }
 
-// MARK: - Mode control (icon + dot — whole column is the hit target)
+// MARK: - Mode control (round key — whole column is the hit target)
 struct ModeControl: View {
     let icon: String
     let isActive: Bool
     let action: () -> Void
 
+    /// Round key in the WB/flash pill chrome. Three of these span one pill width
+    /// (28pt columns × 3 = 84) with real air between them (Build 79).
+    private let key: CGFloat = 20
+
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 3) {
-                ModeIcon(icon: icon, isActive: isActive)
-                ModeButtonChrome(isActive: isActive)
+            ZStack {
+                Circle()
+                    .fill(Color.black)
+                    .frame(width: key + 3, height: key + 3)
+
+                Circle()
+                    .fill(Color(hex: isActive ? "2b2718" : "242424"))
+                    .frame(width: key, height: key)
+
+                Circle()
+                    .stroke(Color(hex: isActive ? "6b5c2c" : "444444"), lineWidth: 0.5)
+                    .frame(width: key, height: key)
+
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundColor(isActive ? DS.accent : Color(hex: "5e5e5e"))
             }
-            // Tight column — sits closer to scrubbers (Build 68).
-            .frame(width: 26, height: 40)
+            // Spaced column — trio matches the WB pill footprint (Build 79).
+            .frame(width: 28, height: 40)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

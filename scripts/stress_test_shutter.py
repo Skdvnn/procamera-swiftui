@@ -562,7 +562,7 @@ def test_source_guards() -> None:
     check("preview scheduleMetalDraw fallback", "restoreCleanPreview()" in preview and "scheduleMetalDraw" in preview)
     check("live preview fail streak", "livePreviewFailStreak" in cam)
     check("format centered ZStack", "FormatTogglePill(format: $captureFormat)" in content and "ZStack {" in content[content.find("ROW 3"):content.find("ROW 3")+900])
-    check("ModeControl column 26", ".frame(width: 26, height: 40)" in content)
+    check("ModeControl column 28", ".frame(width: 28, height: 40)" in content)
     check("no deck grid ModeControl", "ModeControl(icon: \"rectangle.on.rectangle\"" not in content)
 
     # Build 57 — crash/freeze hardening
@@ -680,11 +680,17 @@ def test_source_guards() -> None:
     check("shutter press style sets env", ".environment(\\shutterPressed" in content or ".environment(\\.shutterPressed" in content)
     check("shutter fixed dark lip", "Fixed dark lip" in content)
     check("shutter well darkens on press", "isPressed ? 0.95 : 0.82" in content)
-    check("shutter face sink offset", "offset(y: isPressed ? (compact ? 4.0 : 5.0)" in content)
+    check("shutter face sink offset", "offset(y: isPressed ? sink : -proud)" in content)
     check("shutter face clipped to well", ".clipShape(Circle())" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
     check("shutter constant face fill", "Face fill is CONSTANT" in content)
-    check("shutter press dim overlay", "isPressed ? 0.32 : 0" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
+    check("shutter press dim overlay", "isPressed ? 0.42 : 0" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
     check("shutter top lip inset shadow", "Top lip inset shadow" in content)
+
+    # Build 79 — extruded cap so the press is unmistakably 3D
+    check("shutter barrel side wall", "Button barrel" in content and "barrelFill" in content)
+    check("shutter barrel collapses", "opacity(isPressed ? 0 : 1)" in shutter_chrome)
+    check("shutter proud/sink travel", "private var proud" in content and "private var sink" in content)
+    check("shutter crown sheen dies on press", "Crown sheen" in content)
 
     # Build 68 — Nikon LCD chrome + tighter deck + no white shutter flash
     check("shutter no white top glow", "Color.white.opacity(isPressed ? 0 : 0.06)" not in content)
@@ -790,14 +796,24 @@ def test_source_guards() -> None:
     # Build 77/78 — level is a coherent companion to the EV instrument; ticks animate + useful.
     check("full level matches EV width", "compact ? 52 : 120" in aids)
     check("full level matches EV height", "compact ? 28 : 36" in aids)
-    check("level 13-mark dial rhythm", "ForEach(0..<13" in aids and "degreeMarks" in aids)
+    check("level 13-mark dial rhythm", "tickScale(count: 13" in aids and "degreeMarks" in aids)
     check("level mechanical center pointer", "Mechanical center pointer matches the EV triangle" in aids)
     check("level precision readout", 'String(format: "%+.1f°", roll)' in aids)
     check("level Nikon yellow lock", 'Text(isLevel ? "LEVEL"' in aids)
-    check("level tick heat chase", "tickHeat" in aids and "degreesPerTick" in aids)
-    check("level sliding bubble", "bubbleX" in aids and "Sliding bubble tracks degrees" in aids)
     check("level lock haptic", "UIImpactFeedbackGenerator(style: .rigid)" in aids)
     check("level 20hz motion", "1.0 / 20.0" in aids)
+
+    # Build 79 — ticks are the readout: yellow fill from level out to your tilt
+    check("level tick canvas", "func tickScale" in aids and "Canvas { ctx, size in" in aids)
+    check("level tick sweep fill", "let swept = deg <= max(0, roll) && deg >= min(0, roll)" in aids)
+    check("level leading tick pulse", "let leading = abs(deg - roll)" in aids and "TimelineView(.animation(minimumInterval: 1.0 / 15.0))" in aids)
+    check("level beam still tilts", "Tilting horizon beam" in aids)
+    check("level shared motion source", "static let shared = HorizonMotion()" in aids and "subscribers" in aids)
+    check("level views share motion", "@StateObject private var motion = HorizonMotion()" not in aids)
+    check("EV ticks sweep yellow", "let swept = markEV <= max(0, value)" in gauge and "DS.accent.opacity(0.60)" in gauge)
+    check("EV ticks fixed baseline", "frame(height: 13, alignment: .bottom)" in gauge)
+    check("mode trio spans WB pill width", ".frame(width: 84, height: 40, alignment: .trailing)" in content)
+    check("mode key chrome", "Round key in the WB/flash pill chrome" in content)
 
 
 
