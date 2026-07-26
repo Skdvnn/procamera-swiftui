@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 // MARK: - Deep links (Shortcuts, widgets, quick actions)
 
@@ -144,12 +145,26 @@ enum ShutterDeepLinkCenter {
     }
 }
 
-/// Shared App Group for widgets ↔ app (looks, last mode).
+/// Shared App Group for widgets ↔ app (looks, last mode, recent thumbs).
 enum ShutterAppGroup {
     static let id = "group.com.skylardann.filmcam"
+    /// Keep two overlapping frames for Home Screen widgets.
+    static let recentThumbnailSlots = 2
 
     static var defaults: UserDefaults {
         UserDefaults(suiteName: id) ?? .standard
+    }
+
+    static var containerURL: URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: id)
+    }
+
+    /// `widget-recents/recent-0.jpg` (newest) … `recent-1.jpg`
+    static var recentsDirectoryURL: URL? {
+        guard let base = containerURL else { return nil }
+        let dir = base.appendingPathComponent("widget-recents", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
     }
 
     /// Widget look payload: `"Film Name|FX Name"` (FX may be empty / None).
@@ -165,5 +180,51 @@ enum ShutterAppGroup {
         let fx = parts.count > 1 ? String(parts[1]) : nil
         let cleanFX = (fx == nil || fx == "None" || fx == "—") ? nil : fx
         return (film, cleanFX)
+    }
+
+    /// Downsample + persist newest still for widget stacks (App Group).
+    static func pushRecentThumbnail(_ image: UIImage) {
+        guard let dir = recentsDirectoryURL else { return }
+        let fm = FileManager.default
+        // Shift older slot: recent-0 → recent-1
+        let newest = dir.appendingPathComponent("recent-0.jpg")
+        let older = dir.appendingPathComponent("recent-1.jpg")
+        try? fm.removeItem(at: older)
+        if fm.fileExists(atPath: newest.path) {
+            try? fm.moveItem(at: newest, to: older)
+        }
+        let thumb = image.shutterWidgetThumbnail(maxSide: 360)
+        guard let data = thumb.jpegData(compressionQuality: 0.78) else { return }
+        try? data.write(to: newest, options: .atomic)
+        defaults.set(Date().timeIntervalSince1970, forKey: "widget.recentsUpdatedAt")
+    }
+
+    /// Newest first. Empty when the user hasn't shot yet (or App Group unavailable).
+    static func loadRecentThumbnails(max: Int = recentThumbnailSlots) -> [UIImage] {
+        guard let dir = recentsDirectoryURL else { return [] }
+        var out: [UIImage] = []
+        for i in 0..<max {
+            let url = dir.appendingPathComponent("recent-\(i).jpg")
+            guard let data = try? Data(contentsOf: url),
+                  let img = UIImage(data: data) else { continue }
+            out.append(img)
+        }
+        return out
+    }
+}
+
+extension UIImage {
+    /// Small JPEG-friendly thumb for Home Screen widgets.
+    func shutterWidgetThumbnail(maxSide: CGFloat) -> UIImage {
+        let longest = max(size.width, size.height)
+        guard longest > maxSide, longest > 0 else { return self }
+        let scale = maxSide / longest
+        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = true
+        return UIGraphicsImageRenderer(size: newSize, format: format).image { _ in
+            draw(in: CGRect(origin: .zero, size: newSize))
+        }
     }
 }

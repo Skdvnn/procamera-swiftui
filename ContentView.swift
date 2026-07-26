@@ -877,6 +877,8 @@ struct ContentView: View {
         if let last = gallery.shots.last, let img = gallery.thumbnail(for: last) {
             lastCapturedImage = img
         }
+        // Seed widget overlapping recents from gallery if App Group is empty.
+        seedWidgetRecentsIfNeeded()
         apertureValue = camera.lensAperture
         camera.naturalCaptureEnabled = naturalCapture
         if let fmt = CaptureFormat(rawValue: captureFormatRaw) {
@@ -1368,6 +1370,22 @@ struct ContentView: View {
         lastCapturedImage = framed
         photoCount += 1
         recordShot(framed)
+        // Feed Home Screen widgets overlapping recents (Release App Group).
+        ShutterAppGroup.pushRecentThumbnail(framed)
+        WidgetCenter.shared.reloadAllTimelines()
+    }
+
+    /// One-time backfill so widgets aren't blank before the next shutter press.
+    private func seedWidgetRecentsIfNeeded() {
+        guard ShutterAppGroup.loadRecentThumbnails().isEmpty else { return }
+        let recent = Array(gallery.shots.suffix(2))
+        guard !recent.isEmpty else { return }
+        for shot in recent {
+            if let img = gallery.thumbnail(for: shot) {
+                ShutterAppGroup.pushRecentThumbnail(img)
+            }
+        }
+        WidgetCenter.shared.reloadAllTimelines()
     }
 
     private func handleFocusTap(_ viewNorm: CGPoint, devicePoint: CGPoint, in size: CGSize) {

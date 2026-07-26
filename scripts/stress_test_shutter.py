@@ -698,6 +698,21 @@ def test_source_guards() -> None:
     check("no floating top level chip", "HorizonLevelIndicator()" not in content)
     check("level lives in hist comment", "Horizon level lives inside the histogram glass" in content)
 
+    # Build 70 — widget overlapping recent photos
+    deep = (ROOT / "ShutterDeepLink.swift").read_text()
+    widgets = (ROOT / "ShutterWidgets" / "ShutterWidgetsBundle.swift").read_text()
+    check("widget push recent thumbs", "func pushRecentThumbnail" in deep)
+    check("widget load recent thumbs", "func loadRecentThumbnails" in deep)
+    check("widget recents dir", "widget-recents" in deep)
+    check("capture feeds widget recents", "pushRecentThumbnail(framed)" in content)
+    check("seed widget recents", "seedWidgetRecentsIfNeeded" in content)
+    check("widget recent stack view", "struct WidgetRecentStack" in widgets)
+    check(
+        "launch widget systemLarge",
+        ".supportedFamilies([.systemSmall, .systemMedium, .systemLarge])" in widgets,
+    )
+    check("looks large recents section", '"RECENTS"' in widgets and "darkroom.url" in widgets)
+
 
 
 # ── Landscape layout invariants ─────────────────────────────────────────────
@@ -776,11 +791,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 69", m is not None and int(ver) >= 69, ver)
+    check("Info.plist build >= 70", m is not None and int(ver) >= 70, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 69+", any(v >= 69 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 70+", any(v >= 70 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)
