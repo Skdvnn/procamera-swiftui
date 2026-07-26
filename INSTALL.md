@@ -8,14 +8,16 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 94 phone test pack (no white flash + interactive arch dial):**
+**Build 95 phone test pack (scrubber ticks + bezel):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **94**.
-Cold start stays vulcanite dark (launch color + window/hosting) instead of a
-white flash while the camera warms. The trailing arch is a single-rail dial
-with half-stop ticks and a needle that rides your EV / ISO / FOCUS pull.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **95**.
+Bottom ISO/S: white major ticks again (yellow only on the center indicator),
+and the extra black outer board is gone — same single-face / #444 stroke
+language as flash / WB.
+
+Build 94: dark cold start + interactive single-rail arch dial.
 
 Build 93: softer fullscreen fade + machined hist/info glass (Build 78 polish).
 

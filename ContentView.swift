@@ -2988,15 +2988,13 @@ struct NativeSnapScrubber<Value: Hashable>: View {
             let sideInset = max((geo.size.width - itemWidth) / 2, 0)
 
             ZStack {
-                // Face chrome — classic deck grey for ISO/S; true-black instrument
-                // well only when asked (top FOCUS / EV). Build 84 made every
-                // scrubber #0a0a0a and the bottom deck went too dark.
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(Color.black)
-                RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(Color(hex: faceHex))
-                    .padding(instrumentFace ? 1.5 : 0)
                 if instrumentFace {
+                    // Top FOCUS / EV — true-black machined well (Build 84).
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(Color.black)
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(Color(hex: faceHex))
+                        .padding(1.5)
                     // Inner lip — machined recess catching a little light at the top.
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .stroke(
@@ -3012,29 +3010,41 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                             lineWidth: 0.8
                         )
                         .padding(2)
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .stroke(
+                            isScrolling
+                                ? DS.accent.opacity(0.55)
+                                : Color(hex: idleStrokeHex),
+                            lineWidth: isScrolling ? 0.9 : 0.5
+                        )
+                        .padding(1.5)
+                        .animation(ShutterMotion.scrub, value: isScrolling)
+                } else {
+                    // Bottom ISO / S — flash/WB language: one #242424 face + one
+                    // #444 stroke. No stacked black outer board (Build 95).
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .fill(Color(hex: faceHex))
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(
+                            isScrolling
+                                ? DS.accent.opacity(0.55)
+                                : Color(hex: idleStrokeHex),
+                            lineWidth: isScrolling ? 0.9 : 0.5
+                        )
+                        .animation(ShutterMotion.scrub, value: isScrolling)
                 }
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .stroke(
-                        isScrolling
-                            ? DS.accent.opacity(0.55)
-                            : Color(hex: idleStrokeHex),
-                        lineWidth: isScrolling ? 0.9 : 0.5
-                    )
-                    .padding(instrumentFace ? 1.5 : 2)
-                    .animation(ShutterMotion.scrub, value: isScrolling)
 
                 // Soft LCD wash while scrubbing
                 if isScrolling {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    RoundedRectangle(cornerRadius: instrumentFace ? 4 : 5, style: .continuous)
                         .fill(DS.accent.opacity(0.07))
-                        .padding(instrumentFace ? 1.5 : 2)
+                        .padding(instrumentFace ? 1.5 : 0)
                         .allowsHitTesting(false)
                         .transition(.opacity)
                 }
 
                 // Moving tick strip — film-gate feel (Build 71).
-                // Yellow majors + yellow center indicator (Build 90 restores the
-                // yellow detail that went white-only after the film-gate pass).
+                // White majors/minors; yellow only on the center (in-focus) indicator.
                 Canvas { ctx, size in
                     let usableWidth = size.width - 24
                     let spacing = usableWidth / CGFloat(max(tickCount - 1, 1))
@@ -3050,15 +3060,10 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                         let isMajor = abs(i) % tickMajorEvery == 0
                         let h: CGFloat = isMajor ? (isScrolling ? 6.5 : 5) : (isScrolling ? 3.5 : 3)
                         let rect = CGRect(x: x - 0.5, y: size.height - h - 4, width: 1, height: h)
-                        if isMajor {
-                            ctx.fill(
-                                Path(rect),
-                                with: .color(yellow.opacity(isScrolling ? 0.75 : 0.40))
-                            )
-                        } else {
-                            let opacity: Double = isScrolling ? 0.18 : 0.10
-                            ctx.fill(Path(rect), with: .color(.white.opacity(opacity)))
-                        }
+                        let opacity: Double = isScrolling
+                            ? (isMajor ? 0.42 : 0.18)
+                            : (isMajor ? 0.25 : 0.10)
+                        ctx.fill(Path(rect), with: .color(.white.opacity(opacity)))
                     }
 
                     let indicatorHeight: CGFloat = isScrolling ? 15 : 10
