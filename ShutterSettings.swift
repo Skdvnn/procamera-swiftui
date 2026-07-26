@@ -36,7 +36,7 @@ enum ShootMode: String, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - Settings sheet (frosted glass + DSLR inset menu — no lame List toggles)
+// MARK: - Settings sheet (dark liquid glass + DSLR inset menu — no lame List toggles)
 
 struct ShutterSettingsSheet: View {
     @Binding var showGrid: Bool
@@ -237,50 +237,211 @@ struct ShutterSettingsSheet: View {
                         .foregroundStyle(DS.accent)
                 }
             }
-            .toolbarBackground(.ultraThinMaterial, for: .navigationBar)
+            .toolbarBackground(.hidden, for: .navigationBar)
+            .toolbarColorScheme(.dark, for: .navigationBar)
         }
+        // Always dark liquid glass — never the light system sheet (Build 84).
+        .preferredColorScheme(.dark)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
-        .presentationBackground(.ultraThinMaterial)
+        .presentationBackground {
+            SettingsLiquidGlassBackground()
+        }
     }
 
     private func dslrSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(title)
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                .tracking(1.4)
-                .foregroundStyle(DS.accent.opacity(0.9))
-                .padding(.horizontal, 4)
-                .padding(.bottom, 6)
+            HStack(spacing: 6) {
+                // Tiny instrument screw — same language as the dial faces.
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [
+                                Color.white.opacity(0.28),
+                                Color.white.opacity(0.06),
+                                Color.black.opacity(0.55)
+                            ],
+                            center: .topLeading,
+                            startRadius: 0,
+                            endRadius: 4
+                        )
+                    )
+                    .frame(width: 5, height: 5)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.black.opacity(0.65), lineWidth: 0.5)
+                    )
+                Text(title)
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .tracking(1.4)
+                    .foregroundStyle(DS.accent.opacity(0.9))
+                Spacer(minLength: 0)
+                Circle()
+                    .fill(
+                        RadialGradient(
+                            colors: [
+                                Color.white.opacity(0.22),
+                                Color.white.opacity(0.05),
+                                Color.black.opacity(0.55)
+                            ],
+                            center: .topLeading,
+                            startRadius: 0,
+                            endRadius: 4
+                        )
+                    )
+                    .frame(width: 5, height: 5)
+                    .overlay(
+                        Circle()
+                            .stroke(Color.black.opacity(0.65), lineWidth: 0.5)
+                    )
+            }
+            .padding(.horizontal, 4)
+            .padding(.bottom, 6)
 
             VStack(spacing: 0) {
                 content()
             }
-            .background(
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.black.opacity(0.42))
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(Color.white.opacity(0.04))
-                    // Inset DSLR well lip
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(
-                            LinearGradient(
-                                colors: [
-                                    Color.white.opacity(0.14),
-                                    Color.black.opacity(0.55),
-                                    Color.white.opacity(0.05)
-                                ],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            ),
-                            lineWidth: 1
-                        )
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(Color.black.opacity(0.55), lineWidth: 1.5)
-                        .padding(2)
-                }
+            .background {
+                SettingsDSLRWell()
+            }
+        }
+    }
+}
+
+/// Dark liquid glass under the settings sheet — black wash + material so it
+/// never washes out over a bright finder (Build 84).
+private struct SettingsLiquidGlassBackground: View {
+    var body: some View {
+        ZStack {
+            // Deep ink base — the sheet is always night.
+            Color.black.opacity(0.72)
+            Rectangle()
+                .fill(.ultraThinMaterial)
+                .environment(\.colorScheme, .dark)
+            // Soft vignette so the glass reads as a panel, not a flat film.
+            LinearGradient(
+                colors: [
+                    Color.white.opacity(0.07),
+                    Color.clear,
+                    Color.black.opacity(0.35)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
             )
+            // Hairline top lip — liquid edge catching a little light.
+            VStack(spacing: 0) {
+                LinearGradient(
+                    colors: [
+                        Color.white.opacity(0.22),
+                        Color.white.opacity(0.04),
+                        Color.clear
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 18)
+                Spacer(minLength: 0)
+            }
+        }
+        .ignoresSafeArea()
+    }
+}
+
+/// Inset instrument well for each settings group — deeper lip, inner rail,
+/// and corner screws so the containers feel machined, not flat cards.
+private struct SettingsDSLRWell: View {
+    private let corner: CGFloat = 12
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: corner, style: .continuous)
+                .fill(Color.black.opacity(0.55))
+            // LCD wash — barely lifts the well off pure black.
+            RoundedRectangle(cornerRadius: corner, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.055),
+                            Color.white.opacity(0.015),
+                            Color.clear
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+            // Outer bevel lip
+            RoundedRectangle(cornerRadius: corner, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.22),
+                            Color.white.opacity(0.06),
+                            Color.black.opacity(0.70),
+                            Color.white.opacity(0.08)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    ),
+                    lineWidth: 1.1
+                )
+            // Inner rail — the machined recess.
+            RoundedRectangle(cornerRadius: corner - 2.5, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.black.opacity(0.75),
+                            Color.black.opacity(0.25),
+                            Color.white.opacity(0.05)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 1.4
+                )
+                .padding(2.5)
+            // Hairline floor shadow inside the well
+            RoundedRectangle(cornerRadius: corner - 3, style: .continuous)
+                .stroke(Color.black.opacity(0.45), lineWidth: 0.8)
+                .padding(4)
+            // Corner screws
+            GeometryReader { geo in
+                let inset: CGFloat = 7
+                let screws: [(CGFloat, CGFloat, Double)] = [
+                    (inset, inset, -28),
+                    (geo.size.width - inset, inset, 28),
+                    (inset, geo.size.height - inset, 28),
+                    (geo.size.width - inset, geo.size.height - inset, -28)
+                ]
+                ForEach(Array(screws.enumerated()), id: \.offset) { _, screw in
+                    Circle()
+                        .fill(
+                            RadialGradient(
+                                colors: [
+                                    Color.white.opacity(0.30),
+                                    Color(white: 0.18),
+                                    Color.black.opacity(0.85)
+                                ],
+                                center: .topLeading,
+                                startRadius: 0,
+                                endRadius: 5
+                            )
+                        )
+                        .frame(width: 4.5, height: 4.5)
+                        .overlay(
+                            Circle()
+                                .stroke(Color.black.opacity(0.7), lineWidth: 0.4)
+                        )
+                        // Slot mark
+                        .overlay(
+                            Capsule()
+                                .fill(Color.black.opacity(0.55))
+                                .frame(width: 2.4, height: 0.6)
+                                .rotationEffect(.degrees(screw.2))
+                        )
+                        .position(x: screw.0, y: screw.1)
+                }
+            }
+            .allowsHitTesting(false)
         }
     }
 }
@@ -334,7 +495,7 @@ private struct DSLRToggleRow: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .contentShape(Rectangle())
-            .background(isOn ? Color.white.opacity(0.05) : Color.clear)
+            .background(isOn ? Color.white.opacity(0.07) : Color.clear)
         }
         .buttonStyle(.plain)
     }

@@ -2853,27 +2853,43 @@ struct NativeSnapScrubber<Value: Hashable>: View {
             let sideInset = max((geo.size.width - itemWidth) / 2, 0)
 
             ZStack {
-                // Classic control chrome
-                RoundedRectangle(cornerRadius: 5)
+                // Instrument face — same true-black well as the level / EV meter
+                // (Build 84). #242424 used to make FOCUS/EV read as grey pills.
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(Color.black)
-                RoundedRectangle(cornerRadius: 5)
-                    .fill(Color(hex: "242424"))
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color(hex: "0a0a0a"))
+                    .padding(1.5)
+                // Inner lip — machined recess catching a little light at the top.
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(isScrolling ? 0.14 : 0.08),
+                                Color.black.opacity(0.55),
+                                Color.white.opacity(0.03)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 0.8
+                    )
                     .padding(2)
-                RoundedRectangle(cornerRadius: 4)
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .stroke(
                         isScrolling
                             ? DS.accent.opacity(0.55)
-                            : Color(hex: "444444"),
+                            : Color(hex: "2a2a2a"),
                         lineWidth: isScrolling ? 0.9 : 0.5
                     )
-                    .padding(2)
+                    .padding(1.5)
                     .animation(ShutterMotion.scrub, value: isScrolling)
 
                 // Soft LCD wash while scrubbing
                 if isScrolling {
-                    RoundedRectangle(cornerRadius: 4)
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(DS.accent.opacity(0.07))
-                        .padding(2)
+                        .padding(1.5)
                         .allowsHitTesting(false)
                         .transition(.opacity)
                 }
@@ -3529,31 +3545,61 @@ private struct ShutterButtonChrome: View {
 
     var body: some View {
         ZStack {
-            // Outer collar — SOLID. Matte dark steel only. Never moves / never brightens.
-            // No isPressed dependency — housing stays put.
+            // Outer collar — brushed mid steel. Build 80 went too dark and the
+            // ring disappeared into the deck; keep it solid (never press-animates)
+            // but lift the angular stops so it reads as a bezel again (Build 84).
             Circle()
                 .fill(
                     AngularGradient(
                         colors: [
-                            Color(red: 0.20, green: 0.21, blue: 0.22),
-                            Color(red: 0.11, green: 0.12, blue: 0.13),
-                            Color(red: 0.18, green: 0.19, blue: 0.20),
-                            Color(red: 0.09, green: 0.10, blue: 0.11),
-                            Color(red: 0.19, green: 0.20, blue: 0.21),
-                            Color(red: 0.20, green: 0.21, blue: 0.22)
+                            Color(red: 0.42, green: 0.43, blue: 0.45),
+                            Color(red: 0.28, green: 0.29, blue: 0.31),
+                            Color(red: 0.48, green: 0.49, blue: 0.51),
+                            Color(red: 0.24, green: 0.25, blue: 0.27),
+                            Color(red: 0.40, green: 0.41, blue: 0.43),
+                            Color(red: 0.32, green: 0.33, blue: 0.35),
+                            Color(red: 0.42, green: 0.43, blue: 0.45)
                         ],
                         center: .center
                     )
                 )
                 .frame(width: outer, height: outer)
+                // Cool highlight on the top-left of the bezel — steel catching light.
                 .overlay {
                     Circle()
-                        .stroke(Color.black.opacity(0.80), lineWidth: 1.6)
+                        .stroke(
+                            AngularGradient(
+                                colors: [
+                                    Color.white.opacity(0.28),
+                                    Color.white.opacity(0.04),
+                                    Color.black.opacity(0.35),
+                                    Color.white.opacity(0.08),
+                                    Color.white.opacity(0.22)
+                                ],
+                                center: .center
+                            ),
+                            lineWidth: 1.4
+                        )
                 }
-                // Fixed dark lip — matte steel rim into the well (no bright white).
+                // Outer edge into the deck
                 .overlay {
                     Circle()
-                        .stroke(Color.black.opacity(0.55), lineWidth: 2.2)
+                        .stroke(Color.black.opacity(0.55), lineWidth: 1.2)
+                }
+                // Inner lip stepping down into the well
+                .overlay {
+                    Circle()
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.18),
+                                    Color.black.opacity(0.55)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 1.6
+                        )
                         .padding(compact ? 3.5 : 4.0)
                 }
                 .shadow(
@@ -3562,15 +3608,15 @@ private struct ShutterButtonChrome: View {
                     radius: 5,
                     y: 0
                 )
-                .shadow(color: Color.black.opacity(0.70), radius: 7, y: 3)
+                .shadow(color: Color.black.opacity(0.55), radius: 6, y: 3)
 
-            // Deep well — constant dark pit (opacity only, never brightens).
+            // Deep well — stays darker than the collar so the ring reads.
             Circle()
-                .fill(Color.black.opacity(isPressed ? 0.95 : 0.82))
+                .fill(Color.black.opacity(isPressed ? 0.92 : 0.78))
                 .frame(width: well, height: well)
                 .overlay {
                     Circle()
-                        .stroke(Color.black.opacity(0.95), lineWidth: 2.2)
+                        .stroke(Color.black.opacity(0.85), lineWidth: 1.8)
                 }
 
             // Inner face — the ONLY moving part. Proud idle → sunk pressed.

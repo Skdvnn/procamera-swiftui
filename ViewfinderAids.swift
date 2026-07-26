@@ -213,13 +213,31 @@ struct InfoBarMetalLevel: View {
         let roll = motion.rollDegrees
         let level = abs(roll) < levelTolerance
         let visualRoll = max(-15, min(15, roll))
+        // Compact matches the ISO / FOCUS / EV scrubber height (Build 84).
         let w: CGFloat = compact ? 52 : 120
-        let h: CGFloat = compact ? 28 : 36
+        let h: CGFloat = compact ? 40 : 36
 
         ZStack {
             // Same instrument face and border language as the EV meter.
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .fill(Color(hex: "0a0a0a"))
+            // Inner lip so the level sits in the same recess as the scrubbers.
+            if compact {
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.08),
+                                Color.black.opacity(0.55),
+                                Color.white.opacity(0.03)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 0.8
+                    )
+                    .padding(1.5)
+            }
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .stroke(
                     level ? accent.opacity(0.55) : Color(hex: "2a2a2a"),
@@ -366,9 +384,11 @@ struct InfoBarMetalLevel: View {
 
     @ViewBuilder
     private func compactLevel(roll: Float, isLevel: Bool) -> some View {
-        VStack(spacing: 0) {
+        // Fills the 40pt scrubber slot — ticks on top, horizon + readout below.
+        VStack(spacing: 1) {
             tickScale(count: 7, roll: roll, isLevel: isLevel, step: 5, labels: false)
-                .frame(height: 11)
+                .frame(height: 14)
+                .padding(.top, 3)
 
             ZStack {
                 HStack(spacing: 5) {
@@ -381,13 +401,14 @@ struct InfoBarMetalLevel: View {
                     .rotationEffect(.degrees(Double(roll)))
                     .animation(.interactiveSpring(response: 0.16, dampingFraction: 0.85), value: roll)
                 Text(isLevel ? "LVL" : String(format: "%+.0f°", roll))
-                    .font(.system(size: 6.5, weight: .bold, design: .monospaced))
+                    .font(.system(size: 7, weight: .bold, design: .monospaced))
                     .foregroundStyle(isLevel ? accent : .white.opacity(0.6))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .padding(.bottom, 1)
+                    .padding(.bottom, 3)
             }
-            .frame(height: 17)
+            .frame(maxHeight: .infinity)
         }
+        .padding(.horizontal, 2)
     }
 }
 
