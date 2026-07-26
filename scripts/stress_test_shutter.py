@@ -788,6 +788,16 @@ def test_source_guards() -> None:
     check("level precision readout", 'String(format: "%+.1f°", roll)' in aids)
     check("level Nikon yellow lock", 'Text(isLevel ? "LEVEL"' in aids)
 
+    # Build 78 — lighter fullscreen fade + lifted, richer histogram glass.
+    check("fullscreen gradient softened", "Color.black.opacity(0.74)" in content)
+    check("collapsed histogram lifted", "histDeckGap: CGFloat = 18" in content)
+    check("expanded histogram lifted", "expandedHistogramBottomPad: CGFloat = 20" in content)
+    check("info glass taller", "infoBarHeight: CGFloat = 64" in content)
+    check("histogram taller and wider", "compact ? 54 : 76" in content and "compact ? 32 : 46" in content)
+    check("info glass machined rim", "Machined outer rim" in content)
+    check("info glass recessed keyline", "Recessed inner keyline" in content)
+    check("histogram exposure grid", "Fine exposure grid" in content)
+
 
 
 # ── Landscape layout invariants ─────────────────────────────────────────────
@@ -866,11 +876,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 77", m is not None and int(ver) >= 77, ver)
+    check("Info.plist build >= 78", m is not None and int(ver) >= 78, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 77+", any(v >= 77 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 78+", any(v >= 78 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

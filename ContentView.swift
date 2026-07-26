@@ -419,11 +419,11 @@ struct ContentView: View {
         static let landscapeDeckHeight: CGFloat = 80
         static let fadeHeight: CGFloat = 48
         /// Approximate RefractiveGlassInfoBar height (pad + hist + readouts).
-        static let infoBarHeight: CGFloat = 56
+        static let infoBarHeight: CGFloat = 64
         /// Gap between histogram bottom and shutter deck top when collapsed.
-        static let histDeckGap: CGFloat = 8
+        static let histDeckGap: CGFloat = 18
         /// Expanded: keep histogram inside the viewfinder, clear of the deck below.
-        static let expandedHistogramBottomPad: CGFloat = 14
+        static let expandedHistogramBottomPad: CGFloat = 20
         /// Gap between viewfinder bottom and expanded shutter deck.
         static let viewfinderToDeckGap: CGFloat = 5
 
@@ -1841,9 +1841,11 @@ struct ContentView: View {
                 LinearGradient(
                     colors: [
                         Color.clear,
-                        Color.black.opacity(0.35),
-                        Color.black.opacity(0.75),
-                        Color.black.opacity(0.92)
+                        // Fullscreen fade should support the controls, not
+                        // swallow the lower third of the photograph.
+                        Color.black.opacity(0.20),
+                        Color.black.opacity(0.48),
+                        Color.black.opacity(0.74)
                     ],
                     startPoint: .top,
                     endPoint: .bottom
@@ -2570,7 +2572,7 @@ struct RefractiveGlassInfoBar: View {
                 exposureValue: exposureValue,
                 bins: histogramBus.bins
             )
-            .frame(width: compact ? 54 : 70, height: compact ? 32 : 40)
+            .frame(width: compact ? 54 : 76, height: compact ? 32 : 46)
 
             // Format info
             VStack(alignment: .leading, spacing: 2) {
@@ -2650,16 +2652,43 @@ struct RefractiveGlassInfoBar: View {
             }
             .foregroundColor(.white)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
+        .padding(.horizontal, compact ? 9 : 12)
+        .padding(.vertical, compact ? 5 : 8)
         .background(
             ZStack {
-                RoundedRectangle(cornerRadius: 8)
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
                     .fill(.ultraThinMaterial)
-                RoundedRectangle(cornerRadius: 8)
-                    .fill(Color.black.opacity(0.3))
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(Color.white.opacity(0.1), lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(Color.black.opacity(0.24))
+
+                // Machined outer rim: restrained highlight, dark lower edge.
+                RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.20),
+                                Color.white.opacity(0.07),
+                                Color.black.opacity(0.42)
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        ),
+                        lineWidth: 0.9
+                    )
+
+                // Recessed inner keyline ties histogram and ISO/S together.
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(Color.black.opacity(0.50), lineWidth: 0.7)
+                    .padding(2)
+
+                LinearGradient(
+                    colors: [Color.white.opacity(0.055), Color.clear],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 12)
+                .frame(maxHeight: .infinity, alignment: .top)
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
             }
         )
     }
@@ -2678,9 +2707,18 @@ struct GlassHistogram: View {
 
     var body: some View {
         ZStack {
-            // Clean dark container (no liquid glass borders)
-            RoundedRectangle(cornerRadius: 6)
-                .fill(Color.black.opacity(0.5))
+            // Recessed histogram instrument inside the larger glass housing.
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Color.black.opacity(0.58))
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.16), Color.black.opacity(0.48)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 0.7
+                )
 
             // Histogram bars - real luminance bins from the camera feed,
             // synthetic EV-shifted curve until the first frame arrives
@@ -2689,6 +2727,18 @@ struct GlassHistogram: View {
                 let barCount = bins.isEmpty ? 40 : bins.count
                 let barWidth = (size.width - padding * 2) / CGFloat(barCount)
                 let usableH = size.height - padding * 2
+
+                // Fine exposure grid gives the small plot real instrument detail.
+                for fraction in [CGFloat(0.25), 0.5, 0.75] {
+                    var vertical = Path()
+                    vertical.move(to: CGPoint(x: size.width * fraction, y: padding))
+                    vertical.addLine(to: CGPoint(x: size.width * fraction, y: size.height - padding))
+                    ctx.stroke(vertical, with: .color(.white.opacity(0.055)), lineWidth: 0.5)
+                }
+                var midline = Path()
+                midline.move(to: CGPoint(x: padding, y: size.height * 0.5))
+                midline.addLine(to: CGPoint(x: size.width - padding, y: size.height * 0.5))
+                ctx.stroke(midline, with: .color(.white.opacity(0.045)), lineWidth: 0.5)
 
                 for i in 0..<barCount {
                     let x = padding + CGFloat(i) * barWidth
