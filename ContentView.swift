@@ -713,6 +713,7 @@ struct ContentView: View {
                                     isLocked: isLocked,
                                     isManualExposure: camera.isManualExposure,
                                     naturalCapture: naturalCapture,
+                                    showLevel: showLevel,
                                     compact: isLandscape,
                                     onToggleLock: { toggleAEAFLock() },
                                     onReturnToAuto: { returnToAuto() }
@@ -771,13 +772,8 @@ struct ContentView: View {
                         .padding(.horizontal, effectiveBottomCollapsed ? 6 : DS.pageMargin)
                         .zIndex(5)
 
-                        if showLevel {
-                            HorizonLevelIndicator()
-                                .padding(.top, 18)
-                                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                                .allowsHitTesting(false)
-                                .zIndex(35)
-                        }
+                        // Horizon level lives inside the histogram glass (info bar),
+                        // not as a floating top chip.
 
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1613,6 +1609,7 @@ struct ContentView: View {
                                 isLocked: isLocked,
                                 isManualExposure: camera.isManualExposure,
                                 naturalCapture: naturalCapture,
+                                showLevel: showLevel,
                                 onToggleLock: { toggleAEAFLock() },
                                 onReturnToAuto: { returnToAuto() }
                             )
@@ -2385,6 +2382,8 @@ struct RefractiveGlassInfoBar: View {
     var isLocked: Bool = false
     var isManualExposure: Bool = false
     var naturalCapture: Bool = true
+    /// Horizon level drawn inside the histogram glass (not a floating chip).
+    var showLevel: Bool = false
     /// Landscape: denser readout, smaller histogram.
     var compact: Bool = false
     var onToggleLock: (() -> Void)? = nil
@@ -2394,9 +2393,13 @@ struct RefractiveGlassInfoBar: View {
 
     var body: some View {
         HStack(spacing: compact ? 8 : 10) {
-            // Histogram in glass container
-            GlassHistogram(exposureValue: exposureValue, bins: histogramBus.bins)
-                .frame(width: compact ? 54 : 70, height: compact ? 32 : 40)
+            // Histogram (+ optional inline horizon) in glass container
+            GlassHistogram(
+                exposureValue: exposureValue,
+                bins: histogramBus.bins,
+                showLevel: showLevel
+            )
+            .frame(width: compact ? 54 : 70, height: compact ? 32 : 40)
 
             // Format info
             VStack(alignment: .leading, spacing: 2) {
@@ -2497,10 +2500,11 @@ struct RefractiveGlassInfoBar: View {
     }
 }
 
-// MARK: - Glass Histogram (Clean container)
+// MARK: - Glass Histogram (Clean container + optional inline horizon)
 struct GlassHistogram: View {
     let exposureValue: Float
     var bins: [Float] = []
+    var showLevel: Bool = false
 
     var body: some View {
         ZStack {
@@ -2512,8 +2516,11 @@ struct GlassHistogram: View {
             // synthetic EV-shifted curve until the first frame arrives
             Canvas { ctx, size in
                 let padding: CGFloat = 4
+                // Leave a little headroom when the level overlay is active.
+                let topPad: CGFloat = showLevel ? 5 : 0
                 let barCount = bins.isEmpty ? 40 : bins.count
                 let barWidth = (size.width - padding * 2) / CGFloat(barCount)
+                let usableH = size.height - padding * 2 - topPad
 
                 for i in 0..<barCount {
                     let x = padding + CGFloat(i) * barWidth
@@ -2528,17 +2535,24 @@ struct GlassHistogram: View {
                     } else {
                         h = min(max(CGFloat(bins[i]), 0.03), 1.0)
                     }
-                    let barHeight = (size.height - padding * 2) * h
+                    let barHeight = usableH * h
                     let rect = CGRect(
                         x: x,
                         y: size.height - padding - barHeight,
                         width: barWidth - 0.5,
                         height: barHeight
                     )
-                    ctx.fill(Path(rect), with: .color(.white.opacity(0.8)))
+                    // Slightly dimmer under the level so the spirit bar reads cleanly.
+                    ctx.fill(Path(rect), with: .color(.white.opacity(showLevel ? 0.55 : 0.8)))
                 }
             }
             .padding(2)
+
+            // Horizon level — integrated into the hist well (Build 69).
+            if showLevel {
+                HistogramHorizonOverlay()
+                    .padding(3)
+            }
         }
     }
 }

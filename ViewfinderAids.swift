@@ -121,6 +121,7 @@ enum ViewfinderMonitor {
 
 // MARK: - Horizon / level bubble
 
+/// Standalone chip (legacy). Prefer `HistogramHorizonOverlay` in the info bar.
 struct HorizonLevelIndicator: View {
     @StateObject private var motion = HorizonMotion()
 
@@ -129,12 +130,12 @@ struct HorizonLevelIndicator: View {
         let level = abs(roll) < 1.2
         HStack(spacing: 6) {
             Capsule()
-                .fill(level ? Color.green.opacity(0.9) : Color.white.opacity(0.55))
+                .fill(level ? Color(red: 1.0, green: 0.85, blue: 0.35).opacity(0.95) : Color.white.opacity(0.55))
                 .frame(width: 36, height: 2)
                 .rotationEffect(.degrees(Double(roll)))
             Text(String(format: "%+.0f°", roll))
                 .font(.system(size: 9, weight: .semibold, design: .monospaced))
-                .foregroundColor(level ? Color.green.opacity(0.95) : .white.opacity(0.7))
+                .foregroundColor(level ? Color(red: 1.0, green: 0.85, blue: 0.35) : .white.opacity(0.7))
                 .frame(width: 32, alignment: .leading)
         }
         .padding(.horizontal, 8)
@@ -143,6 +144,52 @@ struct HorizonLevelIndicator: View {
             Capsule()
                 .fill(Color.black.opacity(0.35))
         )
+        .allowsHitTesting(false)
+        .onAppear { motion.start() }
+        .onDisappear { motion.stop() }
+    }
+}
+
+/// Compact spirit level drawn inside the histogram glass — Nikon LCD style.
+struct HistogramHorizonOverlay: View {
+    @StateObject private var motion = HorizonMotion()
+
+    private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
+
+    var body: some View {
+        let roll = motion.rollDegrees
+        let level = abs(roll) < 1.2
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            ZStack {
+                // Fixed center ticks (horizon reference).
+                HStack(spacing: w * 0.42) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.28))
+                        .frame(width: 5, height: 1.5)
+                    Capsule()
+                        .fill(Color.white.opacity(0.28))
+                        .frame(width: 5, height: 1.5)
+                }
+
+                // Rotating level bar.
+                Capsule()
+                    .fill(level ? accent.opacity(0.95) : Color.white.opacity(0.70))
+                    .frame(width: max(22, w * 0.62), height: level ? 2.0 : 1.5)
+                    .rotationEffect(.degrees(Double(roll)))
+                    .shadow(color: level ? accent.opacity(0.45) : .clear, radius: 2)
+
+                // Degree readout — bottom trailing corner of the hist well.
+                Text(level ? "LVL" : String(format: "%+.0f°", roll))
+                    .font(.system(size: 7, weight: .bold, design: .monospaced))
+                    .foregroundColor(level ? accent : .white.opacity(0.65))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .padding(.trailing, 3)
+                    .padding(.bottom, 2)
+            }
+            .frame(width: w, height: h)
+        }
         .allowsHitTesting(false)
         .onAppear { motion.start() }
         .onDisappear { motion.stop() }

@@ -15,7 +15,7 @@
 	<key>CFBundleShortVersionString</key>
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
-	<string>68</string>
+	<string>69</string>
 	<key>NSCameraUsageDescription</key>
 	<string>Shutter Cam needs the camera for Lock Screen and Control Center capture.</string>
 	<key>NSExtension</key>

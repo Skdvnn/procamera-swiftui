@@ -8,12 +8,12 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 68 phone test pack (Nikon LCD chrome + tighter deck + shutter polish):**
+**Build 69 phone test pack (horizon level inside histogram):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **68**.
-Shutter: no white flash; face pushes in as one unit. Film/FX menus + sheets use yellow mono LCD vibes.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **69**.
+Enable Horizon level in Settings — it draws inside the histogram glass, not as a floating chip.
 
 **Note:** Cmd+R uses empty Debug entitlements — widgets / Lock Screen capture
 need a Release or TestFlight build with App Groups enabled in the developer

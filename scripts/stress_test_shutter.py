@@ -690,6 +690,14 @@ def test_source_guards() -> None:
     check("settings tint accent", ".tint(DS.accent)" in settings)
     check("cull amber matches DS.accent", "1.0, green: 0.85, blue: 0.35" in cull)
 
+    # Build 69 — horizon level integrated into histogram glass
+    aids = (ROOT / "ViewfinderAids.swift").read_text()
+    check("histogram horizon overlay", "struct HistogramHorizonOverlay" in aids)
+    check("GlassHistogram showLevel", "showLevel: Bool = false" in content[content.find("struct GlassHistogram"):content.find("struct ResponsiveHistogram")])
+    check("info bar passes showLevel", "showLevel: showLevel" in content)
+    check("no floating top level chip", "HorizonLevelIndicator()" not in content)
+    check("level lives in hist comment", "Horizon level lives inside the histogram glass" in content)
+
 
 
 # ── Landscape layout invariants ─────────────────────────────────────────────
@@ -768,11 +776,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 68", m is not None and int(ver) >= 68, ver)
+    check("Info.plist build >= 69", m is not None and int(ver) >= 69, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 68+", any(v >= 68 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 69+", any(v >= 69 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)
