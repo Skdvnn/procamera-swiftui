@@ -3490,25 +3490,11 @@ private struct ShutterButtonChrome: View {
     /// Warm/neutral burst count — no cyan/blue glow (Build 65).
     private let burstAccent = Color(red: 0.92, green: 0.90, blue: 0.86)
 
-    /// How far the cap stands above the housing plane when idle.
-    private var proud: CGFloat { compact ? 5.0 : 6.0 }
-    /// How far below the housing plane the cap sits when pressed.
-    private var sink: CGFloat { compact ? 3.0 : 3.5 }
-    /// Visible side wall of the extruded cap (idle only).
-    private var barrelHeight: CGFloat { proud }
-
-    /// Cap side wall — vertical steel falloff so the extrusion reads as a cylinder.
-    private var barrelFill: LinearGradient {
-        LinearGradient(
-            colors: [
-                Color(red: 0.11, green: 0.12, blue: 0.13),
-                Color(red: 0.07, green: 0.08, blue: 0.09),
-                Color.black
-            ],
-            startPoint: .top,
-            endPoint: .bottom
-        )
-    }
+    /// Idle lift — same proud sit the button has always had. An extruded barrel
+    /// read as a pill behind a round button, so travel is offset + shading only.
+    private var proud: CGFloat { compact ? 1.2 : 1.5 }
+    /// How far the face drops into the well on press.
+    private var sink: CGFloat { compact ? 5.0 : 6.0 }
 
     /// Face fill is CONSTANT — never animate gradient stops (that flashed white).
     private var faceFill: RadialGradient {
@@ -3570,19 +3556,8 @@ private struct ShutterButtonChrome: View {
                         .stroke(Color.black.opacity(0.95), lineWidth: 2.2)
                 }
 
-            // Button barrel — the extruded side wall that exists only because the face
-            // stands proud of the housing. It collapses on press; that's the travel.
-            Capsule()
-                .fill(barrelFill)
-                .frame(width: face - 1, height: face + barrelHeight)
-                .offset(y: -barrelHeight / 2)
-                .opacity(isPressed ? 0 : 1)
-                .frame(width: outer, height: outer)
-                .clipShape(Circle())
-                .animation(ShutterMotion.press, value: isPressed)
-
-            // Inner face — constant diameter 3D press. Proud idle → sunk into the well.
-            // NO scaleEffect shrink — travel is offset + bevel only (Build 78).
+            // Inner face — the ONLY moving part. Proud idle → sunk pressed.
+            // NO scaleEffect shrink — travel is offset + shading only (Build 78).
             ZStack {
                 Circle()
                     .fill(faceFill)
@@ -3604,35 +3579,25 @@ private struct ShutterButtonChrome: View {
                     .frame(width: face - 1, height: face - 1)
 
                 // Top lip inset shadow — the housing casting onto a sunk face.
+                // Only shows while pressed, so the idle silhouette is unchanged.
                 Circle()
                     .stroke(
                         LinearGradient(
                             colors: [
-                                Color.black.opacity(isPressed ? 0.70 : 0.10),
+                                Color.black.opacity(isPressed ? 0.62 : 0),
                                 Color.black.opacity(0)
                             ],
                             startPoint: .top,
                             endPoint: .center
                         ),
-                        lineWidth: isPressed ? 7 : 2
+                        lineWidth: isPressed ? 6 : 0.1
                     )
                     .frame(width: face - 2, height: face - 2)
                     .blur(radius: isPressed ? 1.2 : 0)
 
-                // Crown sheen on the proud cap — dies as the button goes down.
-                // Warm steel, low opacity: depth cue, not the old white flash.
-                Circle()
-                    .trim(from: 0.60, to: 0.90)
-                    .stroke(
-                        Color(red: 0.62, green: 0.63, blue: 0.65).opacity(isPressed ? 0 : 0.30),
-                        style: StrokeStyle(lineWidth: 1.6, lineCap: .round)
-                    )
-                    .frame(width: face - 4, height: face - 4)
-                    .blur(radius: 0.8)
-
                 // Press dim — black overlay only (opacity animates; colors stay put).
                 Circle()
-                    .fill(Color.black.opacity(isPressed ? 0.42 : 0))
+                    .fill(Color.black.opacity(isPressed ? 0.38 : 0))
                     .frame(width: face, height: face)
 
                 if isBusy && !isTimerArmed {
@@ -3657,16 +3622,22 @@ private struct ShutterButtonChrome: View {
                         .animation(ShutterMotion.tick, value: burstCount)
                 }
             }
-            // 3D press-in: face keeps size, rides the barrel down past the housing plane.
-            // Outer collar never moves. No shrink. No white halo. No brightness shift on fills.
+            // Press-in: face keeps size and drops; the well edge clips the sinking
+            // bottom, which is the housing occluding it. Collar never moves.
+            // No shrink. No white halo. No brightness shift on fills.
             .offset(y: isPressed ? sink : -proud)
             .shadow(
-                color: Color.black.opacity(isPressed ? 0.05 : 0.80),
-                radius: isPressed ? 0.5 : 8,
-                y: isPressed ? 0 : 6
+                color: Color.black.opacity(isPressed ? 0.02 : 0.75),
+                radius: isPressed ? 0.5 : 6,
+                y: isPressed ? 0 : 4
             )
-            .animation(ShutterMotion.press, value: isPressed)
-            .frame(width: outer, height: outer)
+            .animation(
+                isPressed
+                    ? .easeOut(duration: 0.055)
+                    : .interpolatingSpring(stiffness: 420, damping: 32),
+                value: isPressed
+            )
+            .frame(width: well, height: well)
             .clipShape(Circle())
 
             // Status rings — collar-relative, not pressed with face.
