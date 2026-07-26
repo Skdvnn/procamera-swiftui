@@ -193,78 +193,133 @@ struct HistogramHorizonOverlay: View {
     }
 }
 
-/// Metal spirit level under the top EV meter (Build 73) — replaces ISO/S there.
+/// Nikon-style horizon instrument under the top EV meter.
+/// Full size deliberately matches the 120×36 EV scale above it.
 struct InfoBarMetalLevel: View {
     @StateObject private var motion = HorizonMotion()
     var compact: Bool = false
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
+    private let degreeMarks = ["−15", "−5", "0", "+5", "+15"]
 
     var body: some View {
         let roll = motion.rollDegrees
         let level = abs(roll) < 1.2
-        let w: CGFloat = compact ? 52 : 64
-        let h: CGFloat = compact ? 28 : 34
+        let visualRoll = max(-15, min(15, roll))
+        let w: CGFloat = compact ? 52 : 120
+        let h: CGFloat = compact ? 28 : 36
 
         ZStack {
-            // Machined steel well
+            // Same instrument face and border language as the EV meter.
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color(white: 0.18),
-                            Color(white: 0.10),
-                            Color(white: 0.14)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
+                .fill(Color(hex: "0a0a0a"))
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.28),
-                            Color.black.opacity(0.55),
-                            Color.white.opacity(0.08)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    ),
-                    lineWidth: 0.9
-                )
-            RoundedRectangle(cornerRadius: 3.5, style: .continuous)
-                .stroke(Color.black.opacity(0.55), lineWidth: 1)
-                .padding(2)
+                .stroke(Color(hex: "2a2a2a"), lineWidth: 0.5)
 
-            // Horizon reference ticks
-            HStack(spacing: w * 0.38) {
-                Capsule()
-                    .fill(Color.white.opacity(0.3))
-                    .frame(width: 4, height: 1.5)
-                Capsule()
-                    .fill(Color.white.opacity(0.3))
-                    .frame(width: 4, height: 1.5)
+            if compact {
+                compactLevel(roll: visualRoll, isLevel: level)
+            } else {
+                fullLevel(roll: roll, visualRoll: visualRoll, isLevel: level)
             }
-
-            // Spirit bar
-            Capsule()
-                .fill(level ? accent : Color.white.opacity(0.75))
-                .frame(width: w * 0.55, height: level ? 2.2 : 1.6)
-                .rotationEffect(.degrees(Double(roll)))
-                .shadow(color: level ? accent.opacity(0.5) : .clear, radius: 2)
-
-            // Degree / LVL
-            Text(level ? "LVL" : String(format: "%+.0f°", roll))
-                .font(.system(size: compact ? 7 : 8, weight: .bold, design: .monospaced))
-                .foregroundStyle(level ? accent : .white.opacity(0.7))
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                .padding(.bottom, 3)
         }
         .frame(width: w, height: h)
+        .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
         .allowsHitTesting(false)
         .onAppear { motion.start() }
         .onDisappear { motion.stop() }
+    }
+
+    @ViewBuilder
+    private func fullLevel(roll: Float, visualRoll: Float, isLevel: Bool) -> some View {
+        VStack(spacing: 0) {
+            // 13 marks mirrors the EV meter's 1/3-stop rhythm.
+            HStack(spacing: 0) {
+                ForEach(0..<13, id: \.self) { i in
+                    let major = i % 3 == 0
+                    let markIndex = i / 3
+                    VStack(spacing: 1) {
+                        Rectangle()
+                            .fill(Color.white.opacity(major ? 0.72 : 0.30))
+                            .frame(width: major ? 1.5 : 1, height: major ? 7 : 4)
+                        if major {
+                            Text(degreeMarks[markIndex])
+                                .font(.system(
+                                    size: 6,
+                                    weight: markIndex == 2 ? .bold : .medium,
+                                    design: .monospaced
+                                ))
+                                .foregroundStyle(Color.white.opacity(markIndex == 2 ? 0.82 : 0.52))
+                        }
+                    }
+                    .frame(width: 8.5)
+                }
+            }
+            .frame(height: 16)
+
+            ZStack {
+                // Fixed center datum: split rails leave a precision gate.
+                HStack(spacing: 9) {
+                    Capsule()
+                        .fill(Color.white.opacity(0.25))
+                        .frame(width: 38, height: 1)
+                    Capsule()
+                        .fill(Color.white.opacity(0.25))
+                        .frame(width: 38, height: 1)
+                }
+
+                // Moving horizon beam. It settles into the center datum at level.
+                HStack(spacing: 3) {
+                    Capsule()
+                        .fill(isLevel ? accent : Color.white.opacity(0.78))
+                        .frame(width: 39, height: isLevel ? 2 : 1.5)
+                    Circle()
+                        .fill(isLevel ? accent : Color.white.opacity(0.86))
+                        .frame(width: isLevel ? 5 : 4, height: isLevel ? 5 : 4)
+                    Capsule()
+                        .fill(isLevel ? accent : Color.white.opacity(0.78))
+                        .frame(width: 39, height: isLevel ? 2 : 1.5)
+                }
+                .rotationEffect(.degrees(Double(visualRoll)))
+                .shadow(color: isLevel ? accent.opacity(0.45) : .clear, radius: 2)
+
+                // Mechanical center pointer matches the EV triangle.
+                Triangle()
+                    .fill(accent.opacity(isLevel ? 1 : 0.62))
+                    .frame(width: 6, height: 4)
+                    .offset(y: 7)
+
+                Text(isLevel ? "LEVEL" : String(format: "%+.1f°", roll))
+                    .font(.system(size: 6.5, weight: .bold, design: .monospaced))
+                    .foregroundStyle(isLevel ? accent : .white.opacity(0.58))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                    .padding(.trailing, 5)
+                    .padding(.bottom, 1)
+            }
+            .frame(height: 18)
+        }
+        .padding(.top, 1)
+    }
+
+    @ViewBuilder
+    private func compactLevel(roll: Float, isLevel: Bool) -> some View {
+        ZStack {
+            HStack(spacing: 5) {
+                Rectangle().fill(Color.white.opacity(0.25)).frame(width: 14, height: 1)
+                Rectangle().fill(Color.white.opacity(0.25)).frame(width: 14, height: 1)
+            }
+            Capsule()
+                .fill(isLevel ? accent : Color.white.opacity(0.78))
+                .frame(width: 34, height: isLevel ? 2 : 1.4)
+                .rotationEffect(.degrees(Double(roll)))
+            Circle()
+                .fill(isLevel ? accent : Color.white.opacity(0.75))
+                .frame(width: 4, height: 4)
+            Text(isLevel ? "LVL" : String(format: "%+.0f°", roll))
+                .font(.system(size: 6.5, weight: .bold, design: .monospaced))
+                .foregroundStyle(isLevel ? accent : .white.opacity(0.6))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .padding(.bottom, 2)
+        }
     }
 }
 

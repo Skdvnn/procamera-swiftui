@@ -780,6 +780,14 @@ def test_source_guards() -> None:
     check("widget recents sort by date", ".sorted { $0.date > $1.date }" in content)
     check("clean widget frame stays clean", 'meta.filmFilter == "None" ? "Clean"' in widgets)
 
+    # Build 77 — level is a coherent companion to the EV instrument.
+    check("full level matches EV width", "compact ? 52 : 120" in aids)
+    check("full level matches EV height", "compact ? 28 : 36" in aids)
+    check("level 13-mark dial rhythm", "ForEach(0..<13" in aids and "degreeMarks" in aids)
+    check("level mechanical center pointer", "Mechanical center pointer matches the EV triangle" in aids)
+    check("level precision readout", 'String(format: "%+.1f°", roll)' in aids)
+    check("level Nikon yellow lock", 'Text(isLevel ? "LEVEL"' in aids)
+
 
 
 # ── Landscape layout invariants ─────────────────────────────────────────────
@@ -858,11 +866,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 76", m is not None and int(ver) >= 76, ver)
+    check("Info.plist build >= 77", m is not None and int(ver) >= 77, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 76+", any(v >= 76 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 77+", any(v >= 77 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)
