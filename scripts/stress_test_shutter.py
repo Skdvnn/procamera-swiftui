@@ -764,6 +764,11 @@ def test_source_guards() -> None:
     check("sun drag not gated on manual", "exposureDragEnabled: !isLocked," in content)
     check("manual sun drag moves gain", "dragStartISO" in content and "powf(2, stops)" in content)
     check("half stop detents", "func halfStopDetent" in content and "exposureDetentHaptic" in content)
+    check(
+        "manual detents track applied gain",
+        "exposureDetentHaptic(log2(Float(capped) / Float(max(1, dragStartISO))))" in content
+        and "manual ? 0 : halfStopDetent(exposureValue)" in content,
+    )
     check("sun drag dead zone is a strip", "view.bounds.height - 64" in preview_src)
     check("vertical wins over morph", "abs(translation.x) * 0.6" in preview_src)
 

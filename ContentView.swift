@@ -1540,7 +1540,8 @@ struct ContentView: View {
         if !isDraggingExposure {
             focusStartEV = exposureValue
             dragStartISO = isoValue
-            lastExposureHapticStep = halfStopDetent(exposureValue)
+            // MANUAL counts stops travelled from the grab; AUTO counts absolute EV.
+            lastExposureHapticStep = manual ? 0 : halfStopDetent(exposureValue)
             // No prior tap — park the sun reticle mid-finder.
             if !showFocusPoint, viewfinderSize.width > 1, viewfinderSize.height > 1 {
                 focusPoint = CGPoint(x: viewfinderSize.width / 2, y: viewfinderSize.height / 2)
@@ -1559,7 +1560,9 @@ struct ContentView: View {
                 isoValue = capped
                 camera.setISO(Float(capped))
             }
-            exposureDetentHaptic(stops)
+            // Detent off the gain that actually landed, so the finger stops
+            // ticking once ISO is pinned at either rail.
+            exposureDetentHaptic(log2(Float(capped) / Float(max(1, dragStartISO))))
             setScrubEdge(.iso, active: true, value: "\(capped)")
         } else {
             let newEV = max(camera.minExposure, min(camera.maxExposure, focusStartEV + stops))
