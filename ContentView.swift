@@ -465,11 +465,11 @@ struct ContentView: View {
         /// Approximate RefractiveGlassInfoBar height (pad + hist + readouts).
         static let infoBarHeight: CGFloat = 56
         /// Gap between histogram bottom and shutter deck top when collapsed.
-        static let histDeckGap: CGFloat = 4
+        static let histDeckGap: CGFloat = 6
         /// Expanded: keep histogram inside the viewfinder, clear of the deck below.
-        static let expandedHistogramBottomPad: CGFloat = 10
+        static let expandedHistogramBottomPad: CGFloat = 12
         /// Gap between viewfinder bottom and expanded shutter deck.
-        static let viewfinderToDeckGap: CGFloat = 2
+        static let viewfinderToDeckGap: CGFloat = 4
 
         static func bottomPad(safeBottom: CGFloat) -> CGFloat {
             max(safeBottom * 0.55, 8)
@@ -716,11 +716,11 @@ struct ContentView: View {
             let effectiveTopCollapsed = topCollapsed || isLandscape
             let effectiveBottomCollapsed = bottomCollapsed
 
-            // Layout — minimize top scrubber chrome so the finder eats the rest
-            // (Build 97: 34pt strip, tight gaps).
-            let topPanelHeight: CGFloat = effectiveTopCollapsed ? (isLandscape ? 36 : 40) : 110
-            let gaugeToViewfinderSpacing: CGFloat = effectiveTopCollapsed ? 1 : 2
-            let viewfinderToControlsSpacing: CGFloat = max(1, CollapsedChrome.viewfinderToDeckGap - 1)
+            // Top FOCUS/EV strip — 38pt with air so scrubbers don't crush the finder
+            // (Build 100 restores bezel + spacing after the 34pt crush).
+            let topPanelHeight: CGFloat = effectiveTopCollapsed ? (isLandscape ? 44 : 50) : 110
+            let gaugeToViewfinderSpacing: CGFloat = effectiveTopCollapsed ? 3 : 4
+            let viewfinderToControlsSpacing: CGFloat = max(2, CollapsedChrome.viewfinderToDeckGap - 2)
 
             ZStack(alignment: .top) {
                 // Non-Metal grip texture — stitchable vulcaniteTexture in this tree
@@ -937,7 +937,7 @@ struct ContentView: View {
                                 .gesture(bottomDeckSwipe)
                         }
                         .frame(maxWidth: .infinity)
-                        .padding(.top, 2)
+                        .padding(.top, 4)
                         .background { ControlsGrain() }
                         .transition(
                             .asymmetric(
@@ -2996,13 +2996,14 @@ struct NativeSnapScrubber<Value: Hashable>: View {
             let sideInset = max((geo.size.width - itemWidth) / 2, 0)
 
             ZStack {
+                // Outer dark stroke — black bezel around the face (same language as
+                // flash/WB). Build 95 flattened this away; restore it (Build 100).
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color.black)
+                RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    .fill(Color(hex: faceHex))
+                    .padding(instrumentFace ? 1.5 : 2)
                 if instrumentFace {
-                    // Top FOCUS / EV — true-black machined well (Build 84).
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(Color.black)
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(Color(hex: faceHex))
-                        .padding(1.5)
                     // Inner lip — machined recess catching a little light at the top.
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .stroke(
@@ -3018,35 +3019,22 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                             lineWidth: 0.8
                         )
                         .padding(2)
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
-                        .stroke(
-                            isScrolling
-                                ? DS.accent.opacity(0.55)
-                                : Color(hex: idleStrokeHex),
-                            lineWidth: isScrolling ? 0.9 : 0.5
-                        )
-                        .padding(1.5)
-                        .animation(ShutterMotion.scrub, value: isScrolling)
-                } else {
-                    // Bottom ISO / S — flash/WB language: one #242424 face + one
-                    // #444 stroke. No stacked black outer board (Build 95).
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(Color(hex: faceHex))
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .stroke(
-                            isScrolling
-                                ? DS.accent.opacity(0.55)
-                                : Color(hex: idleStrokeHex),
-                            lineWidth: isScrolling ? 0.9 : 0.5
-                        )
-                        .animation(ShutterMotion.scrub, value: isScrolling)
                 }
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .stroke(
+                        isScrolling
+                            ? DS.accent.opacity(0.55)
+                            : Color(hex: idleStrokeHex),
+                        lineWidth: isScrolling ? 0.9 : 0.5
+                    )
+                    .padding(instrumentFace ? 1.5 : 2)
+                    .animation(ShutterMotion.scrub, value: isScrolling)
 
                 // Soft LCD wash while scrubbing
                 if isScrolling {
-                    RoundedRectangle(cornerRadius: instrumentFace ? 4 : 5, style: .continuous)
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(DS.accent.opacity(0.07))
-                        .padding(instrumentFace ? 1.5 : 0)
+                        .padding(instrumentFace ? 1.5 : 2)
                         .allowsHitTesting(false)
                         .transition(.opacity)
                 }
