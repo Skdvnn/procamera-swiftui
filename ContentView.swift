@@ -1504,9 +1504,15 @@ struct ContentView: View {
         WidgetCenter.shared.reloadAllTimelines()
     }
 
-    /// One-time backfill so widgets aren't blank before the next shutter press.
+    /// Backfill so widgets aren't blank — or half-filled after a widget upgrade —
+    /// before the next shutter press.
     private func seedWidgetRecentsIfNeeded() {
-        guard ShutterAppGroup.loadRecentThumbnails().isEmpty else { return }
+        let shots = gallery.shots.count
+        let stocked = ShutterAppGroup.loadRecentThumbnails().count
+        let wanted = min(ShutterAppGroup.recentThumbnailSlots, shots)
+        // A stats total that disagrees with the gallery means the App Group
+        // predates the current widget layout (Build 83 grew 2 slots to 6).
+        guard stocked < wanted || ShutterAppGroup.loadStats().framesTotal != shots else { return }
         refreshWidgetRecents()
     }
 

@@ -394,7 +394,9 @@ struct ShutterLaunchView: View {
 
     private var mediumBody: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 7) {
+            // Spacing is tight on purpose: an SE medium widget only offers
+            // ~127pt of content height and this column stacks five rows.
+            VStack(alignment: .leading, spacing: 6) {
                 HStack(spacing: 4) {
                     Text("SHUTTER")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -464,7 +466,7 @@ struct ShutterLaunchView: View {
                 }
             }
         }
-        .padding(14)
+        .padding(12)
     }
 
     private var subhead: String {
@@ -658,7 +660,7 @@ struct ShutterLooksView: View {
     private var stats: ShutterStats { entry.stats }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: family == .systemLarge ? 10 : 8) {
+        VStack(alignment: .leading, spacing: family == .systemLarge ? 10 : 6) {
             HStack {
                 Text("LOOKS")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -741,7 +743,7 @@ struct ShutterLooksView: View {
                             rows: 1,
                             numbered: false
                         )
-                        .frame(width: 132, height: 40)
+                        .frame(width: 132, height: 34)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(
                                 stats.hasHistory
@@ -788,7 +790,7 @@ struct ShutterLooksView: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 8)
-        .frame(maxWidth: .infinity, minHeight: family == .systemLarge ? 38 : 34)
+        .frame(maxWidth: .infinity, minHeight: family == .systemLarge ? 38 : 28)
         .background(
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color.white.opacity(isArmed ? 0.13 : 0.08))

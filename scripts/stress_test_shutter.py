@@ -963,6 +963,138 @@ def test_project_sanity() -> None:
     check("landscape in INFOPLIST_KEY", "LandscapeLeft" in pbx)
 
 
+# ── Widget content + layout budget (Build 83) ───────────────────────────────
+
+# Smallest content rects we support (iPhone SE), in points.
+WIDGET_BOX = {"small": (155, 155), "medium": (329, 155), "large": (329, 345)}
+
+
+def text_line(pt: float) -> float:
+    """Rendered height of one line at `pt`, the ~1.25 leading SwiftUI uses."""
+    return round(pt * 1.25)
+
+
+def parse_int(chunk: str, pattern: str, name: str, fallback: int = 0) -> int:
+    m = re.search(pattern, chunk)
+    check(f"widget parses {name}", m is not None, pattern)
+    return int(m.group(1)) if m else fallback
+
+
+def test_widget_content() -> None:
+    print("\n== Widget content ==")
+    wsrc = (ROOT / "ShutterWidgets/ShutterWidgetsBundle.swift").read_text()
+    link = (ROOT / "ShutterDeepLink.swift").read_text()
+    content = (ROOT / "ContentView.swift").read_text()
+
+    # Data the widgets have to show something with
+    check("six recent slots", "recentThumbnailSlots = 6" in link)
+    check("push shifts every slot", "stride(from: last - 1, through: 0, by: -1)" in link)
+    for field in (
+        "framesToday", "framesWeek", "framesTotal", "keepers",
+        "rejects", "unculled", "topFilm", "week", "weekLabels",
+    ):
+        check(f"stats field {field}", f"var {field}" in link)
+    check("roll is 36 exposures", "rollLength = 36" in link)
+    check("week spans 7 days", "weekSpan = 7" in link)
+    check("week bucketed by day", "week[weekSpan - 1 - back] += 1" in link)
+    check("today is the last bucket", "stats.framesToday = stats.week.last" in link)
+    check("stats persist in app group", "func saveStats" in link and "func loadStats" in link)
+    check("gallery preview has numbers", "static var placeholder: ShutterStats" in link)
+    check(
+        "app rebuilds stats with recents",
+        "ShutterAppGroup.saveStats(" in content and "ShutterStats.compute(" in content,
+    )
+    # Without this an upgrade shows 2 frames in a 6-cell sheet and no numbers
+    # until the user happens to shoot again.
+    check(
+        "upgrade backfills the sheet",
+        "ShutterAppGroup.loadStats().framesTotal != shots" in content,
+    )
+
+    # Every family has to carry more than a thumbnail and a caption
+    check("contact sheet exists", "struct WidgetContactSheet" in wsrc)
+    check("week bars exist", "struct WidgetWeekBars" in wsrc)
+    check("stat tiles exist", "struct WidgetStatTile" in wsrc)
+
+    small = source_chunk(wsrc, "private var smallBody", "private var footerLine")
+    check("small shows a sparkline", "WidgetWeekBars" in small)
+    check("small shows today's count", "stats.framesToday" in small)
+
+    medium = source_chunk(wsrc, "private var mediumBody", "private var subhead")
+    check("medium shows week bars", "WidgetWeekBars" in medium)
+    check("medium shows a contact sheet", "WidgetContactSheet" in medium)
+    check("medium shows cull counts", "UNCULLED" in medium)
+
+    large = source_chunk(wsrc, "private var largeBody", "private var rollLine")
+    check("large shows a 3x2 sheet", "columns: 3, rows: 2" in large)
+    check("large shows labelled week", "WidgetWeekBars" in large)
+    check("large shows stat tiles", "WidgetStatTile" in large)
+
+    check("looks marks the armed look", "chip.raw == entry.armed" in wsrc)
+    check("inline accessory registered", "ShutterLockInlineWidget()" in wsrc)
+    check("lock circular is a roll gauge", "gaugeStyle(.accessoryCircularCapacity)" in wsrc)
+    check("lock rectangular shows the roll", "ShutterStats.rollLength)" in wsrc)
+
+    # Layout budget — these stacks are dense enough to clip on an SE
+    _, med_h = WIDGET_BOX["medium"]
+    _, large_h = WIDGET_BOX["large"]
+
+    pad = parse_int(medium, r"\.padding\((\d+)\)", "launch medium padding", 14)
+    gap = parse_int(medium, r"VStack\(alignment: \.leading, spacing: (\d+)\)", "launch medium gap", 6)
+    bars = parse_int(medium, r"barHeight: (\d+)", "launch medium bar height", 24)
+    sheet = parse_int(medium, r"\.frame\(width: 122, height: (\d+)\)", "launch medium sheet", 96)
+    left = (
+        text_line(10)                       # SHUTTER / roll count row
+        + bars + 3 + text_line(7)           # week bars + day letters
+        + text_line(11) + 1 + text_line(9)  # headline + subhead
+        + text_line(11) + 12                # SHOOT capsule
+        + gap * 4
+    )
+    right = sheet + 5 + text_line(8)
+    budget = med_h - pad * 2
+    check("launch medium fits SE", left <= budget, f"{left}pt in {budget}pt")
+    check("launch medium sheet fits", right <= budget, f"{right}pt in {budget}pt")
+
+    looks = source_chunk(wsrc, "struct ShutterLooksView", "// MARK: - Lock Screen")
+    lpad = parse_int(looks, r"\.padding\((\d+)\)", "looks padding", 12)
+    lgap = parse_int(looks, r"spacing: family == \.systemLarge \? \d+ : (\d+)", "looks medium gap", 6)
+    chip = parse_int(looks, r"minHeight: family == \.systemLarge \? \d+ : (\d+)", "looks chip", 30)
+    strip = parse_int(looks, r"\.frame\(width: 132, height: (\d+)\)", "looks strip", 34)
+    looks_medium = text_line(10) + (chip * 2 + 8) + (strip + 2) + lgap * 2
+    check(
+        "looks medium fits SE",
+        looks_medium <= med_h - lpad * 2,
+        f"{looks_medium}pt in {med_h - lpad * 2}pt",
+    )
+
+    lchip = parse_int(looks, r"minHeight: family == \.systemLarge \? (\d+)", "looks large chip", 38)
+    lsheet = parse_int(looks, r"\.frame\(height: (\d+)\)", "looks large sheet", 132)
+    lbars = parse_int(looks, r"barHeight: (\d+)", "looks large bars", 22)
+    looks_large = (
+        text_line(10)
+        + (lchip * 2 + 8)
+        + (text_line(10) + 7 + lsheet + 7 + lbars + 3 + text_line(7) + 2)
+        + 10 * 2
+    )
+    check(
+        "looks large fits SE",
+        looks_large <= large_h - lpad * 2,
+        f"{looks_large}pt in {large_h - lpad * 2}pt",
+    )
+
+    lgpad = parse_int(large, r"\.padding\((\d+)\)", "launch large padding", 16)
+    lggap = parse_int(large, r"VStack\(alignment: \.leading, spacing: (\d+)\)", "launch large gap", 9)
+    lgbars = parse_int(large, r"barHeight: (\d+)", "launch large bars", 28)
+    header = max(
+        text_line(11) + text_line(19) + text_line(11) + text_line(9) + 9,
+        text_line(26) + 3 + text_line(9) + 18,
+    )
+    footer = max(lgbars + 3 + text_line(7), text_line(15) + 1 + text_line(7) + 5 + text_line(8))
+    sheet_room = (large_h - lgpad * 2) - lggap * 3 - header - footer
+    # Below ~110pt the 3x2 sheet stops reading as photographs.
+    check("large sheet keeps its room", sheet_room >= 110, f"{sheet_room}pt for 2 rows")
+
+
 def main() -> int:
     print("Shutter stress suite")
     test_deeplinks()
@@ -971,6 +1103,7 @@ def main() -> int:
     test_source_guards()
     test_landscape_layout()
     test_natural_truth()
+    test_widget_content()
     test_project_sanity()
 
     # Also run layout regression

@@ -8,7 +8,8 @@
 - [x] Hardware shutter via `AVCaptureEventInteraction` (Camera Control / volume events)
 - [x] Volume-button shutter (phase 2) kept
 - [x] `ShutterCameraCaptureIntent` + `ShutterCaptureContext` (iOS 18 Camera Control / Lock Screen)
-- [x] Widget extension: Home small/medium launch, Looks grid, Lock Screen circular + rectangular
+- [x] Widget extension: Home small/medium/large launch, Looks grid, Lock Screen circular + rectangular + inline
+- [x] Widget content (build 83): six-frame contact sheet, seven-day frame histogram, keep/reject/unculled counts, top stock, 36-exposure roll gauge
 - [x] `WidgetCenter.reloadAllTimelines()` after look/context sync
 - [x] Control Center control widget (iOS 18)
 - [x] Locked Camera Capture extension (iOS 18 Lock Screen / Action Button / Control)
@@ -24,6 +25,9 @@
 2. Archive a **Release** / TestFlight build (Debug entitlements are intentionally empty — Cmd+R will not exercise widgets or Lock capture).
 3. Settings → Control Center → add **Shutter Cam**; Action Button / Camera Control can target the control.
 4. Long-press Home Screen → Widgets → Shutter Cam / Shutter Looks.
+   The app rewrites the App Group sheet + stats on every capture and cull, and
+   backfills on launch when the stored totals disagree with the gallery, so an
+   upgrade fills the new cells without waiting for the next shutter press.
 5. Shortcuts app → search Shutter Cam intents (Open Field Book, Apply Look film picker, Timer enum).
 
 ## Still not 1:1 with Camera.app (honest gaps)
