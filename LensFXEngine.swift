@@ -256,6 +256,18 @@ final class LensFXEngine {
         touchLock.unlock()
     }
 
+    /// Drop the morph field cache under memory pressure / background.
+    /// Keeps the small shared liquid noise texture (cheap to keep, expensive to rebuild).
+    func purgePreviewCaches() {
+        lock.lock()
+        morphCache = nil
+        morphCacheKey = .min
+        morphCacheWidth = 0
+        morphCacheHeight = 0
+        lock.unlock()
+        clearStickyTouch()
+    }
+
     /// Exponential settle after finger-up so the warp eases out naturally.
     func decayTouchIfNeeded(now: CFAbsoluteTime = CFAbsoluteTimeGetCurrent()) {
         touchLock.lock()

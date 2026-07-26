@@ -89,8 +89,12 @@ class CameraManager: NSObject, ObservableObject {
     private var livePreviewActive = false
     /// createCGImage failures while filtered — fall back to clean AV preview.
     private var livePreviewFailStreak = 0
-    /// Cap live FX preview — heavy FX go slower (build 42: slightly lower for headroom).
-    private let previewFrameInterval: CFAbsoluteTime = 1.0 / 12.0
+    /// Cap live FX preview — heavy FX go slower. Build 91 drops the rate further
+    /// so createCGImage at preview size can't jetsam the process under Debug.
+    private let previewFrameInterval: CFAbsoluteTime = 1.0 / 10.0
+    /// STACK LE — don't materialize every sensor frame (was a jetsam hot path).
+    private var lastLEAccumulateTime: CFAbsoluteTime = 0
+    private let leAccumulateInterval: CFAbsoluteTime = 1.0 / 10.0
 
     // Live histogram — published on HistogramBus (not here) so bin updates
     // don't invalidate the whole finder. Sampled on a utility queue.
@@ -180,12 +184,74 @@ class CameraManager: NSObject, ObservableObject {
         super.init()
         syncPipelineSelection()
         installSessionObservers()
+        installMemoryObservers()
     }
 
     deinit {
         for obs in sessionObservers {
             NotificationCenter.default.removeObserver(obs)
         }
+    }
+
+    /// Background + memory-warning observers — Debug jetsams without these.
+    private func installMemoryObservers() {
+        let center = NotificationCenter.default
+        let bg = center.addObserver(
+            forName: UIApplication.didEnterBackgroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleDidEnterBackground()
+        }
+        let fg = center.addObserver(
+            forName: UIApplication.willEnterForegroundNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleWillEnterForeground()
+        }
+        let warn = center.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.purgeMemoryPressure(dropSession: false)
+        }
+        sessionObservers.append(contentsOf: [bg, fg, warn])
+    }
+
+    /// Drop live Metal frames + FX caches. Optionally stop the capture session
+    /// so background jetsam can't catch us mid-createCGImage.
+    func purgeMemoryPressure(dropSession: Bool) {
+        clearLivePreviewForReconfiguration()
+        LensFXEngine.shared.purgePreviewCaches()
+        photoStateLock.lock()
+        let accumulating = isAccumulatingLongExposure || isFinalizingLongExposure
+        if !accumulating {
+            longExposureAccumulator = nil
+        }
+        // Pending RAW is huge — only drop if no photo handler is waiting on it.
+        if photoCompletionHandler == nil, bakeTimeoutCompletion == nil {
+            pendingRawData = nil
+        }
+        photoStateLock.unlock()
+        if dropSession {
+            stopSession()
+        }
+    }
+
+    private func handleDidEnterBackground() {
+        // Don't tear down mid-capture — just stop feeding Metal.
+        if capturePipelineBusy(includeUILongExposure: true) {
+            purgeMemoryPressure(dropSession: false)
+            return
+        }
+        purgeMemoryPressure(dropSession: true)
+    }
+
+    private func handleWillEnterForeground() {
+        guard isSessionConfigured, !isSessionRunning else { return }
+        startSession()
     }
 
     /// True while still bake / photo handler / HW or STACK LE owns the pipeline.
@@ -890,6 +956,7 @@ class CameraManager: NSObject, ObservableObject {
         longExposureStartTime = CFAbsoluteTimeGetCurrent()
         longExposureTargetDuration = max(targetDuration, 0.1)
         lastLEProgressPublish = 0
+        lastLEAccumulateTime = 0
         lastLEProgressValue = -1
 
         // STACK watchdog: hop off main — finalize path may syncCI.
@@ -2182,9 +2249,10 @@ class CameraManager: NSObject, ObservableObject {
         return image.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
     }
 
-    // Cap live preview frames; heavy FX use a smaller buffer.
+    // Cap live preview frames hard — each due frame still createCGImages.
+    // Build 91: 480/540 (was 640/720) so Debug + liquid FX stays under jetsam.
     private func downscaledForPreview(_ image: CIImage, heavyFX: Bool) -> CIImage {
-        downscaled(image, longEdge: heavyFX ? 640 : 720)
+        downscaled(image, longEdge: heavyFX ? 480 : 540)
     }
 
     private func isHeavyPreviewFX(_ fx: LensFXMode) -> Bool {
@@ -2195,7 +2263,8 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     private func previewInterval(for fx: LensFXMode, film: FilmFilter) -> CFAbsoluteTime {
-        if isHeavyPreviewFX(fx) { return 1.0 / 8.0 }
+        // Heavy liquid/chrome — 6 fps is enough to read the warp; 12 fps jetsams.
+        if isHeavyPreviewFX(fx) { return 1.0 / 6.0 }
         if film != .none || fx != .none { return previewFrameInterval }
         return previewFrameInterval
     }
@@ -2891,11 +2960,25 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             return
         }
 
-        // Materialize every frame — CVPixelBuffer is recycled when this callback returns.
-        // Autoreleasepool keeps intermediate CIImage / CGImage allocations from piling up
-        // across dozens of frames (GPU textures and CF objects are autorelease-heavy).
+        // Cap STACK ingest — full-rate double createCGImage at 1280 was a jetsam
+        // hot path under Debug (Build 91). ~10 fps @ 960 is plenty for the average.
+        guard now - lastLEAccumulateTime >= leAccumulateInterval else {
+            let progress = min(1.0, Float(elapsed / longExposureTargetDuration))
+            if progress - lastLEProgressValue >= 0.04 || now - lastLEProgressPublish >= 0.08 {
+                lastLEProgressPublish = now
+                lastLEProgressValue = progress
+                DispatchQueue.main.async {
+                    self.longExposureProgress = progress
+                }
+            }
+            return
+        }
+        lastLEAccumulateTime = now
+
+        // Materialize — CVPixelBuffer is recycled when this callback returns.
+        // Autoreleasepool keeps intermediate CIImage / CGImage allocations from piling up.
         autoreleasepool {
-            let accumulationFrame = downscaled(ciImage, longEdge: 1280)
+            let accumulationFrame = downscaled(ciImage, longEdge: 960)
             guard let ownedCG = ShutterRender.syncCI({
                 ciContext.createCGImage(accumulationFrame, from: accumulationFrame.extent)
             }) else {

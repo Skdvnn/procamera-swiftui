@@ -830,6 +830,16 @@ def test_source_guards() -> None:
         "morphTouchEnabled: !isLocked" in content and "!showFocusPoint" in content,
     )
 
+    # Build 91 — jetsam guards (Debug was dying under liquid FX createCGImage)
+    check("preview downsample 540/480", "heavyFX ? 480 : 540" in cam)
+    check("heavy FX preview 6fps", "1.0 / 6.0" in cam)
+    check("LE accumulate throttle", "leAccumulateInterval" in cam and "longEdge: 960" in cam)
+    check("memory pressure purge", "func purgeMemoryPressure" in cam)
+    check("background stops session", "handleDidEnterBackground" in cam)
+    check("LensFX purge caches", "func purgePreviewCaches" in (ROOT / "LensFXEngine.swift").read_text())
+    check("Metal drawable capped", "maxEdge: CGFloat = 1280" in preview)
+
+
     # Build 72 — DSLR settings + deck spacing
     check("dslr toggle row type", "struct DSLRToggleRow" in (ROOT / "ShutterSettings.swift").read_text())
     settings_src = (ROOT / "ShutterSettings.swift").read_text()
