@@ -126,12 +126,36 @@ enum PreviewBufferRotation: Equatable {
     case rotateRight    // portrait
     case rotateLeft     // portraitUpsideDown
 
-    static func from(interfaceOrientation: UIInterfaceOrientation) -> PreviewBufferRotation {
+    /// - Parameter front: Front VDO is mirrored on a landscape sensor buffer.
+    ///   That mirror inverts the upright mapping — without the opposite
+    ///   rotation, selfie Metal/LE frames read upside-down (Build 87).
+    static func from(
+        interfaceOrientation: UIInterfaceOrientation,
+        front: Bool = false
+    ) -> PreviewBufferRotation {
+        if front {
+            switch interfaceOrientation {
+            case .landscapeRight: return .rotate180
+            case .landscapeLeft: return .identity
+            case .portraitUpsideDown: return .rotateRight
+            default: return .rotateLeft
+            }
+        }
         switch interfaceOrientation {
         case .landscapeRight: return .identity
         case .landscapeLeft: return .rotate180
         case .portraitUpsideDown: return .rotateLeft
         default: return .rotateRight
+        }
+    }
+
+    /// Same transform `FilteredCameraPreview` applies before drawing.
+    func applied(to image: CIImage) -> CIImage {
+        switch self {
+        case .identity: return image
+        case .rotate180: return image.oriented(.down)
+        case .rotateRight: return image.oriented(.right)
+        case .rotateLeft: return image.oriented(.left)
         }
     }
 }

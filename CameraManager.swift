@@ -1009,22 +1009,11 @@ class CameraManager: NSObject, ObservableObject {
     private func normalizeAccumulator() -> UIImage? {
         guard var accumulator = longExposureAccumulator, longExposureFrameCount > 0 else { return nil }
 
-        // Video buffers are sensor-native; match Metal preview upright mapping.
-        switch longExposureInterfaceOrientation {
-        case .portrait, .unknown:
-            accumulator = accumulator.oriented(.right)
-        case .portraitUpsideDown:
-            accumulator = accumulator.oriented(.left)
-        case .landscapeLeft:
-            accumulator = accumulator.oriented(.down)
-        case .landscapeRight:
-            break
-        @unknown default:
-            accumulator = accumulator.oriented(.right)
-        }
-        if longExposureWasFront {
-            accumulator = accumulator.oriented(.upMirrored)
-        }
+        // Same upright mapping as Metal preview — front VDO mirror inverts it.
+        accumulator = PreviewBufferRotation.from(
+            interfaceOrientation: longExposureInterfaceOrientation,
+            front: longExposureWasFront
+        ).applied(to: accumulator)
 
         guard let cgImage = ShutterRender.syncCI({
             ciContext.createCGImage(accumulator, from: accumulator.extent)

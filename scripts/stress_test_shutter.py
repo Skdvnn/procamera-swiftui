@@ -467,7 +467,22 @@ def test_source_guards() -> None:
         "captureDevicePointConverted" in preview
         and "devicePoint:" in content,
     )
-    check("STACK LE upright", "longExposureInterfaceOrientation" in cam and "oriented(.right)" in cam)
+    check(
+        "STACK LE upright",
+        "longExposureInterfaceOrientation" in cam
+        and "PreviewBufferRotation.from(" in cam
+        and "longExposureWasFront" in cam,
+    )
+    check(
+        "front upright mapping inverted",
+        "front: Bool = false" in (ROOT / "LensFXEngine.swift").read_text()
+        and "return .rotateLeft" in (ROOT / "LensFXEngine.swift").read_text(),
+    )
+    check(
+        "Metal preview passes front",
+        "front: front" in (ROOT / "FilteredCameraPreview.swift").read_text(),
+    )
+    check("flip refreshes buffer rotation", "syncPreviewBufferRotation" in content)
     check("flip reapplies lock/WB", "reapplyLockWhiteBalanceMacro" in cam)
     check("video mirroring front", "applyVideoMirroring" in cam)
     check("flash resolved to supported", "resolvedFlashMode" in cam)
@@ -561,7 +576,12 @@ def test_source_guards() -> None:
     check("scrubber white majors only", "yellow is reserved for the center indicator" in content)
     check("scrubber value spring", "scaleEffect(isScrolling ? 1.12" in content)
     check("shutter no press brightness", "No brightness shift" in content)
-    check("shutter matte collar", "Matte dark steel" in content or "matte steel, not chrome" in content)
+    check(
+        "shutter matte collar",
+        "brushed mid steel" in content
+        or "Matte dark steel" in content
+        or "matte steel, not chrome" in content,
+    )
     check("metal shader no cool blue", "Neutral steel cast" in (ROOT / "Shaders.metal").read_text())
     # Build 55 — hard film crash fix
     check("no vulcanite Metal on camera", "LeicaVulcaniteTexture(scale: 20" not in content)
@@ -682,7 +702,12 @@ def test_source_guards() -> None:
     check("burst default off", 'holdBurstEnabled = false' in content)
     check("shutter curtain state", "showShutterCurtain" in content)
     check("no cyan burstAccent", "0.55, green: 0.82, blue: 1.0" not in content)
-    check("compact scrubbers no outer box", "Scrubbers only — no extra outer container" in (ROOT / "AnalogGaugeView.swift").read_text())
+    check(
+        "compact scrubbers no outer box",
+        "Compact strip — shorter than the 40pt ISO" in (ROOT / "AnalogGaugeView.swift").read_text()
+        or "Same 40pt instrument height as the ISO" in (ROOT / "AnalogGaugeView.swift").read_text()
+        or "Scrubbers only — no extra outer container" in (ROOT / "AnalogGaugeView.swift").read_text(),
+    )
     check("deck swipe verticalBias", "verticalBias:" in content)
     check("no format on compact deck", "FormatTogglePill" not in content[content.find("func bottomCompactDeck"):content.find("func bottomCompactDeck")+700])
     check("format on expanded deck", "FormatTogglePill" in content[content.find("ROW 3"):content.find("ROW 3")+2200])
@@ -698,8 +723,14 @@ def test_source_guards() -> None:
     # Build 67/73/78 — real shutter 3D press-in (inner face only; outer collar solid; no shrink)
     check("shutter pressed env key", "ShutterPressedKey" in content)
     check("shutter press style sets env", ".environment(\\shutterPressed" in content or ".environment(\\.shutterPressed" in content)
-    check("shutter fixed dark lip", "Fixed dark lip" in content)
-    check("shutter well darkens on press", "isPressed ? 0.95 : 0.82" in content)
+    check(
+        "shutter fixed dark lip",
+        "Inner lip stepping down into the well" in content or "Fixed dark lip" in content,
+    )
+    check(
+        "shutter well darkens on press",
+        "isPressed ? 0.92 : 0.78" in content or "isPressed ? 0.95 : 0.82" in content,
+    )
     check("shutter face sink offset", "offset(y: isPressed ? sink : -proud)" in content)
     check("shutter face clipped to well", ".clipShape(Circle())" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
     check("shutter constant face fill", "Face fill is CONSTANT" in content)
@@ -724,7 +755,10 @@ def test_source_guards() -> None:
     check("nikon lcd yellow picker", "lcdYellow" in overlay and "0.85, blue: 0.35" in overlay)
     check("nikon picker tight rows", "heightForRowAt" in overlay and "return 28" in overlay)
     check("nikon picker iso badge", "isoBadge(for" in overlay)
-    check("settings dslr menu", "DSLRToggleRow" in settings and "presentationBackground(.ultraThinMaterial)" in settings)
+    check(
+        "settings dslr menu",
+        "DSLRToggleRow" in settings and "SettingsLiquidGlassBackground" in settings,
+    )
     check("settings no List toggles", "Toggle(" not in settings and "List {" not in settings)
     check("cull amber matches DS.accent", "1.0, green: 0.85, blue: 0.35" in cull)
 
@@ -748,6 +782,16 @@ def test_source_guards() -> None:
     gauge = (ROOT / "AnalogGaugeView.swift").read_text()
     check("curved param edge readout", "struct CurvedParamEdgeReadout" in aids)
     check("edge param curve shape", "struct EdgeParamCurve" in aids)
+    # Numbers clear the bulge; arc carries ticks / dual stroke / end caps (Build 84/85).
+    check("arch detail canvas", "struct EdgeParamArcDetail" in aids)
+    check("arch shared geometry", "struct EdgeParamArcGeometry" in aids)
+    check("arch half-stop ticks", "Half-stop ticks" in aids and "tickCount = 9" in aids)
+    check("arch end caps", "End caps" in aids)
+    check("arch numbers clear the curve", "valueClearance" in aids and "arcColumn" in aids)
+    check(
+        "arch value sits left of column",
+        "valueTrailing = inset + arcColumn + valueClearance" in aids,
+    )
     check("scrub edge kind enum", "enum ScrubEdgeKind" in content)
     check("scrubber moving tick phase", "tickPhase" in content and "Moving tick strip" in content)
     check("scrubber onActiveChanged", "onActiveChanged:" in content[content.find("struct NativeSnapScrubber"):content.find("struct ISOScrubberHorizontal")])
@@ -770,11 +814,33 @@ def test_source_guards() -> None:
         and "manual ? 0 : halfStopDetent(exposureValue)" in content,
     )
     check("sun drag dead zone is a strip", "view.bounds.height - 64" in preview_src)
-    check("vertical wins over morph", "abs(translation.x) * 0.6" in preview_src)
+    check("vertical dominance threshold", "abs(translation.x) * 0.6" in preview_src)
+    # Liquid FX and sun-drag share the finder — split by zone, not only by axis.
+    check("sun drag zone constant", "sunDragZoneMinX" in preview_src)
+    check("sun drag trailing strip", "0.58" in preview_src and "startedInSunZone" in preview_src)
+    check("morphTouchEnabled wired", "morphTouchEnabled:" in content)
+    check(
+        "morph yields while reticle up",
+        "morphTouchEnabled: !isLocked" in content and "!showFocusPoint" in content,
+    )
 
     # Build 72 — DSLR settings + deck spacing
     check("dslr toggle row type", "struct DSLRToggleRow" in (ROOT / "ShutterSettings.swift").read_text())
-    check("settings frosted glass bg", "presentationBackground(.ultraThinMaterial)" in (ROOT / "ShutterSettings.swift").read_text())
+    settings_src = (ROOT / "ShutterSettings.swift").read_text()
+    check("settings dark liquid glass bg", "SettingsLiquidGlassBackground" in settings_src)
+    check("settings forced dark scheme", "preferredColorScheme(.dark)" in settings_src)
+    check("settings well detailing", "struct SettingsDSLRWell" in settings_src)
+    check("settings corner screws", "Slot mark" in settings_src)
+    # Compact FOCUS/EV — shorter than the 40pt ISO row, same black instrument face
+    check("compact scrubbers 34pt", ".frame(height: 34)" in (ROOT / "AnalogGaugeView.swift").read_text())
+    check("compact level matches scrubber height", "compact ? 34 : 36" in aids)
+    check("compact top panel clears strip", "isLandscape ? 40 : 46" in content)
+    check("snap scrubber instrument face", 'Color(hex: "0a0a0a")' in content[content.find("struct NativeSnapScrubber"):content.find("struct ISOScrubberHorizontal")])
+    # Shutter collar lifted out of the deck (Build 84)
+    check(
+        "shutter collar mid steel",
+        "Color(red: 0.42, green: 0.43, blue: 0.45)" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")],
+    )
     check("settings cycle format row", "DSLRCycleRow" in (ROOT / "ShutterSettings.swift").read_text())
 
     # Build 73 — level under top EV, shutter deep push-in, film/FX long-press clear
@@ -831,7 +897,7 @@ def test_source_guards() -> None:
 
     # Build 77/78 — level is a coherent companion to the EV instrument; ticks animate + useful.
     check("full level matches EV width", "compact ? 52 : 120" in aids)
-    check("full level matches EV height", "compact ? 28 : 36" in aids)
+    check("full level matches EV height", "compact ? 34 : 36" in aids)
     check("level 13-mark dial rhythm", "tickScale(count: 13" in aids and "degreeMarks" in aids)
     check("level mechanical center pointer", "Mechanical center pointer matches the EV triangle" in aids)
     check("level precision readout", 'String(format: "%+.1f°", roll)' in aids)
@@ -880,7 +946,7 @@ def test_landscape_layout() -> None:
     # iPhone landscape roughly 844×390
     W, H = 844.0, 390.0
     safe_top, safe_bottom = 0.0, 21.0
-    top_panel = 44.0
+    top_panel = 40.0
     deck_h = 80.0  # landscapeDeckHeight
     fade_h = 48.0
     info_h = 48.0

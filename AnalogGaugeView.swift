@@ -596,8 +596,9 @@ struct AnalogDisplayPanel: View {
     var body: some View {
         Group {
             if compact {
-                // Scrubbers only — no extra outer container (Build 65).
-                // Optional level between FOCUS/EV (Build 73).
+                // Compact strip — shorter than the 40pt ISO/S scrubbers so the
+                // top chrome stays light (Build 88). Still the black instrument
+                // face from Build 84, just less tall.
                 HStack(alignment: .center, spacing: 4) {
                     CompactFocusScrubber(
                         focusPosition: $focusPosition,
@@ -606,6 +607,7 @@ struct AnalogDisplayPanel: View {
                         onActiveChanged: onFocusScrubActive
                     )
                     .frame(maxWidth: .infinity)
+                    .frame(height: 34)
 
                     if showLevel {
                         InfoBarMetalLevel(compact: true)
@@ -617,6 +619,7 @@ struct AnalogDisplayPanel: View {
                         onActiveChanged: onEVScrubActive
                     )
                     .frame(maxWidth: .infinity)
+                    .frame(height: 34)
                 }
             } else {
                 ZStack {
