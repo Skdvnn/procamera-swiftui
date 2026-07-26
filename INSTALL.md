@@ -8,11 +8,15 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 90 phone test pack (classic bottom scrubbers + muted shutter ring):**
+**Build 91 phone test pack (memory jetsam guards):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **90**.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **91**.
+
+Build 91: live FX preview downscales harder, Metal drawable is capped,
+STACK LE is throttled, and background / memory-warning purges drop the
+filtered frames so Debug stops jetsamming under liquid FX.
 Bottom ISO/S scrubbers are back on the classic `#242424` face with yellow
 major ticks; top FOCUS / level / EV stay on the black instrument strip at
 38pt; shutter collar is muted dark steel again.

@@ -508,9 +508,20 @@ class FilteredPreviewView: UIView {
         guard let metalView else { return }
         metalView.frame = bounds
         // Explicit drawable size — first FX toggle used to hit a 0×0 layer.
+        // Cap at 2× and 1280 long edge so a Pro retina drawable (~3k) doesn't
+        // sit beside the createCGImage preview bitmaps (Build 91 jetsam).
         if bounds.width > 1, bounds.height > 1 {
-            let scale = window?.screen.scale ?? UIScreen.main.scale
-            let size = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+            let scale = min(window?.screen.scale ?? UIScreen.main.scale, 2.0)
+            var w = bounds.width * scale
+            var h = bounds.height * scale
+            let longest = max(w, h)
+            let maxEdge: CGFloat = 1280
+            if longest > maxEdge {
+                let s = maxEdge / longest
+                w *= s
+                h *= s
+            }
+            let size = CGSize(width: w.rounded(.down), height: h.rounded(.down))
             if metalView.drawableSize != size {
                 metalView.drawableSize = size
             }
