@@ -445,8 +445,8 @@ struct ContentView: View {
     /// Separate UIWindow + snapshot session — no Bindings into this view.
     /// Applying looks happens only after the overlay window is torn down.
     private func toggleChromePicker(_ menu: ChromePickerMenu) {
-        // Park live Metal before the overlay window appears.
-        camera.livePreview.push(nil)
+        // Freeze live Metal processing for the whole time the picker is up.
+        camera.setChromePickerPreviewSuspended(true)
         ChromePickerGate.toggle(
             menu,
             filmFilter: filmFilter,
@@ -456,14 +456,22 @@ struct ContentView: View {
             compactChrome: finderIsLandscape,
             onCommit: { commit in
                 applyChromePickerCommit(commit)
+            },
+            onTeardown: {
+                camera.setChromePickerPreviewSuspended(false)
             }
         )
     }
 
     private func applyChromePickerCommit(_ commit: ChromePickerCommit) {
-        filmFilter = commit.filmFilter
-        lensFX = commit.lensFX
-        focusPeaking = commit.focusPeaking
+        camera.setChromePickerPreviewSuspended(false)
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) {
+            filmFilter = commit.filmFilter
+            lensFX = commit.lensFX
+            focusPeaking = commit.focusPeaking
+        }
         camera.selectedFilmFilter = commit.filmFilter
         camera.selectedLensFX = commit.lensFX
         if !commit.lensFX.isTouchReactive {

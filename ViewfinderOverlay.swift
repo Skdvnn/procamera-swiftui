@@ -12,12 +12,18 @@ private struct VFHaptics {
 
 enum CachedGrainTexture {
     private static var cache: [Int: UIImage] = [:]
+    private static var order: [Int] = []
+    private static let maxEntries = 12
     private static let lock = NSLock()
 
     static func image(for size: CGSize, density: CGFloat, seed: UInt64, darkSpeckDensity: CGFloat = 0) -> UIImage {
         let w = max(64, (Int(size.width) / 64) * 64)
         let h = max(64, (Int(size.height) / 64) * 64)
-        let key = (w &<< 16) ^ h ^ Int(density * 10_000) ^ Int(seed & 0xFFFF)
+        let key = (w &<< 20)
+            ^ (h &<< 4)
+            ^ Int(density * 100_000)
+            ^ (Int(darkSpeckDensity * 100_000) &<< 8)
+            ^ Int(seed & 0xFFFF)
         lock.lock()
         if let hit = cache[key] {
             lock.unlock()
@@ -25,7 +31,10 @@ enum CachedGrainTexture {
         }
         lock.unlock()
 
-        let renderer = UIGraphicsImageRenderer(size: CGSize(width: w, height: h))
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = false
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: w, height: h), format: format)
         let img = renderer.image { ctx in
             UIColor.clear.setFill()
             ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
@@ -52,6 +61,10 @@ enum CachedGrainTexture {
         }
         lock.lock()
         cache[key] = img
+        order.append(key)
+        while order.count > maxEntries {
+            cache.removeValue(forKey: order.removeFirst())
+        }
         lock.unlock()
         return img
     }
@@ -137,14 +150,19 @@ enum ChromePickerGate {
     private static var currentMenu: ChromePickerMenu?
     private static var session: ChromePickerSession?
     private static var onCommit: ((ChromePickerCommit) -> Void)?
+    private static var onTeardown: (() -> Void)?
     private static var filmAppliedDirectly = false
     private static var pendingSaveLook = false
+    /// Invalidates a deferred present if dismiss raced ahead of it.
+    private static var presentationToken = UUID()
 
     static var isPresented: Bool { overlayWindow != nil }
 
     static func dismiss(commit: Bool = true) {
+        presentationToken = UUID()
         let sess = session
         let commitHandler = onCommit
+        let teardown = onTeardown
         let applied = filmAppliedDirectly
         let save = pendingSaveLook
         let menu = currentMenu
@@ -155,8 +173,11 @@ enum ChromePickerGate {
         session = nil
         currentMenu = nil
         onCommit = nil
+        onTeardown = nil
         filmAppliedDirectly = false
         pendingSaveLook = false
+
+        teardown?()
 
         guard commit, let sess, let commitHandler else { return }
         let result = ChromePickerCommit(
@@ -180,7 +201,8 @@ enum ChromePickerGate {
         focusPeaking: Bool,
         shootMode: ShootMode?,
         compactChrome: Bool,
-        onCommit: @escaping (ChromePickerCommit) -> Void
+        onCommit: @escaping (ChromePickerCommit) -> Void,
+        onTeardown: (() -> Void)? = nil
     ) {
         if currentMenu == menu, overlayWindow != nil {
             dismiss(commit: true)
@@ -189,9 +211,15 @@ enum ChromePickerGate {
         if overlayWindow != nil {
             dismiss(commit: true)
         }
+        let token = UUID()
+        presentationToken = token
         // Defer off the button's touch transaction — presenting mid-touch
         // next to Metal was still crashing on device.
         DispatchQueue.main.async {
+            guard presentationToken == token else {
+                onTeardown?()
+                return
+            }
             present(
                 menu,
                 filmFilter: filmFilter,
@@ -199,7 +227,8 @@ enum ChromePickerGate {
                 focusPeaking: focusPeaking,
                 shootMode: shootMode,
                 compactChrome: compactChrome,
-                onCommit: onCommit
+                onCommit: onCommit,
+                onTeardown: onTeardown
             )
         }
     }
@@ -211,9 +240,13 @@ enum ChromePickerGate {
         focusPeaking: Bool,
         shootMode: ShootMode?,
         compactChrome: Bool,
-        onCommit: @escaping (ChromePickerCommit) -> Void
+        onCommit: @escaping (ChromePickerCommit) -> Void,
+        onTeardown: (() -> Void)?
     ) {
-        guard let scene = activeWindowScene() else { return }
+        guard let scene = activeWindowScene() else {
+            onTeardown?()
+            return
+        }
 
         let sess = ChromePickerSession(
             menu: menu,
@@ -226,6 +259,7 @@ enum ChromePickerGate {
         session = sess
         currentMenu = menu
         self.onCommit = onCommit
+        self.onTeardown = onTeardown
         filmAppliedDirectly = false
         pendingSaveLook = false
 
@@ -236,6 +270,7 @@ enum ChromePickerGate {
             onApplyShootMode: { mode in
                 sess.shootMode = mode
                 // Scene presets also imply dials — commit closes so ContentView can apply.
+                // Do NOT also flip isPresented — that double-dismissed.
                 dismiss(commit: true)
             },
             onDismiss: { dismiss(commit: true) }
@@ -256,7 +291,8 @@ enum ChromePickerGate {
 
     private static func activeWindowScene() -> UIWindowScene? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        return scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
+        // Foreground-active only — never attach an orphan picker to a background scene.
+        return scenes.first(where: { $0.activationState == .foregroundActive })
     }
 }
 
@@ -281,13 +317,11 @@ struct ViewfinderOverlay: View {
         ZStack(alignment: .topTrailing) {
             GeometryReader { geo in
                 ZStack {
-                    if filmFilter != .none {
-                        FilmGrainOverlay()
-                            .opacity(0.32)
-                    }
-                    if lensFX == .vhs {
-                        ScanlineShaderOverlay()
-                    }
+                    // Keep overlays mounted — insert/remove next to MTKView was risky.
+                    FilmGrainOverlay()
+                        .opacity(filmFilter != .none ? 0.32 : 0)
+                    ScanlineShaderOverlay()
+                        .opacity(lensFX == .vhs ? 1 : 0)
                     CenterFocusBrackets()
                         .position(x: geo.size.width / 2, y: geo.size.height / 2)
                     if showGrid {
@@ -436,32 +470,37 @@ struct AspectRatioMask: View {
     let size: CGSize
 
     var body: some View {
+        // First layout can report 0×0 — never divide by zero next to Metal.
+        guard size.width > 1, size.height > 1 else {
+            return AnyView(EmptyView())
+        }
         let targetRatio: CGFloat = mode.framedAspect(fitting: size) ?? (size.width / size.height)
-
         let currentRatio = size.width / size.height
 
-        GeometryReader { geo in
-            if targetRatio > currentRatio {
-                // Letterbox (bars top/bottom)
-                let newHeight = size.width / targetRatio
-                let barHeight = (size.height - newHeight) / 2
-                VStack(spacing: 0) {
-                    Rectangle().fill(Color.black.opacity(0.7)).frame(height: barHeight)
-                    Spacer()
-                    Rectangle().fill(Color.black.opacity(0.7)).frame(height: barHeight)
-                }
-            } else {
-                // Pillarbox (bars left/right)
-                let newWidth = size.height * targetRatio
-                let barWidth = (size.width - newWidth) / 2
-                HStack(spacing: 0) {
-                    Rectangle().fill(Color.black.opacity(0.7)).frame(width: barWidth)
-                    Spacer()
-                    Rectangle().fill(Color.black.opacity(0.7)).frame(width: barWidth)
+        return AnyView(
+            GeometryReader { _ in
+                if targetRatio > currentRatio {
+                    // Letterbox (bars top/bottom)
+                    let newHeight = size.width / targetRatio
+                    let barHeight = (size.height - newHeight) / 2
+                    VStack(spacing: 0) {
+                        Rectangle().fill(Color.black.opacity(0.7)).frame(height: barHeight)
+                        Spacer()
+                        Rectangle().fill(Color.black.opacity(0.7)).frame(height: barHeight)
+                    }
+                } else {
+                    // Pillarbox (bars left/right)
+                    let newWidth = size.height * targetRatio
+                    let barWidth = (size.width - newWidth) / 2
+                    HStack(spacing: 0) {
+                        Rectangle().fill(Color.black.opacity(0.7)).frame(width: barWidth)
+                        Spacer()
+                        Rectangle().fill(Color.black.opacity(0.7)).frame(width: barWidth)
+                    }
                 }
             }
-        }
-        .allowsHitTesting(false)
+            .allowsHitTesting(false)
+        )
     }
 }
 
@@ -760,10 +799,8 @@ struct LeicaFilmPicker: View {
                         ForEach(ShootMode.allCases) { mode in
                             Button {
                                 VFHaptics.click()
+                                // Gate dismisses — do not also flip isPresented (double-dismiss).
                                 onApplyShootMode?(mode)
-                                var t = Transaction()
-                                t.disablesAnimations = true
-                                withTransaction(t) { isPresented = false }
                             } label: {
                                 HStack(spacing: 8) {
                                     Text(shootMode == mode ? ">" : " ")

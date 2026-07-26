@@ -596,10 +596,22 @@ def test_source_guards() -> None:
     check("deferred present off touch", "Defer off the button's touch transaction" in vf)
     check("toggle passes values not Bindings", "filmFilter: filmFilter," in content and "onCommit:" in content)
     check("applyChromePickerCommit", "func applyChromePickerCommit" in content)
-    check("park Metal before picker", "Park live Metal before the overlay" in content)
 
-
-
+    # Build 62 — chrome suspend + present races + overlay/Metal hygiene
+    check("pipelineChromeSuspended", "pipelineChromeSuspended" in cam)
+    check("setChromePickerPreviewSuspended", "func setChromePickerPreviewSuspended" in cam)
+    check("clearLivePreviewForReconfiguration", "func clearLivePreviewForReconfiguration" in cam)
+    check("video skips when chrome suspended", "!chromeSuspended" in cam)
+    check("toggle suspends preview", "setChromePickerPreviewSuspended(true)" in content)
+    check("teardown unsuspends preview", "onTeardown:" in content and "setChromePickerPreviewSuspended(false)" in content)
+    check("presentationToken race cancel", "presentationToken" in vf)
+    check("foregroundActive scene only", "never attach an orphan picker" in vf)
+    check("grain overlays stay mounted", "Keep overlays mounted" in vf)
+    check("AspectRatioMask zero guard", "never divide by zero next to Metal" in vf)
+    check("grain cache bounded", "maxEntries = 12" in vf)
+    check("recipe ID dedupe", "Deduplicate IDs" in (ROOT / "LookRecipes.swift").read_text())
+    check("LivePreviewBridge attach reset", "restoreCleanPreview()" in (ROOT / "FilteredCameraPreview.swift").read_text())
+    check("commit disables animations", "disablesAnimations = true" in content[content.find("applyChromePickerCommit"):content.find("applyChromePickerCommit")+400])
 
 
 
@@ -679,11 +691,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 61", m is not None and int(ver) >= 61, ver)
+    check("Info.plist build >= 62", m is not None and int(ver) >= 62, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 61+", any(v >= 61 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 62+", any(v >= 62 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

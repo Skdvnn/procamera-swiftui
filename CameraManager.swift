@@ -106,6 +106,8 @@ class CameraManager: NSObject, ObservableObject {
     private var pipelineBypassLooks = false
     /// Skip live FX while a still bake owns the GPU (main / video / bake queues).
     private var pipelineBakingStill = false
+    /// Film/FX chrome picker window is open — freeze live Metal processing.
+    private var pipelineChromeSuspended = false
 
     // Remember the user's manual exposure so lens/format switches can re-apply it
     private var manualShutterIndex: Int?
@@ -188,7 +190,7 @@ class CameraManager: NSObject, ObservableObject {
 
     /// True while still bake / photo handler / HW or STACK LE owns the pipeline.
     private func capturePipelineBusy(includeUILongExposure: Bool = false) -> Bool {
-        let (_, _, _, _, _, baking) = currentPipelineSelection()
+        let (_, _, _, _, _, _, baking) = currentPipelineSelection()
         photoStateLock.lock()
         let busy = photoCompletionHandler != nil
             || baking
@@ -439,7 +441,7 @@ class CameraManager: NSObject, ObservableObject {
         bakeTimeoutWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            let (_, _, _, _, _, baking) = self.currentPipelineSelection()
+            let (_, _, _, _, _, _, baking) = self.currentPipelineSelection()
             self.photoStateLock.lock()
             let hasBakeTarget = self.bakeTimeoutCompletion != nil
             let hasPhoto = self.photoCompletionHandler != nil
@@ -522,7 +524,7 @@ class CameraManager: NSObject, ObservableObject {
         bakeTimeoutWork = nil
     }
 
-    private func currentPipelineSelection() -> (FilmFilter, LensFXMode, Bool, Bool, Bool, Bool) {
+    private func currentPipelineSelection() -> (FilmFilter, LensFXMode, Bool, Bool, Bool, Bool, Bool) {
         pipelineLock.lock()
         defer { pipelineLock.unlock() }
         return (
@@ -531,8 +533,28 @@ class CameraManager: NSObject, ObservableObject {
             pipelinePeaking,
             pipelineZebra,
             pipelineBypassLooks,
+            pipelineChromeSuspended,
             pipelineBakingStill
         )
+    }
+
+    /// Suspend live film/FX Metal while the chrome picker window is up.
+    func setChromePickerPreviewSuspended(_ suspended: Bool) {
+        pipelineLock.lock()
+        pipelineChromeSuspended = suspended
+        livePreviewActive = false
+        livePreviewFailStreak = 0
+        pipelineLock.unlock()
+        livePreview.push(nil)
+    }
+
+    /// Clear Metal filtered preview before session graph surgery (flip / lens).
+    func clearLivePreviewForReconfiguration() {
+        pipelineLock.lock()
+        livePreviewActive = false
+        livePreviewFailStreak = 0
+        pipelineLock.unlock()
+        livePreview.push(nil)
     }
 
     /// Re-apply stored manual ISO/shutter after a lens or format change.
@@ -911,7 +933,7 @@ class CameraManager: NSObject, ObservableObject {
 
     /// Abort in-flight HW or STACK long exposure and restore manuals.
     func cancelLongExposure() {
-        let (_, _, _, _, _, baking) = currentPipelineSelection()
+        let (_, _, _, _, _, _, baking) = currentPipelineSelection()
         photoStateLock.lock()
         let hadHW = hwLongExposureToken != nil
         let hadStack = isAccumulatingLongExposure || isFinalizingLongExposure
@@ -1085,6 +1107,7 @@ class CameraManager: NSObject, ObservableObject {
             guard let self = self else { return }
             // Never tear down inputs mid-still / mid-LE — black finder + stuck bake.
             if self.capturePipelineBusy(includeUILongExposure: true) { return }
+            self.clearLivePreviewForReconfiguration()
 
             let newPosition: AVCaptureDevice.Position = self.currentCamera == .back ? .front : .back
 
@@ -1469,6 +1492,7 @@ class CameraManager: NSObject, ObservableObject {
 
             // Never tear down inputs mid-still / mid-LE — same gate as switchCamera.
             if self.capturePipelineBusy(includeUILongExposure: true) { return }
+            self.clearLivePreviewForReconfiguration()
 
             // If already on the right device, just adjust zoom — keep exposure as-is
             if let currentDevice = self.videoDeviceInput?.device,
@@ -2671,11 +2695,12 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer, from connection: AVCaptureConnection) {
         guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        let (filmFilter, lensFX, peaking, zebra, bypass, bakingStill) = currentPipelineSelection()
+        let (filmFilter, lensFX, peaking, zebra, bypass, chromeSuspended, bakingStill) = currentPipelineSelection()
         photoStateLock.lock()
         let accumulating = isAccumulatingLongExposure
         photoStateLock.unlock()
         let wantsLiveProcessing = !bypass
+            && !chromeSuspended
             && (filmFilter != .none || lensFX != .none || peaking || zebra)
             && !accumulating
             && !bakingStill

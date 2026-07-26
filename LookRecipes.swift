@@ -68,7 +68,21 @@ final class LookRecipeStore: ObservableObject {
             recipes = []
             return
         }
-        recipes = decoded
+        // Deduplicate IDs — corrupted UserDefaults can crash ForEach on first open.
+        var seen = Set<UUID>()
+        var sanitized: [LookRecipe] = []
+        for recipe in decoded.prefix(Self.maxRecipes) {
+            var copy = recipe
+            if seen.contains(copy.id) {
+                copy.id = UUID()
+            }
+            seen.insert(copy.id)
+            sanitized.append(copy)
+        }
+        recipes = sanitized
+        if sanitized.map(\.id) != decoded.prefix(Self.maxRecipes).map(\.id) {
+            persist()
+        }
     }
 
     private func persist() {

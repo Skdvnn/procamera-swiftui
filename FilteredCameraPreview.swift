@@ -16,7 +16,19 @@ final class LivePreviewBridge {
     private var scheduled = false
 
     func attach(_ view: FilteredPreviewView) {
+        lock.lock()
+        let replacing = self.view !== view
         self.view = view
+        if replacing {
+            pending = nil
+            hasPending = false
+            scheduled = false
+            showingFiltered = false
+        }
+        lock.unlock()
+        if replacing {
+            view.restoreCleanPreview()
+        }
     }
 
     /// Latest-wins coalesce — video queue can outrun main without stacking hops.
