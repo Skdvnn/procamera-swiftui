@@ -710,7 +710,8 @@ def test_source_guards() -> None:
     check("no cyan burstAccent", "0.55, green: 0.82, blue: 1.0" not in content)
     check(
         "compact scrubbers no outer box",
-        "Compact strip — a hair under the 40pt ISO" in (ROOT / "AnalogGaugeView.swift").read_text()
+        "Compact strip — minimized to 34pt" in (ROOT / "AnalogGaugeView.swift").read_text()
+        or "Compact strip — a hair under the 40pt ISO" in (ROOT / "AnalogGaugeView.swift").read_text()
         or "Compact strip — shorter than the 40pt ISO" in (ROOT / "AnalogGaugeView.swift").read_text()
         or "Same 40pt instrument height as the ISO" in (ROOT / "AnalogGaugeView.swift").read_text()
         or "Scrubbers only — no extra outer container" in (ROOT / "AnalogGaugeView.swift").read_text(),
@@ -861,10 +862,13 @@ def test_source_guards() -> None:
     check("settings forced dark scheme", "preferredColorScheme(.dark)" in settings_src)
     check("settings well detailing", "struct SettingsDSLRWell" in settings_src)
     check("settings corner screws", "Slot mark" in settings_src)
-    # Compact FOCUS/EV — 38pt instrument strip (Build 90; 34 was stubby)
-    check("compact scrubbers 38pt", ".frame(height: 38)" in (ROOT / "AnalogGaugeView.swift").read_text())
-    check("compact level matches scrubber height", "compact ? 38 : 36" in aids)
-    check("compact top panel clears strip", "isLandscape ? 44 : 50" in content)
+    # Compact FOCUS/EV — 34pt strip, tight panel (Build 97 — max finder)
+    check("compact scrubbers 34pt", ".frame(height: 34)" in (ROOT / "AnalogGaugeView.swift").read_text())
+    check("compact level matches scrubber height", "compact ? 34 : 36" in aids)
+    check("compact top panel clears strip", "isLandscape ? 36 : 40" in content)
+    check("tight gauge to viewfinder gap", "gaugeToViewfinderSpacing" in content and "? 1 : 2" in content)
+    check("level yellow focused only", "Yellow only on the focused/leading mark" in aids)
+    check("EV meter yellow focused only", "yellow only on the focused/leading mark" in (ROOT / "AnalogGaugeView.swift").read_text())
     snap = content[content.find("struct NativeSnapScrubber"):content.find("struct ISOScrubberHorizontal")]
     check("snap scrubber classic deck face", 'Color(hex: "242424")' in snap or 'faceHex' in snap)
     check("snap scrubber instrument face flag", "instrumentFace" in snap and '"0a0a0a"' in snap)
@@ -941,8 +945,8 @@ def test_source_guards() -> None:
     check("clean widget frame stays clean", 'meta.filmFilter == "None" ? "Clean"' in widgets)
 
     # Build 77/78 — level is a coherent companion to the EV instrument; ticks animate + useful.
-    check("full level matches EV width", "compact ? 52 : 120" in aids)
-    check("full level matches EV height", "compact ? 38 : 36" in aids)
+    check("full level matches EV width", "compact ? 48 : 120" in aids)
+    check("full level matches EV height", "compact ? 34 : 36" in aids)
     check("level 13-mark dial rhythm", "tickScale(count: 13" in aids and "degreeMarks" in aids)
     check("level mechanical center pointer", "Mechanical center pointer matches the EV triangle" in aids)
     check("level precision readout", 'String(format: "%+.1f°", roll)' in aids)
@@ -950,14 +954,22 @@ def test_source_guards() -> None:
     check("level lock haptic", "UIImpactFeedbackGenerator(style: .rigid)" in aids)
     check("level 20hz motion", "1.0 / 20.0" in aids)
 
-    # Build 79 — ticks are the readout: yellow fill from level out to your tilt
+    # Build 97 — yellow only on focused/leading tick (no swept yellow run)
     check("level tick canvas", "func tickScale" in aids and "Canvas { ctx, size in" in aids)
-    check("level tick sweep fill", "let swept = deg <= max(0, roll) && deg >= min(0, roll)" in aids)
+    check(
+        "level tick focused yellow only",
+        "Yellow only on the focused/leading mark" in aids
+        and "let swept = deg <= max(0, roll)" not in aids,
+    )
     check("level leading tick pulse", "let leading = abs(deg - roll)" in aids and "TimelineView(.animation(minimumInterval: 1.0 / 15.0))" in aids)
     check("level beam still tilts", "Tilting horizon beam" in aids)
     check("level shared motion source", "static let shared = HorizonMotion()" in aids and "subscribers" in aids)
     check("level views share motion", "@StateObject private var motion = HorizonMotion()" not in aids)
-    check("EV ticks sweep yellow", "let swept = markEV <= max(0, value)" in gauge and "DS.accent.opacity(0.60)" in gauge)
+    check(
+        "EV ticks focused yellow only",
+        "yellow only on the focused/leading mark" in gauge
+        and "let swept = markEV <= max(0, value)" not in gauge,
+    )
     check("EV ticks fixed baseline", "frame(height: 13, alignment: .bottom)" in gauge)
     check("mode trio spans WB pill width", ".frame(width: 84, height: 40, alignment: .trailing)" in content)
     check("mode key chrome", "Round key in the WB/flash pill chrome" in content)
