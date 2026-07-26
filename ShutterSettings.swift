@@ -36,7 +36,7 @@ enum ShootMode: String, CaseIterable, Identifiable {
     }
 }
 
-// MARK: - Settings sheet (dark liquid glass + DSLR inset menu — no lame List toggles)
+// MARK: - Settings sheet (pure black + blur; yellow for state only)
 
 struct ShutterSettingsSheet: View {
     @Binding var showGrid: Bool
@@ -58,10 +58,10 @@ struct ShutterSettingsSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 18) {
-                    dslrSection("IMAGE HONESTY") {
+                VStack(alignment: .leading, spacing: 20) {
+                    dslrSection("Image honesty") {
                         DSLRToggleRow(
-                            title: "NATURAL CAPTURE",
+                            title: "Natural capture",
                             blurb: naturalCapture
                                 ? "Less Apple fusion · looks still bake"
                                 : "Polished ISP · looks still bake",
@@ -69,23 +69,23 @@ struct ShutterSettingsSheet: View {
                         )
                     }
 
-                    dslrSection("VIEWFINDER") {
-                        DSLRToggleRow(title: "GRID", blurb: "Rule-of-thirds overlay", isOn: $showGrid)
+                    dslrSection("Viewfinder") {
+                        DSLRToggleRow(title: "Grid", blurb: "Rule-of-thirds overlay", isOn: $showGrid)
                         DSLRDivider()
-                        DSLRToggleRow(title: "FOCUS PEAKING", blurb: "Green edge aid — not a look", isOn: $focusPeaking)
+                        DSLRToggleRow(title: "Focus peaking", blurb: "Green edge aid — not a look", isOn: $focusPeaking)
                         DSLRDivider()
-                        DSLRToggleRow(title: "ZEBRA", blurb: "Highlight warning", isOn: $zebraEnabled)
+                        DSLRToggleRow(title: "Zebra", blurb: "Highlight warning", isOn: $zebraEnabled)
                         DSLRDivider()
-                        DSLRToggleRow(title: "HORIZON LEVEL", blurb: "Spirit bar under the EV meter", isOn: $showLevel)
+                        DSLRToggleRow(title: "Horizon level", blurb: "Spirit bar under the EV meter", isOn: $showLevel)
                     }
 
-                    dslrSection("ASSIST") {
-                        DSLRToggleRow(title: "NIGHT TIP", blurb: "Opt-in when AUTO is dark", isOn: $nightAssist)
+                    dslrSection("Assist") {
+                        DSLRToggleRow(title: "Night tip", blurb: "Opt-in when AUTO is dark", isOn: $nightAssist)
                         DSLRDivider()
-                        DSLRToggleRow(title: "HOLD BURST", blurb: "Up to 6 stills while held", isOn: $holdBurst)
+                        DSLRToggleRow(title: "Hold burst", blurb: "Up to 6 stills while held", isOn: $holdBurst)
                     }
 
-                    dslrSection("SAVED LOOKS") {
+                    dslrSection("Saved looks") {
                         if filmFilter != .none || lensFX != .none {
                             Button {
                                 LookRecipeStore.shared.saveCurrent(film: filmFilter, lensFX: lensFX)
@@ -93,11 +93,11 @@ struct ShutterSettingsSheet: View {
                             } label: {
                                 HStack(spacing: 8) {
                                     Text(">")
-                                        .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                        .font(DS.mono(12, weight: .bold))
                                         .foregroundStyle(DS.accent)
                                         .frame(width: 12)
-                                    Text("SAVE CURRENT LOOK")
-                                        .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                    Text("Save current look")
+                                        .font(DS.mono(12, weight: .semibold))
                                         .foregroundStyle(DS.accent)
                                     Spacer()
                                     Image(systemName: "bookmark.fill")
@@ -110,8 +110,8 @@ struct ShutterSettingsSheet: View {
                             .buttonStyle(.plain)
                             DSLRDivider()
                         } else {
-                            Text("  Apply film or FX on the finder, then save.")
-                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            Text("Apply film or FX on the finder, then save.")
+                                .font(DS.mono(10, weight: .medium))
                                 .foregroundStyle(.white.opacity(0.35))
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 8)
@@ -119,8 +119,8 @@ struct ShutterSettingsSheet: View {
                         }
 
                         if lookStore.recipes.isEmpty {
-                            Text("  NO SAVED LOOKS YET")
-                                .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            Text("No saved looks yet")
+                                .font(DS.mono(10, weight: .medium))
                                 .foregroundStyle(.white.opacity(0.32))
                                 .padding(.horizontal, 12)
                                 .padding(.vertical, 10)
@@ -133,15 +133,15 @@ struct ShutterSettingsSheet: View {
                                     } label: {
                                         HStack(spacing: 8) {
                                             Text(">")
-                                                .font(.system(size: 12, weight: .bold, design: .monospaced))
+                                                .font(DS.mono(12, weight: .bold))
                                                 .foregroundStyle(DS.accent.opacity(0.7))
                                                 .frame(width: 12)
                                             VStack(alignment: .leading, spacing: 2) {
-                                                Text(recipe.name.uppercased())
-                                                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                                                Text(recipe.name)
+                                                    .font(DS.mono(12, weight: .semibold))
                                                     .foregroundStyle(.white)
-                                                Text(recipe.subtitle.uppercased())
-                                                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                                                Text(recipe.subtitle)
+                                                    .font(DS.mono(9, weight: .medium))
                                                     .foregroundStyle(.white.opacity(0.35))
                                             }
                                             Spacer(minLength: 0)
@@ -153,13 +153,13 @@ struct ShutterSettingsSheet: View {
                                         lookStore.delete(recipe.id)
                                         Haptics.light()
                                     } label: {
-                                        Text("DEL")
-                                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                        Text("Del")
+                                            .font(DS.mono(9, weight: .bold))
                                             .foregroundStyle(Color(red: 1.0, green: 0.45, blue: 0.38))
                                             .padding(.horizontal, 8)
                                             .padding(.vertical, 5)
                                             .background(
-                                                RoundedRectangle(cornerRadius: 4)
+                                                RoundedRectangle(cornerRadius: 4, style: .continuous)
                                                     .stroke(Color(red: 1.0, green: 0.45, blue: 0.38).opacity(0.45), lineWidth: 0.7)
                                             )
                                     }
@@ -175,9 +175,9 @@ struct ShutterSettingsSheet: View {
                         }
                     }
 
-                    dslrSection("CAPTURE DEFAULTS") {
+                    dslrSection("Capture defaults") {
                         DSLRCycleRow(
-                            title: "FORMAT",
+                            title: "Format",
                             value: captureFormat.label,
                             accent: captureFormat == .raw
                         ) {
@@ -186,8 +186,8 @@ struct ShutterSettingsSheet: View {
                         }
                         DSLRDivider()
                         DSLRCycleRow(
-                            title: "DEFAULT FILM",
-                            value: defaultFilm.name.uppercased(),
+                            title: "Default film",
+                            value: defaultFilm.name,
                             accent: defaultFilm != .none
                         ) {
                             Haptics.click()
@@ -198,105 +198,66 @@ struct ShutterSettingsSheet: View {
                         }
                     }
 
-                    dslrSection("EXTERNAL SHUTTER") {
-                        Text("  Volume · Camera Control · HID remotes")
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                    dslrSection("External shutter") {
+                        Text("Volume · Camera Control · HID remotes")
+                            .font(DS.mono(10, weight: .medium))
                             .foregroundStyle(.white.opacity(0.4))
                             .padding(.horizontal, 12)
                             .padding(.vertical, 10)
                     }
 
-                    dslrSection("ABOUT") {
-                        DSLRInfoRow(title: "APP", value: "SHUTTER")
+                    dslrSection("About") {
+                        DSLRInfoRow(title: "App", value: "Shutter")
                         DSLRDivider()
                         DSLRInfoRow(
-                            title: "BUILD",
+                            title: "Build",
                             value: Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "—"
                         )
                     }
 
-                    Text("FILM + FX ARE EXCLUSIVE · PEAKING IS AN AID")
-                        .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                        .tracking(0.8)
+                    Text("Film + FX are exclusive · peaking is an aid")
+                        .font(DS.mono(9, weight: .medium))
                         .foregroundStyle(.white.opacity(0.28))
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.top, 2)
                         .padding(.bottom, 12)
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 8)
+                .padding(.top, 4)
                 .padding(.bottom, 28)
             }
             .background(Color.clear)
-            .navigationTitle("SETTINGS")
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Text("Settings")
+                        .font(DS.mono(17, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { onDismiss() }
-                        .font(.system(size: 15, weight: .semibold, design: .monospaced))
+                        .font(DS.mono(15, weight: .semibold))
                         .foregroundStyle(DS.accent)
                 }
             }
             .toolbarBackground(.hidden, for: .navigationBar)
             .toolbarColorScheme(.dark, for: .navigationBar)
         }
-        // Always dark liquid glass — never the light system sheet (Build 84).
         .preferredColorScheme(.dark)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .presentationBackground {
-            SettingsLiquidGlassBackground()
+            SettingsSheetBackground()
         }
     }
 
     private func dslrSection<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 6) {
-                // Tiny instrument screw — same language as the dial faces.
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                Color.white.opacity(0.28),
-                                Color.white.opacity(0.06),
-                                Color.black.opacity(0.55)
-                            ],
-                            center: .topLeading,
-                            startRadius: 0,
-                            endRadius: 4
-                        )
-                    )
-                    .frame(width: 5, height: 5)
-                    .overlay(
-                        Circle()
-                            .stroke(Color.black.opacity(0.65), lineWidth: 0.5)
-                    )
-                Text(title)
-                    .font(.system(size: 10, weight: .bold, design: .monospaced))
-                    .tracking(1.4)
-                    .foregroundStyle(DS.accent.opacity(0.9))
-                Spacer(minLength: 0)
-                Circle()
-                    .fill(
-                        RadialGradient(
-                            colors: [
-                                Color.white.opacity(0.22),
-                                Color.white.opacity(0.05),
-                                Color.black.opacity(0.55)
-                            ],
-                            center: .topLeading,
-                            startRadius: 0,
-                            endRadius: 4
-                        )
-                    )
-                    .frame(width: 5, height: 5)
-                    .overlay(
-                        Circle()
-                            .stroke(Color.black.opacity(0.65), lineWidth: 0.5)
-                    )
-            }
-            .padding(.horizontal, 4)
-            .padding(.bottom, 6)
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(DS.mono(11, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.42))
+                .padding(.horizontal, 2)
 
             VStack(spacing: 0) {
                 content()
@@ -304,145 +265,45 @@ struct ShutterSettingsSheet: View {
             .background {
                 SettingsDSLRWell()
             }
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
     }
 }
 
-/// Dark liquid glass under the settings sheet — black wash + material so it
-/// never washes out over a bright finder (Build 84).
-private struct SettingsLiquidGlassBackground: View {
+/// Pure black + material blur — no fake top liquid-glass gradient (Build 99).
+private struct SettingsSheetBackground: View {
     var body: some View {
         ZStack {
-            // Deep ink base — the sheet is always night.
-            Color.black.opacity(0.72)
+            Color.black
             Rectangle()
                 .fill(.ultraThinMaterial)
                 .environment(\.colorScheme, .dark)
-            // Soft vignette so the glass reads as a panel, not a flat film.
-            LinearGradient(
-                colors: [
-                    Color.white.opacity(0.07),
-                    Color.clear,
-                    Color.black.opacity(0.35)
-                ],
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            // Hairline top lip — liquid edge catching a little light.
-            VStack(spacing: 0) {
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(0.22),
-                        Color.white.opacity(0.04),
-                        Color.clear
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 18)
-                Spacer(minLength: 0)
-            }
+            // Keep the sheet night even over a bright finder.
+            Color.black.opacity(0.45)
         }
         .ignoresSafeArea()
     }
 }
 
-/// Inset instrument well for each settings group — deeper lip, inner rail,
-/// and corner screws so the containers feel machined, not flat cards.
+/// Shared alias so older stress checks still find the type name.
+private typealias SettingsLiquidGlassBackground = SettingsSheetBackground
+
+/// Consistent inset well — one face, one stroke, clipped. No stacked fake glass.
 private struct SettingsDSLRWell: View {
     private let corner: CGFloat = 12
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: corner, style: .continuous)
         ZStack {
-            RoundedRectangle(cornerRadius: corner, style: .continuous)
-                .fill(Color.black.opacity(0.55))
-            // LCD wash — barely lifts the well off pure black.
-            RoundedRectangle(cornerRadius: corner, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.055),
-                            Color.white.opacity(0.015),
-                            Color.clear
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-            // Outer bevel lip
-            RoundedRectangle(cornerRadius: corner, style: .continuous)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.22),
-                            Color.white.opacity(0.06),
-                            Color.black.opacity(0.70),
-                            Color.white.opacity(0.08)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    ),
-                    lineWidth: 1.1
-                )
-            // Inner rail — the machined recess.
-            RoundedRectangle(cornerRadius: corner - 2.5, style: .continuous)
-                .stroke(
-                    LinearGradient(
-                        colors: [
-                            Color.black.opacity(0.75),
-                            Color.black.opacity(0.25),
-                            Color.white.opacity(0.05)
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    ),
-                    lineWidth: 1.4
-                )
-                .padding(2.5)
-            // Hairline floor shadow inside the well
-            RoundedRectangle(cornerRadius: corner - 3, style: .continuous)
-                .stroke(Color.black.opacity(0.45), lineWidth: 0.8)
-                .padding(4)
-            // Corner screws
-            GeometryReader { geo in
-                let inset: CGFloat = 7
-                let screws: [(CGFloat, CGFloat, Double)] = [
-                    (inset, inset, -28),
-                    (geo.size.width - inset, inset, 28),
-                    (inset, geo.size.height - inset, 28),
-                    (geo.size.width - inset, geo.size.height - inset, -28)
-                ]
-                ForEach(Array(screws.enumerated()), id: \.offset) { _, screw in
-                    Circle()
-                        .fill(
-                            RadialGradient(
-                                colors: [
-                                    Color.white.opacity(0.30),
-                                    Color(white: 0.18),
-                                    Color.black.opacity(0.85)
-                                ],
-                                center: .topLeading,
-                                startRadius: 0,
-                                endRadius: 5
-                            )
-                        )
-                        .frame(width: 4.5, height: 4.5)
-                        .overlay(
-                            Circle()
-                                .stroke(Color.black.opacity(0.7), lineWidth: 0.4)
-                        )
-                        // Slot mark
-                        .overlay(
-                            Capsule()
-                                .fill(Color.black.opacity(0.55))
-                                .frame(width: 2.4, height: 0.6)
-                                .rotationEffect(.degrees(screw.2))
-                        )
-                        .position(x: screw.0, y: screw.1)
-                }
-            }
-            .allowsHitTesting(false)
+            shape.fill(Color(white: 0.04))
+            shape
+                .stroke(Color.white.opacity(0.10), lineWidth: 0.8)
+            // Soft inner lip — single recess, not a multi-layer mask fight.
+            shape
+                .stroke(Color.black.opacity(0.55), lineWidth: 1.2)
+                .padding(1.5)
         }
+        .clipShape(shape)
     }
 }
 
@@ -451,9 +312,9 @@ private struct SettingsDSLRWell: View {
 private struct DSLRDivider: View {
     var body: some View {
         Rectangle()
-            .fill(Color.white.opacity(0.08))
+            .fill(Color.white.opacity(0.07))
             .frame(height: 1)
-            .padding(.horizontal, 10)
+            .padding(.horizontal, 12)
     }
 }
 
@@ -469,17 +330,17 @@ private struct DSLRToggleRow: View {
         } label: {
             HStack(alignment: .center, spacing: 8) {
                 Text(isOn ? ">" : " ")
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundStyle(DS.accent)
+                    .font(DS.mono(13, weight: .bold))
+                    .foregroundStyle(isOn ? DS.accent : .white.opacity(0.15))
                     .frame(width: 12)
 
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title)
-                        .font(.system(size: 12, weight: isOn ? .semibold : .medium, design: .monospaced))
+                        .font(DS.mono(12, weight: isOn ? .semibold : .medium))
                         .foregroundStyle(isOn ? .white : .white.opacity(0.62))
                     if let blurb {
-                        Text(blurb.uppercased())
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        Text(blurb)
+                            .font(DS.mono(9, weight: .medium))
                             .foregroundStyle(.white.opacity(0.32))
                             .lineLimit(1)
                     }
@@ -487,15 +348,15 @@ private struct DSLRToggleRow: View {
 
                 Spacer(minLength: 8)
 
-                Text(isOn ? "ON" : "OFF")
-                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                Text(isOn ? "On" : "Off")
+                    .font(DS.mono(11, weight: .bold))
                     .foregroundStyle(isOn ? DS.accent : .white.opacity(0.35))
                     .frame(minWidth: 28, alignment: .trailing)
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .contentShape(Rectangle())
-            .background(isOn ? Color.white.opacity(0.07) : Color.clear)
+            .background(isOn ? Color.white.opacity(0.06) : Color.clear)
         }
         .buttonStyle(.plain)
     }
@@ -511,18 +372,18 @@ private struct DSLRCycleRow: View {
         Button(action: action) {
             HStack(spacing: 8) {
                 Text(">")
-                    .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    .foregroundStyle(accent ? DS.accent : .white.opacity(0.35))
+                    .font(DS.mono(12, weight: .bold))
+                    .foregroundStyle(accent ? DS.accent : .white.opacity(0.25))
                     .frame(width: 12)
                 Text(title)
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
+                    .font(DS.mono(12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.7))
                 Spacer()
                 Text(value)
-                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .font(DS.mono(12, weight: .semibold))
                     .foregroundStyle(accent ? DS.accent : .white)
                 Text("›")
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(DS.mono(14, weight: .semibold))
                     .foregroundStyle(.white.opacity(0.35))
             }
             .padding(.horizontal, 12)
@@ -539,13 +400,13 @@ private struct DSLRInfoRow: View {
 
     var body: some View {
         HStack {
-            Text("  " + title)
-                .font(.system(size: 11, weight: .medium, design: .monospaced))
+            Text(title)
+                .font(DS.mono(11, weight: .medium))
                 .foregroundStyle(.white.opacity(0.45))
             Spacer()
             Text(value)
-                .font(.system(size: 12, weight: .semibold, design: .monospaced))
-                .foregroundStyle(DS.accent)
+                .font(DS.mono(12, weight: .semibold))
+                .foregroundStyle(.white)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 10)

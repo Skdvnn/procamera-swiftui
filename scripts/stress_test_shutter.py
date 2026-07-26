@@ -353,7 +353,7 @@ def test_source_guards() -> None:
     check("optional shootMode in film dock", "var shootMode: ShootMode?" in (ROOT / "ViewfinderOverlay.swift").read_text())
     check("burst count on shutter chrome", "burstCount:" in content and "isBursting" in content)
     check("loupe magnification badge", "magnification" in cull and "%.1f×" in cull)
-    check("settings night+burst toggles", "NIGHT TIP" in settings and "HOLD BURST" in settings)
+    check("settings night+burst toggles", "Night tip" in settings and "Hold burst" in settings)
     check("ContentView body split for type-checker", "finderCanvas(geo:" in content and "struct FinderStatusOverlays" in content and "struct ContentViewLifecycle" in content)
 
     # Build 51 — deep device-breaker guards (not just "string exists")
@@ -704,7 +704,7 @@ def test_source_guards() -> None:
     check("exclusive film clears FX", "if filter != .none { session.lensFX = .none }" in vf)
     check("exclusive FX clears film", "if fx != .none { session.filmFilter = .none }" in vf)
     check("applyExclusiveLook helper", "func applyExclusiveLook" in content)
-    check("settings saved looks", "SAVED LOOKS" in (ROOT / "ShutterSettings.swift").read_text())
+    check("settings saved looks", "Saved looks" in (ROOT / "ShutterSettings.swift").read_text())
     check("burst default off", 'holdBurstEnabled = false' in content)
     check("shutter curtain state", "showShutterCurtain" in content)
     check("no cyan burstAccent", "0.55, green: 0.82, blue: 1.0" not in content)
@@ -775,7 +775,7 @@ def test_source_guards() -> None:
     check("nikon picker iso badge", "isoBadge(for" in overlay)
     check(
         "settings dslr menu",
-        "DSLRToggleRow" in settings and "SettingsLiquidGlassBackground" in settings,
+        "DSLRToggleRow" in settings and "SettingsSheetBackground" in settings,
     )
     check("settings no List toggles", "Toggle(" not in settings and "List {" not in settings)
     check("cull amber matches DS.accent", "1.0, green: 0.85, blue: 0.35" in cull)
@@ -859,10 +859,20 @@ def test_source_guards() -> None:
     # Build 72 — DSLR settings + deck spacing
     check("dslr toggle row type", "struct DSLRToggleRow" in (ROOT / "ShutterSettings.swift").read_text())
     settings_src = (ROOT / "ShutterSettings.swift").read_text()
-    check("settings dark liquid glass bg", "SettingsLiquidGlassBackground" in settings_src)
+    check(
+        "settings pure black blur bg",
+        "SettingsSheetBackground" in settings_src
+        and "SettingsLiquidGlassBackground" in settings_src
+        and "no fake top liquid-glass gradient" in settings_src,
+    )
     check("settings forced dark scheme", "preferredColorScheme(.dark)" in settings_src)
     check("settings well detailing", "struct SettingsDSLRWell" in settings_src)
-    check("settings corner screws", "Slot mark" in settings_src)
+    check("settings well clipped", ".clipShape(RoundedRectangle(cornerRadius: 12" in settings_src)
+    check("settings title not all caps", 'Text("Settings")' in settings_src and 'navigationTitle("SETTINGS")' not in settings_src)
+    check("settings title leading", "topBarLeading" in settings_src)
+    check("settings headers not yellow", 'dslrSection("Viewfinder")' in settings_src and "foregroundStyle(DS.accent.opacity(0.9))" not in settings_src)
+    check("settings yellow for state", 'isOn ? "On" : "Off"' in settings_src and "isOn ? DS.accent" in settings_src)
+    check("settings uses DS.mono", "DS.mono(12, weight: .semibold)" in settings_src)
     # Compact FOCUS/EV — 34pt strip, tight panel (Build 97 — max finder)
     check("compact scrubbers 34pt", ".frame(height: 34)" in (ROOT / "AnalogGaugeView.swift").read_text())
     check("compact level matches scrubber height", "compact ? 34 : 36" in aids)
