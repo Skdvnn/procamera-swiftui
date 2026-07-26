@@ -8,19 +8,17 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 92 phone test pack (live widgets + memory guards):**
+**Build 93 phone test pack (softer fullscreen fade + hist glass):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **92**.
-Widgets pull real frames from the Photos **Shutter** album when App Groups are
-off (Debug Cmd+R), and the faces use the same vulcanite / LCD yellow chrome as
-the camera. Shoot a few frames, grant Photos access if asked, then long-press
-the Home Screen widget to refresh.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **93**.
+Fullscreen bottom fade is lighter so it doesn't swallow the lower third of the
+frame; the info-bar histogram glass gets the machined rim + exposure grid from
+the old Build 78 polish that never landed on master.
 
-Build 92 lands the live-widget Photos fallback + camera-matched chrome on top
-of Build 91's memory jetsam guards (harder FX downsample, capped Metal
-drawable, STACK LE throttle, background / memory-warning purges).
+Build 92: live-widget Photos fallback + camera-matched chrome on top of Build
+91's memory jetsam guards.
 
 Build 91: live FX preview downscales harder, Metal drawable is capped,
 STACK LE is throttled, and background / memory-warning purges drop the
