@@ -8,14 +8,14 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 88 phone test pack (dark glass settings + instrument scrubbers):**
+**Build 90 phone test pack (classic bottom scrubbers + muted shutter ring):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **88**.
-Press anywhere on the finder and scrub up/down for brightness — expanded or
-collapsed, AUTO or MANUAL — and the trailing arch peels while you do it. The
-shutter keeps its old round silhouette with a no-shrink press.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **90**.
+Bottom ISO/S scrubbers are back on the classic `#242424` face with yellow
+major ticks; top FOCUS / level / EV stay on the black instrument strip at
+38pt; shutter collar is muted dark steel again.
 
 Build 82 is 81 plus a fix found by the test sweep: the widget and Lock Screen
 capture extensions were still stamped build 77 while the app moved to 81, which
@@ -29,6 +29,9 @@ which look is armed; and the Lock Screen circular becomes a 36-exposure roll
 gauge with a new inline accessory for the count above the clock. Widgets need a
 **Release / TestFlight** build to read the App Group — Cmd+R Debug entitlements
 are empty, so widget content stays on placeholders there.
+
+Build 90: bottom ISO/S classic grey + yellow majors restored; top strip
+38pt (34 was stubby); shutter collar muted (mid-bright ring was too strong).
 
 Build 88: compact top FOCUS / level / EV strip trimmed to 34pt.
 

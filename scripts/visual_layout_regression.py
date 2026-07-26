@@ -251,7 +251,7 @@ def layout_collapsed(
     device: Device,
     *,
     deck_h: float | None = None,
-    top_panel: float = 46.0,
+    top_panel: float = 50.0,
     margin: float = 6.0,
     film_dock_open: bool = False,
     compact_chrome: bool = False,
@@ -539,7 +539,7 @@ def main() -> int:
         lc_panels, lc_meta = layout_collapsed(
             device,
             deck_h=LANDSCAPE_DECK_H,
-            top_panel=40.0,
+            top_panel=44.0,
             compact_chrome=True,
         )
         errors.extend(assert_collapsed(lc_panels, lc_meta))
@@ -557,7 +557,7 @@ def main() -> int:
         le_panels, le_meta = layout_expanded(
             device,
             deck_h=LANDSCAPE_DECK_H,
-            top_panel=40.0,
+            top_panel=44.0,
             margin=6.0,
         )
         errors.extend(assert_expanded(le_panels, le_meta))

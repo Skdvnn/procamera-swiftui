@@ -596,9 +596,9 @@ struct AnalogDisplayPanel: View {
     var body: some View {
         Group {
             if compact {
-                // Compact strip — shorter than the 40pt ISO/S scrubbers so the
-                // top chrome stays light (Build 88). Still the black instrument
-                // face from Build 84, just less tall.
+                // Compact strip — a hair under the 40pt ISO/S row so top chrome
+                // stays light, but 34pt read stubby (Build 90 → 38pt). Still the
+                // black instrument face from Build 84.
                 HStack(alignment: .center, spacing: 4) {
                     CompactFocusScrubber(
                         focusPosition: $focusPosition,
@@ -607,7 +607,7 @@ struct AnalogDisplayPanel: View {
                         onActiveChanged: onFocusScrubActive
                     )
                     .frame(maxWidth: .infinity)
-                    .frame(height: 34)
+                    .frame(height: 38)
 
                     if showLevel {
                         InfoBarMetalLevel(compact: true)
@@ -619,7 +619,7 @@ struct AnalogDisplayPanel: View {
                         onActiveChanged: onEVScrubActive
                     )
                     .frame(maxWidth: .infinity)
-                    .frame(height: 34)
+                    .frame(height: 38)
                 }
             } else {
                 ZStack {
@@ -705,6 +705,7 @@ struct CompactFocusScrubber: View {
             sideLabelWidth: 28,
             tickCount: 14,
             tickMajorEvery: 2,
+            instrumentFace: true,
             title: { idx in
                 let safe = min(max(idx, 0), stopLabels.count - 1)
                 if isAutoFocus && safe == index { return "AF" }
@@ -763,6 +764,7 @@ struct CompactEVScrubber: View {
             sideLabelWidth: 28,
             tickCount: 14,
             tickMajorEvery: 2,
+            instrumentFace: true,
             title: { idx in
                 let v = stopValues[min(max(idx, 0), stopValues.count - 1)]
                 return String(format: "%+.1f", v)

@@ -213,9 +213,9 @@ struct InfoBarMetalLevel: View {
         let roll = motion.rollDegrees
         let level = abs(roll) < levelTolerance
         let visualRoll = max(-15, min(15, roll))
-        // Compact matches the top FOCUS / EV strip (Build 88 — 34pt).
+        // Compact matches the top FOCUS / EV strip (Build 90 — 38pt).
         let w: CGFloat = compact ? 52 : 120
-        let h: CGFloat = compact ? 34 : 36
+        let h: CGFloat = compact ? 38 : 36
 
         ZStack {
             // Same instrument face and border language as the EV meter.
@@ -384,7 +384,7 @@ struct InfoBarMetalLevel: View {
 
     @ViewBuilder
     private func compactLevel(roll: Float, isLevel: Bool) -> some View {
-        // Fills the 34pt scrubber slot — ticks on top, horizon + readout below.
+        // Fills the 38pt scrubber slot — ticks on top, horizon + readout below.
         VStack(spacing: 0) {
             tickScale(count: 7, roll: roll, isLevel: isLevel, step: 5, labels: false)
                 .frame(height: 11)
