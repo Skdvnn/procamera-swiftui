@@ -98,8 +98,9 @@ def parse_geometry() -> dict:
         "med_pad": body_pad(medium, 14),
         "med_gap": num(medium, r"VStack\(alignment: \.leading, spacing: (\d+)\)", 6),
         "med_bars": num(medium, r"barHeight: (\d+)", 24),
-        "med_sheet_w": num(medium, r"\.frame\(width: (\d+), height: \d+\)", 122),
-        "med_sheet_h": num(medium, r"\.frame\(width: \d+, height: (\d+)\)", 96),
+        # Explicit 122×96 — don't confuse with the compact shoot chip's 18×18.
+        "med_sheet_w": num(medium, r"\.frame\(width: (122), height: \d+\)", 122),
+        "med_sheet_h": num(medium, r"\.frame\(width: 122, height: (\d+)\)", 96),
         "large_pad": body_pad(large, 14),
         "large_gap": num(large, r"VStack\(alignment: \.leading, spacing: (\d+)\)", 9),
         "large_bars": num(large, r"barHeight: (\d+)", 28),
