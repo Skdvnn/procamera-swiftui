@@ -8,14 +8,15 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 102 phone test pack (widget pad + fun previews):**
+**Build 103 phone test pack (arch yellow = active only):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **102**.
-Verified: Home widgets share 14pt side/top pad; small stack is a fanned
-viewfinder strip with exposure stamp; contact sheet has scan-line + keep LED
-+ unexposed ghosts.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **103**.
+Verified: peel-arch rail/end caps stay steel; yellow only on live value,
+focused tick, and needle pip (same contract as bottom scrubbers / level).
+
+Build 102: widget shared 14pt pad + fun photo previews.
 
 Build 101: scrubber/pill dark-bezel chrome contract.
 

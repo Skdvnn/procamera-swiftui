@@ -477,6 +477,7 @@ struct CurvedParamEdgeReadout: View {
                     .opacity(Double(min(1, progress * 1.4)))
 
                 VStack(alignment: .trailing, spacing: 3) {
+                    // Title stays muted — yellow is for the live value only (Build 103).
                     Text(title)
                         .font(.system(
                             size: serifValue ? 11 : 10,
@@ -490,11 +491,7 @@ struct CurvedParamEdgeReadout: View {
                             weight: serifValue ? .medium : .semibold,
                             design: serifValue ? .serif : .monospaced
                         ))
-                        .foregroundStyle(
-                            progress > 0.55
-                                ? accent.opacity(0.75 + 0.25 * progress)
-                                : Color.white.opacity(0.75 + 0.25 * progress)
-                        )
+                        .foregroundStyle(accent.opacity(0.80 + 0.20 * progress))
                         .monospacedDigit()
                         .contentTransition(.numericText())
                         .animation(ShutterMotion.scrub, value: value)
@@ -604,7 +601,9 @@ private struct EdgeParamArcGeometry {
     }
 }
 
-/// Single-rail peel arc with half-stop ticks + traveling needle (Build 94).
+/// Single-rail peel arc with half-stop ticks + traveling needle (Build 94/103).
+/// Yellow is reserved for the focused tick + needle — the rail stays steel
+/// (same contract as bottom scrubbers / level: never paint the whole dial amber).
 struct EdgeParamArcDetail: View {
     let progress: CGFloat
     /// 0…1 along the cubic (top → bottom). Snapped to the nearest tick.
@@ -627,20 +626,21 @@ struct EdgeParamArcDetail: View {
             curve.move(to: geom.top)
             curve.addCurve(to: geom.bottom, control1: geom.control1, control2: geom.control2)
 
-            // Soft under-glow only — no second white rail (that read as a double line).
+            // Soft under-glow only — muted steel, not yellow (Build 103).
             ctx.stroke(
                 curve,
-                with: .color(accent.opacity(0.08 + 0.18 * p)),
+                with: .color(Color.white.opacity(0.04 + 0.08 * p)),
                 style: StrokeStyle(lineWidth: 4.5 + p * 1.5, lineCap: .round)
             )
-            // One accent rail — the dial track.
+            // One steel rail — the dial track (not accent).
             ctx.stroke(
                 curve,
-                with: .color(accent.opacity(0.40 + 0.55 * p)),
+                with: .color(Color.white.opacity(0.28 + 0.32 * p)),
                 style: StrokeStyle(lineWidth: 1.55 + p * 0.45, lineCap: .round)
             )
 
             // Half-stop ticks — stems aim left (inward), like a cut dial face.
+            // Yellow only on the focused tick under the needle.
             for i in 0..<tickCount {
                 let t = CGFloat(i) / last
                 let pt = geom.point(at: t)
@@ -654,8 +654,8 @@ struct EdgeParamArcDetail: View {
                 tick.move(to: pt)
                 tick.addLine(to: CGPoint(x: pt.x + nx * stem, y: pt.y + ny * stem))
                 let tickColor: Color = atNeedle
-                    ? accent.opacity(0.75 + 0.25 * p)
-                    : Color.white.opacity((major ? 0.38 : 0.18) + 0.22 * p)
+                    ? accent.opacity(0.85 + 0.15 * p)
+                    : Color.white.opacity((major ? 0.42 : 0.20) + 0.18 * p)
                 ctx.stroke(
                     tick,
                     with: .color(tickColor),
@@ -666,14 +666,14 @@ struct EdgeParamArcDetail: View {
                 )
             }
 
-            // End caps — machined terminals on the rail.
+            // End caps — machined terminals on the rail (steel, not yellow).
             for end in [geom.top, geom.bottom] {
                 let cap = Path(ellipseIn: CGRect(x: end.x - 2.0, y: end.y - 2.0, width: 4.0, height: 4.0))
                 ctx.fill(cap, with: .color(Color.black.opacity(0.55)))
-                ctx.stroke(cap, with: .color(accent.opacity(0.35 + 0.40 * p)), lineWidth: 0.9)
+                ctx.stroke(cap, with: .color(Color.white.opacity(0.30 + 0.30 * p)), lineWidth: 0.9)
             }
 
-            // Traveling needle pip — rides the rail with the live value.
+            // Traveling needle pip — the only other yellow on the dial.
             let tip = geom.point(at: needleTClamped)
             let outer = Path(ellipseIn: CGRect(x: tip.x - 3.4, y: tip.y - 3.4, width: 6.8, height: 6.8))
             ctx.fill(outer, with: .color(Color.black.opacity(0.55)))
