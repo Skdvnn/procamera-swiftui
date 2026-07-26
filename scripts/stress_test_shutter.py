@@ -710,7 +710,8 @@ def test_source_guards() -> None:
     check("no cyan burstAccent", "0.55, green: 0.82, blue: 1.0" not in content)
     check(
         "compact scrubbers no outer box",
-        "Compact strip — minimized to 34pt" in (ROOT / "AnalogGaugeView.swift").read_text()
+        "Compact strip — 38pt instrument face" in (ROOT / "AnalogGaugeView.swift").read_text()
+        or "Compact strip — minimized to 34pt" in (ROOT / "AnalogGaugeView.swift").read_text()
         or "Compact strip — a hair under the 40pt ISO" in (ROOT / "AnalogGaugeView.swift").read_text()
         or "Compact strip — shorter than the 40pt ISO" in (ROOT / "AnalogGaugeView.swift").read_text()
         or "Same 40pt instrument height as the ISO" in (ROOT / "AnalogGaugeView.swift").read_text()
@@ -873,11 +874,11 @@ def test_source_guards() -> None:
     check("settings headers not yellow", 'dslrSection("Viewfinder")' in settings_src and "foregroundStyle(DS.accent.opacity(0.9))" not in settings_src)
     check("settings yellow for state", 'isOn ? "On" : "Off"' in settings_src and "isOn ? DS.accent" in settings_src)
     check("settings uses DS.mono", "DS.mono(12, weight: .semibold)" in settings_src)
-    # Compact FOCUS/EV — 34pt strip, tight panel (Build 97 — max finder)
-    check("compact scrubbers 34pt", ".frame(height: 34)" in (ROOT / "AnalogGaugeView.swift").read_text())
-    check("compact level matches scrubber height", "compact ? 34 : 36" in aids)
-    check("compact top panel clears strip", "isLandscape ? 36 : 40" in content)
-    check("tight gauge to viewfinder gap", "gaugeToViewfinderSpacing" in content and "? 1 : 2" in content)
+    # Compact FOCUS/EV — 38pt strip + outer dark bezel (Build 100)
+    check("compact scrubbers 38pt", ".frame(height: 38)" in (ROOT / "AnalogGaugeView.swift").read_text())
+    check("compact level matches scrubber height", "compact ? 38 : 36" in aids)
+    check("compact top panel clears strip", "isLandscape ? 44 : 50" in content)
+    check("gauge to viewfinder gap", "gaugeToViewfinderSpacing" in content and "? 3 : 4" in content)
     check("level yellow focused only", "Yellow only on the focused/leading mark" in aids)
     check("EV meter yellow focused only", "yellow only on the focused/leading mark" in (ROOT / "AnalogGaugeView.swift").read_text())
     snap = content[content.find("struct NativeSnapScrubber"):content.find("struct ISOScrubberHorizontal")]
@@ -889,8 +890,8 @@ def test_source_guards() -> None:
     )
     check("snap scrubber yellow center only", "isScrolling ? yellow : yellow.opacity(0.70)" in snap)
     check(
-        "snap scrubber no deck outer board",
-        "No stacked black outer board" in snap,
+        "snap scrubber outer dark bezel",
+        "Outer dark stroke" in snap and '.fill(Color.black)' in snap and ".padding(instrumentFace ? 1.5 : 2)" in snap,
     )
     # Shutter collar muted dark steel (Build 90 — mid-bright ring was too strong)
     check(
@@ -956,8 +957,8 @@ def test_source_guards() -> None:
     check("clean widget frame stays clean", 'meta.filmFilter == "None" ? "Clean"' in widgets)
 
     # Build 77/78 — level is a coherent companion to the EV instrument; ticks animate + useful.
-    check("full level matches EV width", "compact ? 48 : 120" in aids)
-    check("full level matches EV height", "compact ? 34 : 36" in aids)
+    check("full level matches EV width", "compact ? 52 : 120" in aids)
+    check("full level matches EV height", "compact ? 38 : 36" in aids)
     check("level 13-mark dial rhythm", "tickScale(count: 13" in aids and "degreeMarks" in aids)
     check("level mechanical center pointer", "Mechanical center pointer matches the EV triangle" in aids)
     check("level precision readout", 'String(format: "%+.1f°", roll)' in aids)

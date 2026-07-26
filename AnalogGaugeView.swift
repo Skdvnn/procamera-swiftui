@@ -591,9 +591,8 @@ struct AnalogDisplayPanel: View {
     var body: some View {
         Group {
             if compact {
-                // Compact strip — minimized to 34pt and parked tight to the top
-                // so the viewfinder gets the reclaimed chrome (Build 97).
-                HStack(alignment: .center, spacing: 3) {
+                // Compact strip — 38pt instrument face with outer dark bezel (Build 100).
+                HStack(alignment: .center, spacing: 4) {
                     CompactFocusScrubber(
                         focusPosition: $focusPosition,
                         isAutoFocus: isAutoFocus,
@@ -601,7 +600,7 @@ struct AnalogDisplayPanel: View {
                         onActiveChanged: onFocusScrubActive
                     )
                     .frame(maxWidth: .infinity)
-                    .frame(height: 34)
+                    .frame(height: 38)
 
                     if showLevel {
                         InfoBarMetalLevel(compact: true)
@@ -613,7 +612,7 @@ struct AnalogDisplayPanel: View {
                         onActiveChanged: onEVScrubActive
                     )
                     .frame(maxWidth: .infinity)
-                    .frame(height: 34)
+                    .frame(height: 38)
                 }
             } else {
                 ZStack {
