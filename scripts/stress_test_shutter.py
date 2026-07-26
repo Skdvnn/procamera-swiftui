@@ -279,7 +279,7 @@ def test_source_guards() -> None:
     check(
         "shutter face-only push-in",
         "shutterPressed" in content
-        and "scaleEffect(isPressed ? 0.86" in content
+        and "scaleEffect(isPressed ? 0.92" in content
         and "Collar stays solid" in shutter_press
         and "Shader roughness / size / lightPos args are CONSTANT" in content
         and "scaleEffect(configuration.isPressed" not in shutter_press
@@ -552,7 +552,7 @@ def test_source_guards() -> None:
     check("preview scheduleMetalDraw fallback", "restoreCleanPreview()" in preview and "scheduleMetalDraw" in preview)
     check("live preview fail streak", "livePreviewFailStreak" in cam)
     check("format centered ZStack", "FormatTogglePill(format: $captureFormat)" in content and "ZStack {" in content[content.find("ROW 3"):content.find("ROW 3")+900])
-    check("ModeControl column 26", ".frame(width: 26, height: 48)" in content)
+    check("ModeControl column 26", ".frame(width: 26, height: 40)" in content)
     check("no deck grid ModeControl", "ModeControl(icon: \"rectangle.on.rectangle\"" not in content)
 
     # Build 57 — crash/freeze hardening
@@ -650,7 +650,7 @@ def test_source_guards() -> None:
     check("exclusive film clears FX", "if filter != .none { session.lensFX = .none }" in vf)
     check("exclusive FX clears film", "if fx != .none { session.filmFilter = .none }" in vf)
     check("applyExclusiveLook helper", "func applyExclusiveLook" in content)
-    check("settings saved looks", "Saved looks" in (ROOT / "ShutterSettings.swift").read_text())
+    check("settings saved looks", "SAVED LOOKS" in (ROOT / "ShutterSettings.swift").read_text())
     check("burst default off", 'holdBurstEnabled = false' in content)
     check("shutter curtain state", "showShutterCurtain" in content)
     check("no cyan burstAccent", "0.55, green: 0.82, blue: 1.0" not in content)
@@ -670,9 +670,25 @@ def test_source_guards() -> None:
     # Build 67 — real shutter push-in (inner face only; outer collar solid)
     check("shutter pressed env key", "ShutterPressedKey" in content)
     check("shutter press style sets env", ".environment(\\shutterPressed" in content or ".environment(\\.shutterPressed" in content)
-    check("shutter fixed metal lip", "Fixed metal lip between collar and face" in content)
-    check("shutter well darkens on press", "isPressed ? 0.72 : 0.38" in content)
-    check("shutter face sink offset", "offset(y: isPressed ? (compact ? 2.6 : 3.2)" in content)
+    check("shutter fixed dark lip", "Fixed dark lip" in content)
+    check("shutter well darkens on press", "isPressed ? 0.78 : 0.42" in content)
+    check("shutter face sink offset", "offset(y: isPressed ? (compact ? 2.2 : 2.8)" in content)
+    check("shutter face clipped to well", ".clipShape(Circle())" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
+
+    # Build 68 — Nikon LCD chrome + tighter deck + no white shutter flash
+    check("shutter no white top glow", "Color.white.opacity(isPressed ? 0 : 0.06)" not in content)
+    check("shutter collar dims on press", "isPressed ? 0.18 : 0" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
+    check("tight scrubber chrome gap", "Tight scrubber → chrome gap" in content)
+    check("pill height 44", "pillHeight: CGFloat = 44" in content)
+    overlay = (ROOT / "ViewfinderOverlay.swift").read_text()
+    settings = (ROOT / "ShutterSettings.swift").read_text()
+    cull = (ROOT / "ShootCull.swift").read_text()
+    check("nikon lcd yellow picker", "lcdYellow" in overlay and "0.85, blue: 0.35" in overlay)
+    check("nikon picker tight rows", "heightForRowAt" in overlay and "return 28" in overlay)
+    check("nikon picker iso badge", "isoBadge(for" in overlay)
+    check("settings lcd headers", "lcdHeader" in settings and "VIEWFINDER" in settings)
+    check("settings tint accent", ".tint(DS.accent)" in settings)
+    check("cull amber matches DS.accent", "1.0, green: 0.85, blue: 0.35" in cull)
 
 
 
@@ -752,11 +768,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 67", m is not None and int(ver) >= 67, ver)
+    check("Info.plist build >= 68", m is not None and int(ver) >= 68, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 67+", any(v >= 67 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 68+", any(v >= 68 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

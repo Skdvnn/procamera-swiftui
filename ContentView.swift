@@ -1829,10 +1829,10 @@ struct ContentView: View {
                     camera.setISO(Float(iso))
                 }
             )
-            .frame(height: 44)
+            .frame(height: 40)
             .padding(.horizontal, DS.pageMargin)
 
-            Spacer().frame(height: 2)
+            Spacer().frame(height: 1)
 
             // ROW 2: ISO & Shutter side by side
             HStack(spacing: 4) {
@@ -1855,10 +1855,11 @@ struct ContentView: View {
                     }
                 )
             }
-            .frame(height: 44)
+            .frame(height: 40)
             .padding(.horizontal, DS.pageMargin)
 
-            Spacer().frame(height: 4)
+            // Tight scrubber → chrome gap (Build 68).
+            Spacer().frame(height: 1)
 
             // ROW 3: Flash | Format (true center above shutter) | Settings/Macro/Timer
             ZStack {
@@ -1896,7 +1897,7 @@ struct ContentView: View {
                             syncCaptureContextToSystem()
                         }
                     }
-                    .frame(width: 80, height: 48, alignment: .trailing)
+                    .frame(width: 80, height: 40, alignment: .trailing)
                 }
 
                 FormatTogglePill(format: $captureFormat) { newFormat in
@@ -3272,17 +3273,17 @@ private struct ShutterButtonChrome: View {
     var body: some View {
         ZStack {
             // Knurled collar — SOLID matte steel, not chrome. Never scales/offsets with press.
-            // No brightness shift on the collar — only the inner face pushes in.
+            // No brightness shift — only the inner face pushes in. Soften whites (no flash crescent).
             Circle()
                 .fill(
                     AngularGradient(
                         colors: [
-                            Color(red: 0.34, green: 0.35, blue: 0.37),
-                            Color(red: 0.20, green: 0.21, blue: 0.23),
                             Color(red: 0.30, green: 0.31, blue: 0.33),
-                            Color(red: 0.17, green: 0.18, blue: 0.19),
-                            Color(red: 0.32, green: 0.33, blue: 0.35),
-                            Color(red: 0.34, green: 0.35, blue: 0.37)
+                            Color(red: 0.18, green: 0.19, blue: 0.20),
+                            Color(red: 0.26, green: 0.27, blue: 0.29),
+                            Color(red: 0.15, green: 0.16, blue: 0.17),
+                            Color(red: 0.28, green: 0.29, blue: 0.31),
+                            Color(red: 0.30, green: 0.31, blue: 0.33)
                         ],
                         center: .center
                     )
@@ -3290,7 +3291,13 @@ private struct ShutterButtonChrome: View {
                 .frame(width: outer, height: outer)
                 .overlay {
                     Circle()
-                        .fill(Color(red: 0.26, green: 0.27, blue: 0.29).opacity(0.55))
+                        .fill(Color(red: 0.22, green: 0.23, blue: 0.25).opacity(0.55))
+                        .allowsHitTesting(false)
+                }
+                // Whole-button press cue: collar stays put but dims slightly.
+                .overlay {
+                    Circle()
+                        .fill(Color.black.opacity(isPressed ? 0.18 : 0))
                         .allowsHitTesting(false)
                 }
                 .overlay {
@@ -3298,9 +3305,9 @@ private struct ShutterButtonChrome: View {
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.22),
-                                    Color.white.opacity(0.04),
-                                    Color.black.opacity(0.65)
+                                    Color(white: 0.55).opacity(0.35),
+                                    Color(white: 0.35).opacity(0.08),
+                                    Color.black.opacity(0.70)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -3313,9 +3320,9 @@ private struct ShutterButtonChrome: View {
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.black.opacity(0.5),
+                                    Color.black.opacity(0.55),
                                     Color.clear,
-                                    Color.white.opacity(0.14)
+                                    Color(white: 0.45).opacity(0.10)
                                 ],
                                 startPoint: .topLeading,
                                 endPoint: .bottomTrailing
@@ -3333,52 +3340,51 @@ private struct ShutterButtonChrome: View {
                 // Collar drop shadow stays constant — mechanical housing.
                 .shadow(color: Color.black.opacity(0.55), radius: 5.5, y: 2.5)
 
-            // Fixed metal lip between collar and face — never moves with press,
-            // so the face can visibly drop into a real recess.
+            // Fixed dark lip — matte steel, no bright white that flashes when the face moves.
             Circle()
                 .strokeBorder(
                     LinearGradient(
                         colors: [
-                            Color.white.opacity(0.16),
-                            Color.black.opacity(0.55),
-                            Color.white.opacity(0.05)
+                            Color(white: 0.28).opacity(0.55),
+                            Color.black.opacity(0.75),
+                            Color(white: 0.18).opacity(0.35)
                         ],
                         startPoint: .top,
                         endPoint: .bottom
                     ),
-                    lineWidth: compact ? 1.8 : 2.2
+                    lineWidth: compact ? 1.6 : 2.0
                 )
-                .frame(width: well + 2, height: well + 2)
+                .frame(width: well + 1, height: well + 1)
 
             // Well recess — darkens as the face pushes in (collar stays put).
             Circle()
                 .fill(
                     RadialGradient(
                         colors: [
-                            Color.black.opacity(isPressed ? 0.72 : 0.38),
-                            Color.black.opacity(isPressed ? 0.48 : 0.22),
-                            Color.black.opacity(0.12)
+                            Color.black.opacity(isPressed ? 0.78 : 0.42),
+                            Color.black.opacity(isPressed ? 0.55 : 0.28),
+                            Color.black.opacity(0.18)
                         ],
                         center: .center,
-                        startRadius: face * 0.15,
+                        startRadius: face * 0.12,
                         endRadius: well * 0.52
                     )
                 )
                 .frame(width: well, height: well)
                 .overlay {
                     Circle()
-                        .stroke(Color.black.opacity(isPressed ? 0.85 : 0.55), lineWidth: compact ? 1.4 : 1.75)
+                        .stroke(Color.black.opacity(isPressed ? 0.90 : 0.60), lineWidth: compact ? 1.4 : 1.75)
                 }
 
-            // Inner shutter face — the ONLY part that presses in.
+            // Inner shutter face — presses as one unit into the well (clipped so no crescent flash).
             ZStack {
                 Circle()
                     .fill(
                         RadialGradient(
                             colors: [
-                                Color(red: isPressed ? 0.26 : 0.32, green: isPressed ? 0.27 : 0.33, blue: isPressed ? 0.29 : 0.35),
-                                Color(red: isPressed ? 0.17 : 0.22, green: isPressed ? 0.18 : 0.23, blue: isPressed ? 0.20 : 0.25),
-                                Color(red: isPressed ? 0.12 : 0.18, green: isPressed ? 0.13 : 0.19, blue: isPressed ? 0.15 : 0.21)
+                                Color(red: isPressed ? 0.22 : 0.28, green: isPressed ? 0.23 : 0.29, blue: isPressed ? 0.25 : 0.31),
+                                Color(red: isPressed ? 0.14 : 0.19, green: isPressed ? 0.15 : 0.20, blue: isPressed ? 0.17 : 0.22),
+                                Color(red: isPressed ? 0.09 : 0.14, green: isPressed ? 0.10 : 0.15, blue: isPressed ? 0.12 : 0.17)
                             ],
                             center: UnitPoint(x: 0.38, y: 0.32),
                             startRadius: 0,
@@ -3387,23 +3393,24 @@ private struct ShutterButtonChrome: View {
                     )
                     .frame(width: face, height: face)
 
+                // Soft steel sheen — keep low so it never reads as a white flash.
                 Circle()
                     .fill(
                         RadialGradient(
                             colors: [
-                                Color.white.opacity(isBusy ? 0.03 : (isPressed ? 0.03 : 0.09)),
+                                Color(white: 0.75).opacity(isBusy ? 0.02 : (isPressed ? 0.015 : 0.045)),
                                 Color.clear
                             ],
                             center: UnitPoint(x: 0.34, y: 0.30),
                             startRadius: 0,
-                            endRadius: face * 0.5
+                            endRadius: face * 0.48
                         )
                     )
                     .frame(width: face, height: face)
 
                 ForEach(0..<4, id: \.self) { i in
                     Circle()
-                        .stroke(Color.white.opacity(isPressed ? 0.02 : 0.035), lineWidth: 0.55)
+                        .stroke(Color.white.opacity(isPressed ? 0.015 : 0.028), lineWidth: 0.5)
                         .frame(
                             width: face - 10 - CGFloat(i) * (face * 0.15),
                             height: face - 10 - CGFloat(i) * (face * 0.15)
@@ -3414,14 +3421,14 @@ private struct ShutterButtonChrome: View {
                     .stroke(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(isPressed ? 0.05 : 0.18),
+                                Color(white: 0.55).opacity(isPressed ? 0.06 : 0.14),
                                 Color.clear,
-                                Color.black.opacity(isPressed ? 0.65 : 0.45)
+                                Color.black.opacity(isPressed ? 0.70 : 0.50)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         ),
-                        lineWidth: 0.9
+                        lineWidth: 0.85
                     )
                     .frame(width: face - 2, height: face - 2)
 
@@ -3447,21 +3454,19 @@ private struct ShutterButtonChrome: View {
                         .animation(ShutterMotion.tick, value: burstCount)
                 }
             }
-            // Real shutter travel: face sinks into the fixed collar well.
-            // Outer knurled ring + lip never scale or move.
-            .scaleEffect(isPressed ? 0.86 : 1.0)
-            .offset(y: isPressed ? (compact ? 2.6 : 3.2) : 0)
+            // Face travels as one unit into the well. Mild scale + sink — no white halo.
+            // Outer knurled ring never moves; collar only dims (above).
+            .scaleEffect(isPressed ? 0.92 : 1.0)
+            .offset(y: isPressed ? (compact ? 2.2 : 2.8) : 0)
             .shadow(
-                color: Color.black.opacity(isPressed ? 0.08 : 0.55),
-                radius: isPressed ? 0.4 : 3.0,
-                y: isPressed ? 0 : 2.0
-            )
-            .shadow(
-                color: Color.white.opacity(isPressed ? 0 : 0.06),
-                radius: 1,
-                y: -0.5
+                color: Color.black.opacity(isPressed ? 0.10 : 0.50),
+                radius: isPressed ? 0.5 : 2.8,
+                y: isPressed ? 0 : 1.8
             )
             .animation(ShutterMotion.press, value: isPressed)
+            // Clip to the well so press travel never exposes a bright lip crescent.
+            .frame(width: well, height: well)
+            .clipShape(Circle())
 
             // Status rings outside the face — collar-relative, not pressed with face.
             if isTimerArmed {
@@ -3568,9 +3573,9 @@ struct FlashButtonPill: View {
     let flashMode: AVCaptureDevice.FlashMode
     let action: () -> Void
 
-    // Uniform size for flash/thumbnail/WB
-    private let pillWidth: CGFloat = 88
-    private let pillHeight: CGFloat = 48
+    // Uniform size for flash/thumbnail/WB — tightened (Build 68).
+    private let pillWidth: CGFloat = 84
+    private let pillHeight: CGFloat = 44
 
     private var iconColor: Color {
         switch flashMode {
@@ -3642,12 +3647,12 @@ struct ModeControl: View {
 
     var body: some View {
         Button(action: action) {
-            VStack(spacing: 5) {
+            VStack(spacing: 3) {
                 ModeIcon(icon: icon, isActive: isActive)
                 ModeButtonChrome(isActive: isActive)
             }
-            // Tight column — four fit in the polish 112pt trailing wing.
-            .frame(width: 26, height: 48)
+            // Tight column — sits closer to scrubbers (Build 68).
+            .frame(width: 26, height: 40)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -3726,9 +3731,9 @@ struct ThumbnailPill: View {
     let image: UIImage?
     let action: () -> Void
 
-    // Uniform size for flash/thumbnail/WB
-    private let pillWidth: CGFloat = 88
-    private let pillHeight: CGFloat = 48
+    // Uniform size for flash/thumbnail/WB — tightened (Build 68).
+    private let pillWidth: CGFloat = 84
+    private let pillHeight: CGFloat = 44
 
     var body: some View {
         Button(action: action) {
@@ -3940,9 +3945,9 @@ struct WBPill: View {
     let onChanged: (Int) -> Void
 
     private let wbModes = ["AWB", "SUN", "CLD", "SHD", "TNG", "FLO"]  // Fixed-width abbreviations
-    // Uniform size for flash/thumbnail/WB
-    private let pillWidth: CGFloat = 88
-    private let pillHeight: CGFloat = 48
+    // Uniform size for flash/thumbnail/WB — tightened (Build 68).
+    private let pillWidth: CGFloat = 84
+    private let pillHeight: CGFloat = 44
 
     var body: some View {
         Button(action: {

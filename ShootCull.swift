@@ -17,11 +17,12 @@ enum SessionClustering {
 // MARK: - Cull palette (darkroom)
 
 enum CullPalette {
-    static let amber = Color(red: 1.0, green: 0.82, blue: 0.38)
+    /// Match DS.accent — Nikon digital-display yellow across cull + finder.
+    static let amber = Color(red: 1.0, green: 0.85, blue: 0.35)
     /// Safelight red — never system red
     static let safelight = Color(red: 0x8B / 255.0, green: 0x1A / 255.0, blue: 0x1A / 255.0)
     static let safelightGlow = Color(red: 0.72, green: 0.22, blue: 0.18)
-    static let hairline = Color(red: 1.0, green: 0.82, blue: 0.38).opacity(0.32)
+    static let hairline = Color(red: 1.0, green: 0.85, blue: 0.35).opacity(0.32)
     static let sheetTop = Color(red: 0x1C / 255.0, green: 0x19 / 255.0, blue: 0x16 / 255.0)
     static let sheetBottom = Color(red: 0x14 / 255.0, green: 0x12 / 255.0, blue: 0x10 / 255.0)
     static let paper = Color(red: 0x1A / 255.0, green: 0x16 / 255.0, blue: 0x12 / 255.0)

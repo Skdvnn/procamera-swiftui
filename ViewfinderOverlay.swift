@@ -344,30 +344,50 @@ final class ChromePickerViewController: UIViewController, UITableViewDataSource,
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    /// Nikon digital-display yellow (matches DS.accent).
+    private static let lcdYellow = UIColor(red: 1.0, green: 0.85, blue: 0.35, alpha: 1)
+    private static let lcdPeak = UIColor(red: 0.35, green: 0.95, blue: 0.45, alpha: 1)
+
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = UIColor.black.withAlphaComponent(0.35)
+        view.backgroundColor = UIColor.black.withAlphaComponent(0.32)
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(dimTapped(_:)))
         tap.cancelsTouchesInView = false
         view.addGestureRecognizer(tap)
 
-        panel.backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.08, alpha: 0.96)
-        panel.layer.cornerRadius = 10
-        panel.layer.borderWidth = 1
-        panel.layer.borderColor = UIColor(white: 0.22, alpha: 1).cgColor
+        // Tight Nikon/DSLR inset panel — dark LCD well, not a floating sheet.
+        panel.backgroundColor = UIColor(red: 0.05, green: 0.05, blue: 0.05, alpha: 0.97)
+        panel.layer.cornerRadius = 8
+        panel.layer.borderWidth = 2
+        panel.layer.borderColor = UIColor(white: 0.10, alpha: 1).cgColor
         panel.clipsToBounds = true
+        // Inner hairline for machined inset feel.
+        panel.layer.shadowColor = UIColor.black.cgColor
+        panel.layer.shadowOpacity = 0.55
+        panel.layer.shadowRadius = 8
+        panel.layer.shadowOffset = CGSize(width: 0, height: 3)
+        panel.layer.masksToBounds = false
         view.addSubview(panel)
+
+        // Clip content inside the bordered well.
+        let well = UIView()
+        well.backgroundColor = UIColor(red: 0.05, green: 0.05, blue: 0.05, alpha: 1)
+        well.layer.cornerRadius = 6
+        well.clipsToBounds = true
+        well.tag = 7701
+        panel.addSubview(well)
 
         table.backgroundColor = .clear
         table.separatorStyle = .none
         table.dataSource = self
         table.delegate = self
         table.rowHeight = UITableView.automaticDimension
-        table.estimatedRowHeight = 40
+        table.estimatedRowHeight = 32
         table.showsVerticalScrollIndicator = false
+        table.contentInset = UIEdgeInsets(top: 4, left: 0, bottom: 4, right: 0)
         table.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
-        panel.addSubview(table)
+        well.addSubview(table)
 
         layoutPanel()
     }
@@ -379,20 +399,23 @@ final class ChromePickerViewController: UIViewController, UITableViewDataSource,
 
     private func layoutPanel() {
         let compact = session.compactChrome
-        let width: CGFloat = session.menu == .looks ? 210 : (session.menu == .film ? 200 : 188)
-        let maxH: CGFloat = compact ? 280 : 340
+        // Slightly tighter widths — denser Nikon menu.
+        let width: CGFloat = session.menu == .looks ? 196 : (session.menu == .film ? 188 : 176)
+        let maxH: CGFloat = compact ? 268 : 320
         let top: CGFloat = {
             switch session.menu {
-            case .film: return compact ? 48 : 100
-            case .fx: return compact ? 72 : 140
-            case .looks: return compact ? 96 : 180
+            case .film: return compact ? 44 : 92
+            case .fx: return compact ? 68 : 132
+            case .looks: return compact ? 90 : 168
             }
         }()
-        let trailing: CGFloat = compact ? 10 : 16
+        let trailing: CGFloat = compact ? 10 : 14
         let x = view.bounds.width - trailing - width
         let h = min(maxH, view.bounds.height - top - 24)
         panel.frame = CGRect(x: x, y: top, width: width, height: h)
-        table.frame = panel.bounds.insetBy(dx: 0, dy: 4)
+        let well = panel.viewWithTag(7701) ?? panel
+        well.frame = panel.bounds.insetBy(dx: 2, dy: 2)
+        table.frame = well.bounds
     }
 
     private func rebuildRows() {
@@ -426,53 +449,98 @@ final class ChromePickerViewController: UIViewController, UITableViewDataSource,
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { rows.count }
 
+    func tableView(_ tableView: UITableView, heightForRowAt indexPath: IndexPath) -> CGFloat {
+        switch rows[indexPath.row] {
+        case .section: return 22
+        case .scene: return 36
+        case .emptyLooks: return 48
+        case .save: return 30
+        default: return 28
+        }
+    }
+
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
         cell.backgroundColor = .clear
+        cell.contentView.backgroundColor = .clear
         cell.selectionStyle = .none
         cell.textLabel?.numberOfLines = 2
         cell.textLabel?.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        cell.textLabel?.textColor = UIColor.white.withAlphaComponent(0.7)
+        cell.textLabel?.textColor = UIColor.white.withAlphaComponent(0.65)
+        cell.textLabel?.textAlignment = .left
         cell.accessoryType = .none
+        // Reset selected wash each reuse.
+        cell.contentView.layer.cornerRadius = 0
+        cell.contentView.backgroundColor = .clear
+
+        let yellow = Self.lcdYellow
 
         switch rows[indexPath.row] {
         case .section(let title):
-            cell.textLabel?.text = title
+            cell.textLabel?.text = "  " + title
             cell.textLabel?.font = .monospacedSystemFont(ofSize: 8, weight: .semibold)
-            cell.textLabel?.textColor = UIColor.white.withAlphaComponent(0.35)
+            cell.textLabel?.textColor = UIColor.white.withAlphaComponent(0.32)
         case .scene(let mode):
             let on = session.shootMode == mode
-            cell.textLabel?.text = (on ? "> " : "  ") + mode.title.uppercased() + "\n  " + mode.blurb.uppercased()
-            cell.textLabel?.textColor = on ? .white : UIColor.white.withAlphaComponent(0.65)
-            cell.textLabel?.font = .monospacedSystemFont(ofSize: 11, weight: on ? .semibold : .regular)
+            let cursor = on ? "> " : "  "
+            cell.textLabel?.text = cursor + mode.title.uppercased() + "\n  " + mode.blurb.uppercased()
+            cell.textLabel?.textColor = on ? .white : UIColor.white.withAlphaComponent(0.58)
+            cell.textLabel?.font = .monospacedSystemFont(ofSize: 10, weight: on ? .semibold : .regular)
+            if on {
+                cell.contentView.backgroundColor = UIColor.white.withAlphaComponent(0.05)
+                // Yellow cursor via attributed first line prefix feel — tint whole selected row warm.
+                cell.textLabel?.textColor = yellow
+            }
         case .film(let filter):
             let on = session.filmFilter == filter
-            cell.textLabel?.text = (on ? "> " : "  ") + filter.name.uppercased()
-            cell.textLabel?.textColor = on ? .white : UIColor.white.withAlphaComponent(0.65)
+            let cursor = on ? "> " : "  "
+            let iso = Self.isoBadge(for: filter)
+            let pad = iso.isEmpty ? "" : String(repeating: " ", count: max(1, 14 - filter.name.count))
+            cell.textLabel?.text = cursor + filter.name.uppercased() + (iso.isEmpty ? "" : pad + iso)
+            cell.textLabel?.textColor = on ? yellow : UIColor.white.withAlphaComponent(0.62)
             cell.textLabel?.font = .monospacedSystemFont(ofSize: 11, weight: on ? .semibold : .regular)
+            if on { cell.contentView.backgroundColor = UIColor.white.withAlphaComponent(0.05) }
         case .peaking:
             let on = session.focusPeaking
             cell.textLabel?.text = (on ? "> " : "  ") + "PEAKING  " + (on ? "ON" : "OFF")
-            cell.textLabel?.textColor = on ? UIColor(red: 0.35, green: 0.95, blue: 0.45, alpha: 1) : UIColor.white.withAlphaComponent(0.65)
+            cell.textLabel?.textColor = on ? Self.lcdPeak : UIColor.white.withAlphaComponent(0.62)
+            cell.textLabel?.font = .monospacedSystemFont(ofSize: 11, weight: on ? .semibold : .regular)
+            if on { cell.contentView.backgroundColor = UIColor.white.withAlphaComponent(0.04) }
         case .fx(let fx):
             let on = session.lensFX == fx
             let badge = fx == .none ? "" : "  \(fx.badge)"
             cell.textLabel?.text = (on ? "> " : "  ") + fx.name.uppercased() + badge
-            cell.textLabel?.textColor = on ? .white : UIColor.white.withAlphaComponent(0.65)
+            cell.textLabel?.textColor = on ? yellow : UIColor.white.withAlphaComponent(0.62)
             cell.textLabel?.font = .monospacedSystemFont(ofSize: 11, weight: on ? .semibold : .regular)
+            if on { cell.contentView.backgroundColor = UIColor.white.withAlphaComponent(0.05) }
         case .recipe(let recipe):
-            cell.textLabel?.text = recipe.name.uppercased() + "\n" + recipe.subtitle.uppercased()
+            cell.textLabel?.text = "  " + recipe.name.uppercased() + "\n  " + recipe.subtitle.uppercased()
             cell.textLabel?.textColor = .white
+            cell.textLabel?.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
         case .emptyLooks:
             cell.textLabel?.text = "Save film + FX combos\nfor one-tap recall."
-            cell.textLabel?.textColor = UIColor.white.withAlphaComponent(0.4)
+            cell.textLabel?.textColor = UIColor.white.withAlphaComponent(0.38)
             cell.textLabel?.textAlignment = .center
+            cell.textLabel?.font = .monospacedSystemFont(ofSize: 9, weight: .regular)
         case .save:
             cell.textLabel?.text = session.menu == .looks ? "  SAVE" : "  SAVE LOOK"
-            cell.textLabel?.textColor = UIColor(red: 1, green: 0.75, blue: 0.45, alpha: 1)
+            cell.textLabel?.textColor = yellow
             cell.textLabel?.font = .monospacedSystemFont(ofSize: 10, weight: .semibold)
         }
         return cell
+    }
+
+    private static func isoBadge(for filter: FilmFilterMode) -> String {
+        switch filter {
+        case .none: return ""
+        case .portra400: return "400"
+        case .kodakGold: return "200"
+        case .ektar100: return "100"
+        case .trix400: return "400"
+        case .velvia50: return "50"
+        case .cinestill800: return "800T"
+        case .instant: return "SX70"
+        }
     }
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {

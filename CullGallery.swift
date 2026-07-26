@@ -2018,17 +2018,18 @@ struct FinishDoneSheet: View {
                 Text("SHEET FILED")
                     .font(.system(size: 9, weight: .bold, design: .monospaced))
                     .tracking(3)
-                    .foregroundColor(CullPalette.amber.opacity(0.7))
+                    .foregroundColor(CullPalette.amber.opacity(0.85))
                     .padding(.bottom, 8)
 
-                Text(albumName)
-                    .font(.system(size: 24, weight: .semibold, design: .serif))
+                // Mono LCD title — consistent with Nikon digital-display chrome.
+                Text(albumName.uppercased())
+                    .font(.system(size: 20, weight: .semibold, design: .monospaced))
                     .foregroundColor(.white.opacity(0.95))
                     .padding(.bottom, 6)
 
-                Text("\(keeperCount) keepers · album “\(albumName)”")
-                    .font(.system(size: 12, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.4))
+                Text("\(keeperCount) KEEPERS · ALBUM")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundColor(CullPalette.amber.opacity(0.55))
                     .padding(.bottom, 24)
 
                 VStack(spacing: 12) {
