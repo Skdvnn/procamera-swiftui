@@ -32,6 +32,8 @@ enum WidgetPalette {
     static let well = Color(red: 0x0A / 255.0, green: 0x0A / 255.0, blue: 0x0A / 255.0)
     static let paper = Color(red: 0x1A / 255.0, green: 0x16 / 255.0, blue: 0x12 / 255.0)
     static let hairline = accent.opacity(0.32)
+    /// Matched outer pad on every Home face — sides + top (Build 102).
+    static let contentPad: CGFloat = 14
 
     static var vulcaniteBackground: some View {
         LinearGradient(
@@ -124,32 +126,41 @@ struct WidgetShootButton: View {
     }
 }
 
-/// Two overlapping recent stills — small widget photo block, film-card corners.
+/// Fan of recent stills behind a DSLR viewfinder gate — small widget photo block.
 struct WidgetRecentStack: View {
     let images: [UIImage]
     var large: Bool = false
+    /// Grease-pencil exposure stamp on the front card (Build 102).
+    var exposureStamp: String = ""
 
     var body: some View {
         GeometryReader { geo in
             let w = geo.size.width
             let h = geo.size.height
-            let cardW = large ? w * 0.58 : w * 0.62
-            let cardH = large ? h * 0.88 : h * 0.92
+            let cardW = large ? w * 0.56 : w * 0.60
+            let cardH = large ? h * 0.84 : h * 0.88
 
             ZStack {
                 if images.isEmpty {
                     emptyPlaceholders(cardW: cardW, cardH: cardH)
                 } else {
+                    // Back cards fan under the gate — reads as a pulled strip of negs.
+                    if images.count >= 3 {
+                        photoCard(images[2], width: cardW * 0.86, height: cardH * 0.86, stamped: false)
+                            .rotationEffect(.degrees(-12))
+                            .offset(x: -w * 0.18, y: h * 0.08)
+                            .opacity(0.72)
+                    }
                     if images.count >= 2 {
-                        photoCard(images[1], width: cardW * 0.92, height: cardH * 0.92)
-                            .rotationEffect(.degrees(-7))
-                            .offset(x: -w * 0.12, y: h * 0.04)
+                        photoCard(images[1], width: cardW * 0.92, height: cardH * 0.92, stamped: false)
+                            .rotationEffect(.degrees(-6))
+                            .offset(x: -w * 0.10, y: h * 0.04)
                             .opacity(0.88)
                     }
-                    photoCard(images[0], width: cardW, height: cardH)
-                        .rotationEffect(.degrees(images.count >= 2 ? 5 : 0))
-                        .offset(x: images.count >= 2 ? w * 0.10 : 0, y: images.count >= 2 ? -h * 0.02 : 0)
-                        .shadow(color: .black.opacity(0.5), radius: 5, y: 2)
+                    photoCard(images[0], width: cardW, height: cardH, stamped: true)
+                        .rotationEffect(.degrees(images.count >= 2 ? 4 : 0))
+                        .offset(x: images.count >= 2 ? w * 0.08 : 0, y: images.count >= 2 ? -h * 0.02 : 0)
+                        .shadow(color: .black.opacity(0.55), radius: 6, y: 2)
                 }
             }
             .frame(width: w, height: h)
@@ -157,43 +168,68 @@ struct WidgetRecentStack: View {
         .accessibilityHidden(true)
     }
 
-    private func photoCard(_ image: UIImage, width: CGFloat, height: CGFloat) -> some View {
-        let r: CGFloat = 5
-        return Image(uiImage: image)
-            .resizable()
-            .aspectRatio(contentMode: .fill)
-            .frame(width: width, height: height)
-            .clipShape(RoundedRectangle(cornerRadius: r, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: r, style: .continuous)
-                    .stroke(WidgetPalette.hairline, lineWidth: 0.8)
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: r, style: .continuous)
-                    .stroke(Color.black.opacity(0.45), lineWidth: 1)
-                    .padding(1)
-            )
+    private func photoCard(_ image: UIImage, width: CGFloat, height: CGFloat, stamped: Bool) -> some View {
+        let r: CGFloat = 4
+        return ZStack(alignment: .bottomLeading) {
+            Image(uiImage: image)
+                .resizable()
+                .aspectRatio(contentMode: .fill)
+                .frame(width: width, height: height)
+                .clipShape(RoundedRectangle(cornerRadius: r, style: .continuous))
+
+            // Viewfinder gate — only on the front still.
+            if stamped {
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .stroke(WidgetPalette.accent.opacity(0.55), lineWidth: 0.9)
+                    .padding(5)
+                // Corner brackets
+                ViewfinderBrackets()
+                    .stroke(WidgetPalette.accent.opacity(0.7), lineWidth: 1.1)
+                    .padding(3)
+            }
+
+            if stamped, !exposureStamp.isEmpty {
+                Text(exposureStamp.uppercased())
+                    .font(.system(size: 7, weight: .bold, design: .monospaced))
+                    .foregroundStyle(WidgetPalette.accent.opacity(0.9))
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 2)
+                    .background(Color.black.opacity(0.55))
+                    .padding(5)
+            }
+        }
+        .frame(width: width, height: height)
+        .clipShape(RoundedRectangle(cornerRadius: r, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: r, style: .continuous)
+                .stroke(WidgetPalette.hairline, lineWidth: 0.8)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: r, style: .continuous)
+                .stroke(Color.black.opacity(0.5), lineWidth: 1)
+                .padding(1)
+        )
     }
 
     /// Unexposed film frames when the roll is still empty.
     private func emptyPlaceholders(cardW: CGFloat, cardH: CGFloat) -> some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
                 .fill(WidgetPalette.paper)
                 .frame(width: cardW * 0.9, height: cardH * 0.9)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .stroke(Color.white.opacity(0.10), lineWidth: 0.7)
                 )
-                .rotationEffect(.degrees(-7))
-                .offset(x: -14, y: 6)
+                .rotationEffect(.degrees(-8))
+                .offset(x: -12, y: 6)
 
-            RoundedRectangle(cornerRadius: 5, style: .continuous)
+            RoundedRectangle(cornerRadius: 4, style: .continuous)
                 .fill(WidgetPalette.paper.opacity(0.95))
                 .frame(width: cardW, height: cardH)
                 .overlay(
                     VStack(spacing: 4) {
-                        Image(systemName: "camera.fill")
+                        Image(systemName: "camera.viewfinder")
                             .font(.system(size: large ? 16 : 13, weight: .semibold))
                             .foregroundStyle(WidgetPalette.accent.opacity(0.75))
                         Text("SHOOT")
@@ -202,12 +238,42 @@ struct WidgetRecentStack: View {
                     }
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .stroke(WidgetPalette.accent.opacity(0.28), lineWidth: 0.8)
                 )
-                .rotationEffect(.degrees(4))
-                .offset(x: 10, y: -4)
+                .overlay {
+                    ViewfinderBrackets()
+                        .stroke(WidgetPalette.accent.opacity(0.35), lineWidth: 1)
+                        .padding(6)
+                }
+                .rotationEffect(.degrees(3))
+                .offset(x: 8, y: -3)
         }
+    }
+}
+
+/// Corner brackets for the small-stack viewfinder gate.
+private struct ViewfinderBrackets: Shape {
+    func path(in rect: CGRect) -> Path {
+        let arm = min(rect.width, rect.height) * 0.18
+        var p = Path()
+        // TL
+        p.move(to: CGPoint(x: rect.minX, y: rect.minY + arm))
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.minX + arm, y: rect.minY))
+        // TR
+        p.move(to: CGPoint(x: rect.maxX - arm, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY + arm))
+        // BR
+        p.move(to: CGPoint(x: rect.maxX, y: rect.maxY - arm))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.maxX - arm, y: rect.maxY))
+        // BL
+        p.move(to: CGPoint(x: rect.minX + arm, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.maxY - arm))
+        return p
     }
 }
 
@@ -266,8 +332,9 @@ struct WidgetContactSheet: View {
     @ViewBuilder
     private func cell(at index: Int) -> some View {
         let shape = RoundedRectangle(cornerRadius: corner, style: .continuous)
+        let filled = index < frames.count
         ZStack(alignment: .topLeading) {
-            if index < frames.count {
+            if filled {
                 WidgetPalette.well
                     .overlay(
                         Image(uiImage: frames[index].image)
@@ -275,6 +342,20 @@ struct WidgetContactSheet: View {
                             .aspectRatio(contentMode: .fill)
                     )
                     .clipShape(shape)
+                    // Soft scan-line over the keep — darkroom contact-print feel.
+                    .overlay {
+                        LinearGradient(
+                            colors: [
+                                Color.clear,
+                                Color.white.opacity(0.08),
+                                Color.clear
+                            ],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .clipShape(shape)
+                        .allowsHitTesting(false)
+                    }
                     .overlay(
                         shape.stroke(
                             index == 0
@@ -287,18 +368,35 @@ struct WidgetContactSheet: View {
                     Circle()
                         .fill(WidgetPalette.keep)
                         .frame(width: 5, height: 5)
+                        .shadow(color: WidgetPalette.keep.opacity(0.7), radius: 2, y: 0)
                         .padding(3)
                 }
             } else {
+                // Unexposed emulsion ghost — not dead empty space.
                 shape
-                    .fill(Color.black.opacity(0.35))
-                    .overlay(shape.stroke(Color.white.opacity(0.06), lineWidth: 0.6))
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color.white.opacity(0.07),
+                                Color.black.opacity(0.28),
+                                Color.white.opacity(0.03)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .overlay(
+                        Image(systemName: "circle.dashed")
+                            .font(.system(size: 9, weight: .medium))
+                            .foregroundStyle(Color.white.opacity(0.28))
+                    )
+                    .overlay(shape.stroke(Color.white.opacity(0.08), lineWidth: 0.6))
             }
 
             if numbered {
                 Text(String(format: "%02d", index + 1))
                     .font(.system(size: 7, weight: .bold, design: .monospaced))
-                    .foregroundStyle(WidgetPalette.accent.opacity(index < frames.count ? 0.55 : 0.18))
+                    .foregroundStyle(WidgetPalette.accent.opacity(filled ? 0.55 : 0.18))
                     .padding(.horizontal, 3)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     .padding(3)
@@ -509,8 +607,12 @@ struct ShutterLaunchView: View {
                 }
 
                 WidgetDSLRWell(corner: 6) {
-                    WidgetRecentStack(images: entry.recents, large: false)
-                        .padding(5)
+                    WidgetRecentStack(
+                        images: entry.recents,
+                        large: false,
+                        exposureStamp: entry.latestMeta?.exposureLine ?? ""
+                    )
+                    .padding(5)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -532,7 +634,7 @@ struct ShutterLaunchView: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
-            .padding(12)
+            .padding(WidgetPalette.contentPad)
         }
     }
 
@@ -641,7 +743,7 @@ struct ShutterLaunchView: View {
                 }
             }
         }
-        .padding(12)
+        .padding(WidgetPalette.contentPad)
     }
 
     private var subhead: String {
@@ -732,7 +834,7 @@ struct ShutterLaunchView: View {
                 .padding(.vertical, 7)
             }
         }
-        .padding(16)
+        .padding(WidgetPalette.contentPad)
     }
 
     private func largeMetaLine(_ meta: ShutterAppGroup.WidgetRecentMeta) -> String {
@@ -954,7 +1056,7 @@ struct ShutterLooksView: View {
                 }
             }
         }
-        .padding(12)
+        .padding(WidgetPalette.contentPad)
     }
 
     private var armedTitle: String {

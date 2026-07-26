@@ -81,19 +81,29 @@ def parse_geometry() -> dict:
     small = chunk("private var smallBody", "private var footerLine")
     looks = chunk("struct ShutterLooksView", "// MARK: - Lock Screen")
 
+    # Shared outer pad (Build 102) — every Home face uses WidgetPalette.contentPad.
+    content_pad = num(src, r"static let contentPad: CGFloat = (\d+)", 14)
+
+    def body_pad(text: str, fallback: int) -> int:
+        # Prefer shared contentPad; fall back to a literal .padding(N).
+        if "WidgetPalette.contentPad" in text:
+            return content_pad
+        return num(text, r"\.padding\((\d+)\)", fallback, last=True)
+
     return {
-        "small_pad": num(small, r"\.padding\((\d+)\)", 12, last=True),
+        "content_pad": content_pad,
+        "small_pad": body_pad(small, 14),
         "small_gap": num(small, r"VStack\(alignment: \.leading, spacing: (\d+)\)", 5),
         "small_bars": num(small, r"barHeight: (\d+)", 14),
-        "med_pad": num(medium, r"\.padding\((\d+)\)", 12, last=True),
+        "med_pad": body_pad(medium, 14),
         "med_gap": num(medium, r"VStack\(alignment: \.leading, spacing: (\d+)\)", 6),
         "med_bars": num(medium, r"barHeight: (\d+)", 24),
         "med_sheet_w": num(medium, r"\.frame\(width: (\d+), height: \d+\)", 122),
         "med_sheet_h": num(medium, r"\.frame\(width: \d+, height: (\d+)\)", 96),
-        "large_pad": num(large, r"\.padding\((\d+)\)", 16, last=True),
+        "large_pad": body_pad(large, 14),
         "large_gap": num(large, r"VStack\(alignment: \.leading, spacing: (\d+)\)", 9),
         "large_bars": num(large, r"barHeight: (\d+)", 28),
-        "looks_pad": num(looks, r"\.padding\((\d+)\)", 12, last=True),
+        "looks_pad": body_pad(looks, 14),
         "looks_gap": num(looks, r"spacing: family == \.systemLarge \? \d+ : (\d+)", 6),
         "chip_med": num(looks, r"minHeight: family == \.systemLarge \? \d+ : (\d+)", 28),
         "chip_large": num(looks, r"minHeight: family == \.systemLarge \? (\d+)", 38),
@@ -263,10 +273,31 @@ def launch_small(g) -> Image.Image:
     f.text(x + w - 18, y, f"{STATS['today']}", pt=11, fill=ACCENT, anchor="ra")
     y += 11 + gap
 
-    # Overlapping recent stack
+    # Fan of recent stills + viewfinder gate (matches WidgetRecentStack).
     stack_h = SMALL[1] - p * 2 - (11 + gap) - (g["small_bars"] + gap) - 12 - 11 - gap
-    f.photo(x + 4, y + 6, w * 0.56, stack_h - 10, seed=1)
-    f.photo(x + w * 0.30, y, w * 0.60, stack_h - 4, seed=0, newest=True)
+    card_w, card_h = w * 0.60, stack_h * 0.88
+    # Back cards
+    f.photo(x + w * 0.08, y + stack_h * 0.14, card_w * 0.86, card_h * 0.86, seed=2)
+    f.photo(x + w * 0.16, y + stack_h * 0.08, card_w * 0.92, card_h * 0.92, seed=1)
+    # Front card with gate + exposure stamp
+    fx, fy = x + w * 0.28, y + 2
+    f.photo(fx, fy, card_w, card_h, seed=0, newest=True)
+    # Corner brackets
+    arm = min(card_w, card_h) * 0.18
+    bx, by = fx + 3, fy + 3
+    bw, bh = card_w - 6, card_h - 6
+    for (x0, y0, x1, y1) in (
+        (bx, by + arm, bx, by),
+        (bx, by, bx + arm, by),
+        (bx + bw - arm, by, bx + bw, by),
+        (bx + bw, by, bx + bw, by + arm),
+        (bx + bw, by + bh - arm, bx + bw, by + bh),
+        (bx + bw - arm, by + bh, bx + bw, by + bh),
+        (bx, by + bh - arm, bx, by + bh),
+        (bx + arm, by + bh, bx, by + bh),
+    ):
+        f.d.line([(x0 * S, y0 * S), (x1 * S, y1 * S)], fill=ACCENT + (180,), width=max(1, S))
+    f.text(fx + 5, fy + card_h - 12, "1/125 · ISO 400", pt=6.5, fill=ACCENT, alpha=230)
     y += stack_h + gap
 
     f.week_bars(x, y, w, g["small_bars"], labels=False)

@@ -795,6 +795,16 @@ def test_source_guards() -> None:
         ".supportedFamilies([.systemSmall, .systemMedium, .systemLarge])" in widgets,
     )
     check("looks large recents section", '"RECENTS"' in widgets and "darkroom.url" in widgets)
+    # Build 102 — matched outer pad + fun photo previews.
+    check("widget shared contentPad", "static let contentPad: CGFloat = 14" in widgets)
+    check(
+        "widget bodies use contentPad",
+        widgets.count("padding(WidgetPalette.contentPad)") >= 4,
+    )
+    check("widget viewfinder brackets", "struct ViewfinderBrackets" in widgets)
+    check("widget stack exposure stamp", "exposureStamp" in widgets)
+    check("widget contact scan-line", "Soft scan-line" in widgets)
+    check("widget empty emulsion ghost", "Unexposed emulsion ghost" in widgets)
 
     # Build 71 — fun scrubbers + fullscreen arch vibe
     aids = (ROOT / "ViewfinderAids.swift").read_text()
