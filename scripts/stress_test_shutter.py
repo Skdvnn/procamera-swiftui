@@ -753,6 +753,15 @@ def test_source_guards() -> None:
     # Build 68 — Nikon LCD chrome + tighter deck + no white shutter flash
     check("shutter no white top glow", "Color.white.opacity(isPressed ? 0 : 0.06)" not in content)
     check("shutter no collar dim flash", "isPressed ? 0.18 : 0" not in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
+    # Build 96 — shutter left / ISO right; scrubber row shares deck pull-down
+    row2 = content[content.find("// ROW 2:"):content.find("// ROW 3:")]
+    check("shutter scrubber left of ISO", row2.find("ShutterScrubber(") < row2.find("ISOScrubberHorizontal("))
+    check("scrubber row shares deck swipe", ".simultaneousGesture(bottomDeckSwipe)" in row2)
+    check("expanded deck easier collapse bias", "bottomCollapsed ? 1.6 : 1.25" in content)
+    check(
+        "easier pull-down leave explore",
+        "effective > 22 || committedDrag > 18" in content,
+    )
     check("scrubber flash breathing room", "Breathing room from scrubbers" in content)
     check("flash snug on preview row", ".padding(.bottom, -6)" in content)
     check("pill height 44", "pillHeight: CGFloat = 44" in content)
