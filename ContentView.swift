@@ -30,7 +30,19 @@ enum ShutterMotion {
     static let picker = Animation.timingCurve(0.2, 0.8, 0.22, 1.0, duration: 0.2)
     /// Scrubber / ticker settle — no bounce
     static let scrub = Animation.easeOut(duration: 0.18)
-    static let press = Animation.easeOut(duration: 0.1)
+    /// Mechanical shutter face travel — snappy, no bounce.
+    static let press = Animation.easeOut(duration: 0.08)
+}
+
+/// Pressed state for the shutter face only (collar stays solid).
+private struct ShutterPressedKey: EnvironmentKey {
+    static let defaultValue = false
+}
+private extension EnvironmentValues {
+    var shutterPressed: Bool {
+        get { self[ShutterPressedKey.self] }
+        set { self[ShutterPressedKey.self] = newValue }
+    }
 }
 
 // MARK: - Vulcanite Leather Texture (Leica-style vulcanite rubber grain)
@@ -3216,17 +3228,9 @@ private struct ShutterPressStyle: ButtonStyle {
     var armed: Bool = false
 
     func makeBody(configuration: Configuration) -> some View {
+        // Collar stays solid — only the inner face reads `shutterPressed`.
         configuration.label
-            // SwiftUI travel only — Metal shader args stay constant.
-            // No brightness shift — that turned cool steel cyan/blue on press.
-            .scaleEffect(configuration.isPressed ? 0.955 : 1.0)
-            .offset(y: configuration.isPressed ? 1.2 : 0)
-            .opacity(configuration.isPressed ? 0.92 : 1)
-            .shadow(
-                color: Color.black.opacity(configuration.isPressed ? 0.32 : 0.58),
-                radius: configuration.isPressed ? 1.5 : 5.5,
-                y: configuration.isPressed ? 0.5 : 2.5
-            )
+            .environment(\.shutterPressed, configuration.isPressed)
             .animation(ShutterMotion.press, value: configuration.isPressed)
             .onChange(of: configuration.isPressed) { _, pressed in
                 if pressed {
@@ -3245,6 +3249,7 @@ private struct ShutterButtonChrome: View {
     let longExposureProgress: Float?
     let compact: Bool
     var burstCount: Int = 0
+    @Environment(\.shutterPressed) private var isPressed
 
     private var outer: CGFloat { compact ? 64 : 76 }
     private var face: CGFloat { compact ? 50 : 60 }
@@ -3266,7 +3271,8 @@ private struct ShutterButtonChrome: View {
 
     var body: some View {
         ZStack {
-            // Knurled collar — matte steel, not chrome
+            // Knurled collar — SOLID matte steel, not chrome. Never scales/offsets with press.
+            // No brightness shift on the collar — only the inner face pushes in.
             Circle()
                 .fill(
                     AngularGradient(
@@ -3283,7 +3289,6 @@ private struct ShutterButtonChrome: View {
                 )
                 .frame(width: outer, height: outer)
                 .overlay {
-                    // Solid matte fill — no stitchable Metal (picker insert crash).
                     Circle()
                         .fill(Color(red: 0.26, green: 0.27, blue: 0.29).opacity(0.55))
                         .allowsHitTesting(false)
@@ -3319,27 +3324,61 @@ private struct ShutterButtonChrome: View {
                         )
                         .padding(compact ? 2 : 2.5)
                 }
-                // Soft outer glow when armed / LE — SwiftUI only.
                 .shadow(
                     color: (isTimerArmed ? armAccent : showLERing ? leAccent : .clear)
                         .opacity(isTimerArmed || showLERing ? 0.45 : 0),
                     radius: 6,
                     y: 0
                 )
+                // Collar drop shadow stays constant — mechanical housing.
+                .shadow(color: Color.black.opacity(0.55), radius: 5.5, y: 2.5)
 
+            // Fixed metal lip between collar and face — never moves with press,
+            // so the face can visibly drop into a real recess.
             Circle()
-                .stroke(Color.black.opacity(0.6), lineWidth: compact ? 1.4 : 1.75)
-                .frame(width: well, height: well)
-                .shadow(color: Color.black.opacity(0.35), radius: 1, y: 0.5)
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.16),
+                            Color.black.opacity(0.55),
+                            Color.white.opacity(0.05)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: compact ? 1.8 : 2.2
+                )
+                .frame(width: well + 2, height: well + 2)
 
+            // Well recess — darkens as the face pushes in (collar stays put).
+            Circle()
+                .fill(
+                    RadialGradient(
+                        colors: [
+                            Color.black.opacity(isPressed ? 0.72 : 0.38),
+                            Color.black.opacity(isPressed ? 0.48 : 0.22),
+                            Color.black.opacity(0.12)
+                        ],
+                        center: .center,
+                        startRadius: face * 0.15,
+                        endRadius: well * 0.52
+                    )
+                )
+                .frame(width: well, height: well)
+                .overlay {
+                    Circle()
+                        .stroke(Color.black.opacity(isPressed ? 0.85 : 0.55), lineWidth: compact ? 1.4 : 1.75)
+                }
+
+            // Inner shutter face — the ONLY part that presses in.
             ZStack {
                 Circle()
                     .fill(
                         RadialGradient(
                             colors: [
-                                Color(red: 0.32, green: 0.33, blue: 0.35),
-                                Color(red: 0.22, green: 0.23, blue: 0.25),
-                                Color(red: 0.18, green: 0.19, blue: 0.21)
+                                Color(red: isPressed ? 0.26 : 0.32, green: isPressed ? 0.27 : 0.33, blue: isPressed ? 0.29 : 0.35),
+                                Color(red: isPressed ? 0.17 : 0.22, green: isPressed ? 0.18 : 0.23, blue: isPressed ? 0.20 : 0.25),
+                                Color(red: isPressed ? 0.12 : 0.18, green: isPressed ? 0.13 : 0.19, blue: isPressed ? 0.15 : 0.21)
                             ],
                             center: UnitPoint(x: 0.38, y: 0.32),
                             startRadius: 0,
@@ -3348,12 +3387,11 @@ private struct ShutterButtonChrome: View {
                     )
                     .frame(width: face, height: face)
 
-                // Soft sheen only — no plusLighter chrome hotspot (reads blue on press)
                 Circle()
                     .fill(
                         RadialGradient(
                             colors: [
-                                Color.white.opacity(isBusy ? 0.03 : 0.08),
+                                Color.white.opacity(isBusy ? 0.03 : (isPressed ? 0.03 : 0.09)),
                                 Color.clear
                             ],
                             center: UnitPoint(x: 0.34, y: 0.30),
@@ -3365,7 +3403,7 @@ private struct ShutterButtonChrome: View {
 
                 ForEach(0..<4, id: \.self) { i in
                     Circle()
-                        .stroke(Color.white.opacity(0.035), lineWidth: 0.55)
+                        .stroke(Color.white.opacity(isPressed ? 0.02 : 0.035), lineWidth: 0.55)
                         .frame(
                             width: face - 10 - CGFloat(i) * (face * 0.15),
                             height: face - 10 - CGFloat(i) * (face * 0.15)
@@ -3376,9 +3414,9 @@ private struct ShutterButtonChrome: View {
                     .stroke(
                         LinearGradient(
                             colors: [
-                                Color.white.opacity(0.16),
+                                Color.white.opacity(isPressed ? 0.05 : 0.18),
                                 Color.clear,
-                                Color.black.opacity(0.45)
+                                Color.black.opacity(isPressed ? 0.65 : 0.45)
                             ],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
@@ -3387,14 +3425,12 @@ private struct ShutterButtonChrome: View {
                     )
                     .frame(width: face - 2, height: face - 2)
 
-                // Busy dim (still bake) — not the only cue anymore.
                 if isBusy && !isTimerArmed {
                     Circle()
                         .fill(Color.black.opacity(0.28))
                         .frame(width: face, height: face)
                 }
 
-                // Timer digit on the face (cancel target stays the whole button).
                 if isTimerArmed {
                     Text("\(timerCountdown)")
                         .font(.system(size: compact ? 22 : 26, weight: .semibold, design: .monospaced))
@@ -3411,9 +3447,23 @@ private struct ShutterButtonChrome: View {
                         .animation(ShutterMotion.tick, value: burstCount)
                 }
             }
-            .shadow(color: Color.black.opacity(0.5), radius: 2.5, y: 1.5)
+            // Real shutter travel: face sinks into the fixed collar well.
+            // Outer knurled ring + lip never scale or move.
+            .scaleEffect(isPressed ? 0.86 : 1.0)
+            .offset(y: isPressed ? (compact ? 2.6 : 3.2) : 0)
+            .shadow(
+                color: Color.black.opacity(isPressed ? 0.08 : 0.55),
+                radius: isPressed ? 0.4 : 3.0,
+                y: isPressed ? 0 : 2.0
+            )
+            .shadow(
+                color: Color.white.opacity(isPressed ? 0 : 0.06),
+                radius: 1,
+                y: -0.5
+            )
+            .animation(ShutterMotion.press, value: isPressed)
 
-            // Status rings outside the Metal face — safe to animate.
+            // Status rings outside the face — collar-relative, not pressed with face.
             if isTimerArmed {
                 Circle()
                     .stroke(armAccent.opacity(0.85), lineWidth: 2.25)
@@ -3422,7 +3472,6 @@ private struct ShutterButtonChrome: View {
                     .stroke(armAccent.opacity(0.25), lineWidth: 4)
                     .frame(width: face + 10, height: face + 10)
             } else if isBursting {
-                // Quiet ring only — no glowing blue halo.
                 Circle()
                     .stroke(Color.white.opacity(0.35), lineWidth: 1.5)
                     .frame(width: face + 6, height: face + 6)
@@ -3440,7 +3489,6 @@ private struct ShutterButtonChrome: View {
                     .rotationEffect(.degrees(-90))
                     .animation(ShutterMotion.scrub, value: leProgress)
             } else if isBusy {
-                // Indeterminate capture ring (pulse via TimelineView — no Metal args).
                 TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
                     let t = context.date.timeIntervalSinceReferenceDate
                     let spin = t.truncatingRemainder(dividingBy: 1.2) / 1.2
@@ -3456,11 +3504,12 @@ private struct ShutterButtonChrome: View {
                 }
             }
         }
-        // Larger hit target. Kill inherited animations — any animation walking
-        // this chrome used to MetadataCache-crash when film/FX menus opened.
         .frame(width: outer + hitPad, height: outer + hitPad)
         .contentShape(Circle())
-        .transaction { $0.animation = nil }
+        // Allow press animation on the face; don't inherit unrelated chrome anims.
+        .transaction { t in
+            if !isPressed { t.animation = nil }
+        }
     }
 }
 

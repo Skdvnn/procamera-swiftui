@@ -275,10 +275,15 @@ def test_source_guards() -> None:
         and "timerCountdown: timerCountdown" in content
         and ".disabled(isBusy && !canCancel)" in content,
     )
+    shutter_press = content[content.find("struct ShutterPressStyle"):content.find("struct ShutterButtonChrome")]
     check(
-        "shutter SwiftUI press travel",
-        "scaleEffect(configuration.isPressed ? 0.955" in content
-        and "Shader roughness / size / lightPos args are CONSTANT" in content,
+        "shutter face-only push-in",
+        "shutterPressed" in content
+        and "scaleEffect(isPressed ? 0.86" in content
+        and "Collar stays solid" in shutter_press
+        and "Shader roughness / size / lightPos args are CONSTANT" in content
+        and "scaleEffect(configuration.isPressed" not in shutter_press
+        and ".environment" in shutter_press and "shutterPressed" in shutter_press,
     )
     check(
         "shutter LE ring on button",
@@ -662,6 +667,13 @@ def test_source_guards() -> None:
     check("EV drag seeds without tap", "park the sun reticle mid-finder" in content)
     check("pan waits for direction", "Wait for direction" in (ROOT / "FilteredCameraPreview.swift").read_text())
 
+    # Build 67 — real shutter push-in (inner face only; outer collar solid)
+    check("shutter pressed env key", "ShutterPressedKey" in content)
+    check("shutter press style sets env", ".environment(\\shutterPressed" in content or ".environment(\\.shutterPressed" in content)
+    check("shutter fixed metal lip", "Fixed metal lip between collar and face" in content)
+    check("shutter well darkens on press", "isPressed ? 0.72 : 0.38" in content)
+    check("shutter face sink offset", "offset(y: isPressed ? (compact ? 2.6 : 3.2)" in content)
+
 
 
 # ── Landscape layout invariants ─────────────────────────────────────────────
@@ -740,11 +752,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 66", m is not None and int(ver) >= 66, ver)
+    check("Info.plist build >= 67", m is not None and int(ver) >= 67, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 66+", any(v >= 66 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 67+", any(v >= 67 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)
