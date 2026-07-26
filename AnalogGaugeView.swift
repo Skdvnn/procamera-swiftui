@@ -558,10 +558,11 @@ struct AnalogDisplayPanel: View {
     let macroEnabled: Bool
     let isAutoFocus: Bool
     var compact: Bool = false
+    /// Horizon level under EV / between compact scrubbers (Build 73).
+    var showLevel: Bool = false
     let onFocusChanged: (Float) -> Void
     let onExposureChanged: (Float) -> Void
     let onShutterSpeedChanged: (Int) -> Void  // Changed from onApertureChanged
-    var showLevel: Bool = false
     var onFocusScrubActive: ((Bool) -> Void)? = nil
     var onEVScrubActive: ((Bool) -> Void)? = nil
     var onTimerTap: () -> Void = {}
