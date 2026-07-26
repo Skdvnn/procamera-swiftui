@@ -32,6 +32,19 @@ def check(name: str, cond: bool, detail: str = "") -> None:
         ERRORS.append(msg)
 
 
+def source_chunk(content: str, start: str, end: str) -> str:
+    """Slice between two struct anchors, failing loudly if either moved.
+
+    A missing anchor used to silently widen the slice, which turned every
+    check on that chunk into a no-op instead of a failure.
+    """
+    ok = start in content and end in content.split(start, 1)[-1]
+    check(f"anchors present: {start} → {end}", ok)
+    if not ok:
+        return ""
+    return content.split(start, 1)[1].split(end, 1)[0]
+
+
 # ── Deep links (mirror ShutterDeepLink.swift) ───────────────────────────────
 
 SCHEMES = {"shuttercam", "procamera"}
@@ -344,8 +357,8 @@ def test_source_guards() -> None:
     check("ContentView body split for type-checker", "finderCanvas(geo:" in content and "struct FinderStatusOverlays" in content and "struct ContentViewLifecycle" in content)
 
     # Build 51 — deep device-breaker guards (not just "string exists")
-    overlays = content.split('struct FinderStatusOverlays')[1].split('struct ContentViewLifecycle')[0]
-    night = overlays.split("if nightAssistVisible")[1].split("if let cameraError")[0]
+    overlays = source_chunk(content, "struct FinderStatusOverlays", "struct ContentViewLifecycle")
+    night = source_chunk(overlays, "if nightAssistVisible", "if let cameraError")
     check("Night chip has no maxHeight infinity hit sink", "maxHeight: .infinity" not in night)
     check("Night chip not full-bleed width frame", ".frame(maxWidth: .infinity" not in night)
     check("Night chip dismiss is 44pt", "minWidth: 44, minHeight: 44" in night)
@@ -492,9 +505,9 @@ def test_source_guards() -> None:
     )
     check("Flash/Thumb/WB use ProButtonStyle not DragGesture0", content.count("DragGesture(minimumDistance: 0)") == 0 or "FlashButtonPill" in content)
     # Count DragGesture(0) outside shutter comments — should be zero in pill structs
-    flash_chunk = content.split("struct FlashButtonPill")[1].split("struct ModeIcon")[0] if "struct FlashButtonPill" in content else ""
-    thumb_chunk = content.split("struct ThumbnailPill")[1].split("struct FormatTogglePill")[0] if "struct ThumbnailPill" in content else ""
-    wb_chunk = content.split("struct WBPill")[1].split("struct ExposureKnob")[0] if "struct WBPill" in content else ""
+    flash_chunk = source_chunk(content, "struct FlashButtonPill", "struct ModeControl")
+    thumb_chunk = source_chunk(content, "struct ThumbnailPill", "struct FormatTogglePill")
+    wb_chunk = source_chunk(content, "struct WBPill", "struct ExposureKnob")
     check("FlashPill no DragGesture0", "DragGesture(minimumDistance: 0)" not in flash_chunk)
     check("ThumbnailPill no DragGesture0", "DragGesture(minimumDistance: 0)" not in thumb_chunk)
     check("WBPill no DragGesture0", "DragGesture(minimumDistance: 0)" not in wb_chunk)
@@ -519,7 +532,14 @@ def test_source_guards() -> None:
     check("switchCamera gates HW token", "func capturePipelineBusy" in cam and "hwLongExposureToken != nil" in cam[cam.find("func capturePipelineBusy"):cam.find("func capturePipelineBusy")+500])
     check("STACK accumulate autoreleasepool", "autoreleasepool" in cam[cam.find("accumulationFrame"):cam.find("accumulationFrame")+500] or "autoreleasepool" in cam)
     check("clearStickyTouch API", "func clearStickyTouch" in (ROOT / "LensFXEngine.swift").read_text())
-    check("Night chip not full-width hit", ".frame(maxWidth: .infinity" not in content.split("if nightAssistVisible")[1].split("if let cameraError")[0])
+    # Scope to the chip's view, not the visibility state machine that shares
+    # the `if nightAssistVisible` spelling higher up the file.
+    night_chip = source_chunk(
+        source_chunk(content, "struct FinderStatusOverlays", "struct ContentViewLifecycle"),
+        "if nightAssistVisible",
+        "if let cameraError",
+    )
+    check("Night chip not full-width hit", ".frame(maxWidth: .infinity" not in night_chip)
     check("FinishDone onDismiss handled", "handledFinishDone" in (ROOT / "CullGallery.swift").read_text())
     check("loupeSessionActive cleared only by cull drag", "Keep loupeSessionActive" in (ROOT / "CullGallery.swift").read_text() or "only cull drag onEnded clears" in (ROOT / "CullGallery.swift").read_text())
     check("contact loupeArmed", "loupedShotID" in (ROOT / "CullGallery.swift").read_text())
@@ -580,7 +600,7 @@ def test_source_guards() -> None:
     check("didFinish clears pending RAW", "pendingRawData = nil" in cam[cam.find("didFinishCaptureFor"):cam.find("didFinishCaptureFor")+800])
 
     # Build 58–64 — pickers NEVER in Metal / SwiftUI camera tree
-    overlay_chrome = vf.split("struct ViewfinderOverlay")[1].split("struct UIKitChromeLookButtons")[0]
+    overlay_chrome = source_chunk(vf, "struct ViewfinderOverlay", "struct UIKitChromeLookButtons")
     check("ChromePickerMenu enum", "enum ChromePickerMenu" in vf)
     check("ChromePickerGate UIKit", "enum ChromePickerGate" in vf and "ChromePickerViewController" in vf)
     check("pure UIKit picker VC", "final class ChromePickerViewController" in vf)
@@ -909,6 +929,29 @@ def test_project_sanity() -> None:
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
     check("pbx CURRENT_PROJECT_VERSION 77+", any(v >= 77 for v in vers), f"versions={sorted(set(vers))}")
+    # iOS refuses to install an extension whose CFBundleVersion differs from the
+    # host app. Bumping only Info.plist silently drifted widgets/capture to 77.
+    check(
+        "app plist matches pbx build",
+        m is not None and set(vers) == {int(ver)},
+        f"plist={ver} pbx={sorted(set(vers))}",
+    )
+    for ext in ("ShutterWidgets/Info.plist", "ShutterCaptureExtension/Info.plist"):
+        ext_plist = (ROOT / ext).read_text()
+        em = re.search(r"<key>CFBundleVersion</key>\s*<string>([^<]+)</string>", ext_plist)
+        found = em.group(1) if em else "?"
+        check(
+            f"{ext.split('/')[0]} build tracks app",
+            found in ("$(CURRENT_PROJECT_VERSION)", ver),
+            found,
+        )
+        es = re.search(r"<key>CFBundleShortVersionString</key>\s*<string>([^<]+)</string>", ext_plist)
+        app_short = re.search(r"<key>CFBundleShortVersionString</key>\s*<string>([^<]+)</string>", plist)
+        check(
+            f"{ext.split('/')[0]} short version matches app",
+            es is not None and app_short is not None and es.group(1) == app_short.group(1),
+            f"{es.group(1) if es else '?'} vs {app_short.group(1) if app_short else '?'}",
+        )
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)
