@@ -574,9 +574,10 @@ def test_source_guards() -> None:
     check("peaking in FX picker", "peakingRow" in (ROOT / "ViewfinderOverlay.swift").read_text() and "PEAKING" in (ROOT / "ViewfinderOverlay.swift").read_text())
     check("no peaking chrome toggle", "plus.viewfinder" not in (ROOT / "ViewfinderOverlay.swift").read_text())
     check(
-        "scrubber yellow major ticks",
-        "Yellow majors + yellow center indicator" in content
-        or "yellow.opacity(isScrolling ? 0.75 : 0.40)" in content,
+        "scrubber yellow center indicator only",
+        "White majors/minors" in content
+        and "isScrolling ? yellow : yellow.opacity(0.70)" in content
+        and "yellow.opacity(isScrolling ? 0.75 : 0.40)" not in content,
     )
     check("scrubber value spring", "scaleEffect(isScrolling ? 1.12" in content)
     check("shutter no press brightness", "No brightness shift" in content)
@@ -858,7 +859,15 @@ def test_source_guards() -> None:
     snap = content[content.find("struct NativeSnapScrubber"):content.find("struct ISOScrubberHorizontal")]
     check("snap scrubber classic deck face", 'Color(hex: "242424")' in snap or 'faceHex' in snap)
     check("snap scrubber instrument face flag", "instrumentFace" in snap and '"0a0a0a"' in snap)
-    check("snap scrubber yellow major ticks", "yellow.opacity(isScrolling ? 0.75 : 0.40)" in snap)
+    check(
+        "snap scrubber white majors",
+        "White majors/minors" in snap and "yellow.opacity(isScrolling ? 0.75 : 0.40)" not in snap,
+    )
+    check("snap scrubber yellow center only", "isScrolling ? yellow : yellow.opacity(0.70)" in snap)
+    check(
+        "snap scrubber no deck outer board",
+        "No stacked black outer board" in snap,
+    )
     # Shutter collar muted dark steel (Build 90 — mid-bright ring was too strong)
     check(
         "shutter collar muted steel",
