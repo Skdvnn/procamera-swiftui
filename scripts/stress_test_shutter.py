@@ -798,7 +798,15 @@ def test_source_guards() -> None:
         and "manual ? 0 : halfStopDetent(exposureValue)" in content,
     )
     check("sun drag dead zone is a strip", "view.bounds.height - 64" in preview_src)
-    check("vertical wins over morph", "abs(translation.x) * 0.6" in preview_src)
+    check("vertical dominance threshold", "abs(translation.x) * 0.6" in preview_src)
+    # Liquid FX and sun-drag share the finder — split by zone, not only by axis.
+    check("sun drag zone constant", "sunDragZoneMinX" in preview_src)
+    check("sun drag trailing strip", "0.58" in preview_src and "startedInSunZone" in preview_src)
+    check("morphTouchEnabled wired", "morphTouchEnabled:" in content)
+    check(
+        "morph yields while reticle up",
+        "morphTouchEnabled: !isLocked" in content and "!showFocusPoint" in content,
+    )
 
     # Build 72 — DSLR settings + deck spacing
     check("dslr toggle row type", "struct DSLRToggleRow" in (ROOT / "ShutterSettings.swift").read_text())

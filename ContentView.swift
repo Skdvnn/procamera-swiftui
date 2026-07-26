@@ -1681,6 +1681,13 @@ struct ContentView: View {
                             // Focus and zoom are independent — never write zoom into FOCUS.
                         },
                         onMorphTouch: handleMorphTouch,
+                        // Liquid FX owns left/center; sun-drag keeps the trailing strip
+                        // so the two stop stealing each other's press (Build 86).
+                        // Reticle up → morph yields and brightness works full-finder again.
+                        morphTouchEnabled: !isLocked
+                            && lensFX.isTouchReactive
+                            && !showFocusPoint
+                            && !isDraggingExposure,
                         // iOS Camera sun-drag anytime unlocked — no prior tap needed, and
                         // MANUAL is allowed too (the handler moves gain instead of bias).
                         exposureDragEnabled: !isLocked,

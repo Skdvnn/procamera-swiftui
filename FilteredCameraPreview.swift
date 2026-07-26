@@ -79,6 +79,8 @@ struct FilteredCameraPreview: UIViewRepresentable {
     /// Drag / press on the viewfinder for morphic Lens FX.
     /// point: normalized UIKit (0…1), velocity: normalized deltas, active: finger down.
     var onMorphTouch: ((CGPoint, CGPoint, Bool) -> Void)?
+    /// Touch-reactive FX is armed — liquid owns left/center so it doesn't fight sun-drag.
+    var morphTouchEnabled: Bool = false
     /// When true, vertical pans scrub exposure (iOS Camera sun-drag) instead of morph.
     var exposureDragEnabled: Bool = false
     /// translation.height in points (finger down = positive), ended flag.
@@ -117,7 +119,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
         context.coordinator.tapGesture = tapGesture
         context.coordinator.panGesture = panGesture
         context.coordinator.longPressGesture = longPress
-
+        context.coordinator.morphTouchEnabled = morphTouchEnabled
         return view
     }
 
@@ -127,6 +129,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
         context.coordinator.onTap = onTap
         context.coordinator.onPinch = onPinch
         context.coordinator.onMorphTouch = onMorphTouch
+        context.coordinator.morphTouchEnabled = morphTouchEnabled
         context.coordinator.exposureDragEnabled = exposureDragEnabled
         context.coordinator.onExposureDrag = onExposureDrag
         context.coordinator.onCompareHold = onCompareHold
@@ -137,6 +140,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
             onTap: onTap,
             onPinch: onPinch,
             onMorphTouch: onMorphTouch,
+            morphTouchEnabled: morphTouchEnabled,
             exposureDragEnabled: exposureDragEnabled,
             onExposureDrag: onExposureDrag,
             onCompareHold: onCompareHold
@@ -147,6 +151,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
         var onTap: ((CGPoint, CGPoint) -> Void)?
         var onPinch: ((CGFloat) -> Void)?
         var onMorphTouch: ((CGPoint, CGPoint, Bool) -> Void)?
+        var morphTouchEnabled: Bool
         var exposureDragEnabled: Bool
         var onExposureDrag: ((CGFloat, Bool) -> Void)?
         var onCompareHold: ((Bool) -> Void)?
@@ -156,9 +161,15 @@ struct FilteredCameraPreview: UIViewRepresentable {
         weak var longPressGesture: UILongPressGestureRecognizer?
         private var lastPanTime: CFAbsoluteTime = 0
         private var lastPanPoint: CGPoint = .zero
+        /// Finger-down X (0…1) — sun-drag only owns the trailing strip when morph is live.
+        private var panStartNormX: CGFloat = 0.5
         /// Once a pan chooses exposure vs morph, stick with it until lift.
         private var panMode: PanMode = .undecided
         private var compareActive = false
+
+        /// Trailing band where brightness scrub lives while liquid FX is armed.
+        /// Matches the arch peel on the right edge (Build 86).
+        private static let sunDragZoneMinX: CGFloat = 0.58
 
         private enum PanMode {
             case undecided
@@ -170,6 +181,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
             onTap: ((CGPoint, CGPoint) -> Void)?,
             onPinch: ((CGFloat) -> Void)?,
             onMorphTouch: ((CGPoint, CGPoint, Bool) -> Void)?,
+            morphTouchEnabled: Bool,
             exposureDragEnabled: Bool,
             onExposureDrag: ((CGFloat, Bool) -> Void)?,
             onCompareHold: ((Bool) -> Void)?
@@ -177,6 +189,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
             self.onTap = onTap
             self.onPinch = onPinch
             self.onMorphTouch = onMorphTouch
+            self.morphTouchEnabled = morphTouchEnabled
             self.exposureDragEnabled = exposureDragEnabled
             self.onExposureDrag = onExposureDrag
             self.onCompareHold = onCompareHold
@@ -293,7 +306,8 @@ struct FilteredCameraPreview: UIViewRepresentable {
             case .began:
                 lastPanTime = now
                 lastPanPoint = point
-                // Wait for direction — vertical = EV (iOS Camera), else morph FX.
+                panStartNormX = point.x
+                // Wait for direction — zone + axis pick EV vs morph.
                 panMode = .undecided
 
             case .changed:
@@ -301,17 +315,33 @@ struct FilteredCameraPreview: UIViewRepresentable {
                     // Prefer vertical EV sooner (3pt) so brightness feels instant.
                     let verticalEnough = exposureDragEnabled && abs(translation.y) > 3
                     let horizontalEnough = abs(translation.x) > 8
-                    guard verticalEnough || horizontalEnough else { break }
-                    // Anything roughly vertical is brightness; morph needs a clearly
-                    // sideways drag. 0.85 handed too many sun-drags to the FX warp.
-                    if exposureDragEnabled
-                        && abs(translation.y) >= abs(translation.x) * 0.6 {
+                    // Morph also accepts a short press-drag (liquid wants any motion).
+                    let morphEnough = morphTouchEnabled && (abs(translation.x) > 4 || abs(translation.y) > 4)
+                    guard verticalEnough || horizontalEnough || morphEnough else { break }
+
+                    let verticalDominant = abs(translation.y) >= abs(translation.x) * 0.6
+                    let startedInSunZone = panStartNormX >= Self.sunDragZoneMinX
+
+                    // When liquid FX is armed, sun-drag only owns the trailing
+                    // strip (right ~42%) — same side the arch peels on. Left /
+                    // center press is morph, even when the drag is vertical.
+                    // No morph → classic iOS: vertical anywhere brightens.
+                    let takeExposure = exposureDragEnabled && verticalDominant
+                        && (!morphTouchEnabled || startedInSunZone)
+                    let takeMorph = morphTouchEnabled && !takeExposure
+                        && (morphEnough || horizontalEnough || verticalEnough)
+
+                    if takeExposure {
                         panMode = .exposure
                         cancelCompareIfNeeded()
                         onExposureDrag?(translation.y, false)
-                    } else {
+                    } else if takeMorph {
                         panMode = .morph
                         onMorphTouch?(point, .zero, true)
+                    } else if exposureDragEnabled && verticalDominant {
+                        panMode = .exposure
+                        cancelCompareIfNeeded()
+                        onExposureDrag?(translation.y, false)
                     }
                 }
 

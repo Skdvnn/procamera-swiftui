@@ -8,11 +8,11 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 85 phone test pack (dark glass settings + instrument scrubbers):**
+**Build 86 phone test pack (dark glass settings + instrument scrubbers):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **85**.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **86**.
 Press anywhere on the finder and scrub up/down for brightness — expanded or
 collapsed, AUTO or MANUAL — and the trailing arch peels while you do it. The
 shutter keeps its old round silhouette with a no-shrink press.
@@ -29,6 +29,9 @@ which look is armed; and the Lock Screen circular becomes a 36-exposure roll
 gauge with a new inline accessory for the count above the clock. Widgets need a
 **Release / TestFlight** build to read the App Group — Cmd+R Debug entitlements
 are empty, so widget content stays on placeholders there.
+
+Build 86: sun-drag brightness lives on the trailing strip when liquid
+FX is armed, so press-to-warp stops stealing vertical scrubs.
 
 Build 85: viewfinder arch numbers clear the curve; the rail gets
 half-stop ticks, dual stroke, end caps, and a mid pip.
