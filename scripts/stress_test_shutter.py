@@ -893,6 +893,29 @@ def test_source_guards() -> None:
         "snap scrubber outer dark bezel",
         "Outer dark stroke" in snap and '.fill(Color.black)' in snap and ".padding(instrumentFace ? 1.5 : 2)" in snap,
     )
+    # Hard chrome contract — never ship flattened scrubbers / pill bezels again (Build 101).
+    def pill_has_dark_bezel(struct_name: str, next_struct: str) -> bool:
+        chunk = content[content.find(f"struct {struct_name}"):content.find(f"struct {next_struct}")]
+        return (
+            ".fill(Color.black)" in chunk
+            and 'Color(hex: "242424")' in chunk
+            and 'Color(hex: "444444")' in chunk
+            and ("pillWidth - 4" in chunk or "padding(2)" in chunk)
+        )
+
+    check("flash pill dark bezel", pill_has_dark_bezel("FlashButtonPill", "ModeControl"))
+    check("thumbnail pill dark bezel", pill_has_dark_bezel("ThumbnailPill", "FormatTogglePill"))
+    check("WB pill dark bezel", pill_has_dark_bezel("WBPill", "ExposureKnob"))
+    check(
+        "scrubber deck face inset shows black ring",
+        ".padding(instrumentFace ? 1.5 : 2)" in snap
+        and "No stacked black outer board" not in snap
+        and snap.count(".fill(Color.black)") >= 1,
+    )
+    check(
+        "scrubber stroke on face edge",
+        "cornerRadius: instrumentFace ? 4 : 5" in snap,
+    )
     # Shutter collar muted dark steel (Build 90 — mid-bright ring was too strong)
     check(
         "shutter collar muted steel",

@@ -8,14 +8,16 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 100 phone test pack (restore scrubber outer bezel + spacing):**
+**Build 101 phone test pack (scrubber/pill chrome contract):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **100**.
-Scrubbers get the outer dark stroke back (black bezel + inset face, same
-as flash/WB). Top strip returns to 38pt with healthier gaps — yellow still
-only on the center indicator.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **101**.
+Verified: scrubbers + flash/WB/thumb keep the outer dark bezel; deck stroke
+sits on the face edge like the pills; regression guards lock the chrome so
+it cannot flatten again without failing tests.
+
+Build 100: restore scrubber outer bezel + spacing.
 
 Build 99: settings pure black blur, muted headers, DS.mono.
 

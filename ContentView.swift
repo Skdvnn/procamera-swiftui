@@ -3020,7 +3020,11 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                         )
                         .padding(2)
                 }
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                // Inner stroke sits on the face edge (flash/WB use the same inset).
+                RoundedRectangle(
+                    cornerRadius: instrumentFace ? 4 : 5,
+                    style: .continuous
+                )
                     .stroke(
                         isScrolling
                             ? DS.accent.opacity(0.55)
@@ -3032,7 +3036,10 @@ struct NativeSnapScrubber<Value: Hashable>: View {
 
                 // Soft LCD wash while scrubbing
                 if isScrolling {
-                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    RoundedRectangle(
+                        cornerRadius: instrumentFace ? 4 : 5,
+                        style: .continuous
+                    )
                         .fill(DS.accent.opacity(0.07))
                         .padding(instrumentFace ? 1.5 : 2)
                         .allowsHitTesting(false)
