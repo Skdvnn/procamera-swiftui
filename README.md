@@ -67,7 +67,7 @@ The app uses a cohesive design system (`DS`) featuring:
 | ISO | Drag | Set ISO |
 | Format | Tap | Cycle HEIC / JPG / RAW |
 | Macro | Tap | Near-range AF |
-| Thumbnail | Tap | Open Field Book |
+| Thumbnail | Tap | Open Darkroom (cull library) |
 
 ## Building
 

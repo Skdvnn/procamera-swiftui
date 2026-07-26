@@ -43,10 +43,21 @@ struct ShutterLockedCaptureView: View {
                 }
                 .padding()
                 Spacer()
-                Text(context.filmName.uppercased())
-                    .font(.system(size: 11, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Color(red: 1.0, green: 0.85, blue: 0.35))
-                    .padding(.bottom, 28)
+                // Lock Screen capture uses the system picker — film/FX only bake in FULL APP.
+                VStack(spacing: 4) {
+                    Text("SYSTEM CAMERA")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.75))
+                    Text("LOOKS IN FULL APP")
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(Color(red: 1.0, green: 0.85, blue: 0.35).opacity(0.9))
+                    if context.filmName.uppercased() != "NONE" {
+                        Text(context.filmName.uppercased())
+                            .font(.system(size: 9, weight: .regular, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.4))
+                    }
+                }
+                .padding(.bottom, 28)
             }
         }
         .task {

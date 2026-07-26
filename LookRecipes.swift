@@ -68,7 +68,21 @@ final class LookRecipeStore: ObservableObject {
             recipes = []
             return
         }
-        recipes = decoded
+        // Deduplicate IDs — corrupted UserDefaults can crash ForEach on first open.
+        var seen = Set<UUID>()
+        var sanitized: [LookRecipe] = []
+        for recipe in decoded.prefix(Self.maxRecipes) {
+            var copy = recipe
+            if seen.contains(copy.id) {
+                copy.id = UUID()
+            }
+            seen.insert(copy.id)
+            sanitized.append(copy)
+        }
+        recipes = sanitized
+        if sanitized.map(\.id) != decoded.prefix(Self.maxRecipes).map(\.id) {
+            persist()
+        }
     }
 
     private func persist() {
@@ -107,12 +121,22 @@ final class VolumeShutterObserver: NSObject, ObservableObject {
             view.addSubview(volumeView)
         }
         try? AVAudioSession.sharedInstance().setActive(true)
+        // Suppress the KVO callback that fires from priming the volume slider.
+        ignoring = true
+        setVolumeSlider(0.5)
         lastVolume = AVAudioSession.sharedInstance().outputVolume
+        if lastVolume < 0.05 || lastVolume > 0.95 {
+            lastVolume = 0.5
+        }
         observation = AVAudioSession.sharedInstance().observe(\.outputVolume, options: [.new]) { [weak self] session, _ in
             guard let self else { return }
             Task { @MainActor in
                 self.handleVolume(session.outputVolume)
             }
+        }
+        // Re-enable after the prime KVO fires (slight delay to absorb the callback).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.ignoring = false
         }
         startControllerListening()
     }
@@ -141,12 +165,25 @@ final class VolumeShutterObserver: NSObject, ObservableObject {
         ignoring = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self else { return }
-            if let slider = self.volumeView.subviews.compactMap({ $0 as? UISlider }).first {
-                slider.value = 0.5
+            if self.setVolumeSlider(0.5) {
+                self.lastVolume = 0.5
             }
-            self.lastVolume = 0.5
             self.ignoring = false
         }
+    }
+
+    @discardableResult
+    private func setVolumeSlider(_ value: Float) -> Bool {
+        func findSlider(in view: UIView) -> UISlider? {
+            if let s = view as? UISlider { return s }
+            for sub in view.subviews {
+                if let s = findSlider(in: sub) { return s }
+            }
+            return nil
+        }
+        guard let slider = findSlider(in: volumeView) else { return false }
+        slider.value = value
+        return true
     }
 
     private func startControllerListening() {

@@ -1,6 +1,7 @@
 import SwiftUI
 import Photos
 import AVFoundation
+import CoreLocation
 
 // MARK: - Motion (page-turn cull — no springs, no bounce)
 
@@ -166,6 +167,8 @@ struct DarkroomIconButton: View {
                             .stroke(Color.white.opacity(0.1), lineWidth: 0.6)
                     )
             )
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
     }
 }
 
@@ -336,6 +339,7 @@ struct LoupeView: View {
     let touch: CGPoint
     let container: CGSize
     var diameter: CGFloat = 148
+    var magnification: CGFloat = 2.4
     @State private var raised = false
 
     var body: some View {
@@ -344,7 +348,7 @@ struct LoupeView: View {
             aspectRatio: imgSize.width > 0 ? imgSize : CGSize(width: 1, height: 1),
             insideRect: CGRect(origin: .zero, size: container)
         )
-        let scale: CGFloat = 2.4
+        let scale = magnification
         let nx = (touch.x - fit.minX) / max(fit.width, 1)
         let ny = (touch.y - fit.minY) / max(fit.height, 1)
         let pos = CGPoint(
@@ -398,6 +402,14 @@ struct LoupeView: View {
             Rectangle()
                 .fill(CullPalette.amber.opacity(0.45))
                 .frame(width: 0.6, height: 10)
+
+            Text(String(format: "%.1f×", magnification))
+                .font(.system(size: 9, weight: .bold, design: .monospaced))
+                .foregroundColor(CullPalette.amber.opacity(0.9))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(Color.black.opacity(0.65)))
+                .offset(y: diameter * 0.42)
         }
         .scaleEffect(raised ? 1.0 : 0.72, anchor: .bottom)
         .opacity(raised ? 1 : 0)
@@ -412,12 +424,17 @@ struct LoupeView: View {
 
 struct CullLibraryView: View {
     @ObservedObject var store: GalleryStore
+    /// Deep link / Shortcut: open Field Book shelf once this cover is up.
+    var openFieldBooksOnAppear: Bool = false
+    var onConsumedFieldBookOpen: (() -> Void)? = nil
     @StateObject private var marks = FrameMarkStore()
     @Environment(\.dismiss) private var dismiss
 
     @State private var sessions: [ShootSession] = []
     @State private var route: CullRoute?
     @State private var showFieldBooks = false
+    /// Book to open after a cull finish handoff.
+    @State private var openBookID: UUID?
     @State private var appeared = false
     @State private var sheetLoupe: UIImage?
     @State private var comparePair: ComparePair?
@@ -488,17 +505,38 @@ struct CullLibraryView: View {
             rebuildSessions()
             PhotosLibraryService.requestReadWrite { _ in }
             withAnimation(CullMotion.settle) { appeared = true }
+            if openFieldBooksOnAppear {
+                showFieldBooks = true
+                onConsumedFieldBookOpen?()
+            }
         }
         .onChange(of: store.shots) { _, _ in rebuildSessions() }
+        .onChange(of: openFieldBooksOnAppear) { _, open in
+            // Cover already up when a late deep link arrives.
+            guard open else { return }
+            showFieldBooks = true
+            onConsumedFieldBookOpen?()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .shutterOpenFieldBook)) { _ in
+            showFieldBooks = true
+        }
         .fullScreenCover(item: $route) { r in
             CullSessionView(
                 store: store,
                 session: r.session,
                 marks: marks,
                 startIndex: r.startIndex,
-                onFinished: {
+                onFinished: { bookID in
                     route = nil
                     rebuildSessions()
+                    if let bookID {
+                        openBookID = bookID
+                        // Dismiss cull first, then present Field Books with a delay
+                        // so cover sequencing doesn't race.
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                            showFieldBooks = true
+                        }
+                    }
                 }
             )
         }
@@ -518,8 +556,10 @@ struct CullLibraryView: View {
                 onDismiss: { comparePair = nil }
             )
         }
-        .fullScreenCover(isPresented: $showFieldBooks) {
-            LibraryView(store: store)
+        .fullScreenCover(isPresented: $showFieldBooks, onDismiss: {
+            openBookID = nil
+        }) {
+            LibraryView(store: store, initialBookID: openBookID)
         }
     }
 
@@ -630,6 +670,19 @@ struct CullLibraryView: View {
 
     private func rebuildSessions() {
         sessions = SessionClusterer.cluster(store.shots)
+        // Wire dead reverse-geocode path → place-named session titles.
+        for session in sessions {
+            guard let coord = session.mapCoordinate else { continue }
+            let location = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+            SessionTitle.refine(session: session, location: location) { title in
+                DispatchQueue.main.async {
+                    guard let idx = sessions.firstIndex(where: { $0.id == session.id }) else { return }
+                    if sessions[idx].title != title {
+                        sessions[idx].title = title
+                    }
+                }
+            }
+        }
     }
 
     private func open(_ session: ShootSession, at index: Int) {
@@ -673,6 +726,8 @@ struct SessionContactSheet: View {
     var onCompare: ((ShotMetadata, ShotMetadata) -> Void)? = nil
 
     @State private var selectedForCompare: Set<UUID> = []
+    /// Tracks which shot just triggered a long-press loupe so the Button action is suppressed.
+    @State private var loupedShotID: UUID?
 
     private let columns = [
         GridItem(.flexible(), spacing: 0),
@@ -693,6 +748,14 @@ struct SessionContactSheet: View {
     }
 
     private var compareReady: Bool { selectedForCompare.count == 2 }
+
+    /// Leading place fragment from a refined title ("Ocean Beach — Aug 14, morning").
+    private func placeLabel(from title: String) -> String? {
+        let parts = title.split(separator: "—", maxSplits: 1, omittingEmptySubsequences: true)
+        guard parts.count == 2 else { return nil }
+        let place = parts[0].trimmingCharacters(in: .whitespaces)
+        return place.isEmpty ? nil : place
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -729,7 +792,10 @@ struct SessionContactSheet: View {
                     .padding(.top, 4)
 
                     if let coord = session.mapCoordinate {
-                        SessionMapChip(coordinate: coord)
+                        SessionMapChip(
+                            coordinate: coord,
+                            placeLabel: placeLabel(from: session.title)
+                        )
                             .padding(.top, 8)
                             .padding(.trailing, 8)
                     }
@@ -835,6 +901,11 @@ struct SessionContactSheet: View {
         let seed = strokeSeed(for: shot.id)
         let picked = selectedForCompare.contains(shot.id)
         return Button {
+            // Suppress tap that fires after a long-press (loupe arm).
+            if loupedShotID == shot.id {
+                loupedShotID = nil
+                return
+            }
             onOpenFrame(index)
         } label: {
             ZStack {
@@ -906,15 +977,13 @@ struct SessionContactSheet: View {
             LongPressGesture(minimumDuration: 0.35)
                 .onEnded { _ in
                     Haptics.medium()
-                    // First long-press starts compare pick; second completes;
-                    // if already picking, toggle membership. Triple path: if
-                    // not picking and user long-presses once with empty set,
-                    // also offer loupe via a second hold — compare takes priority.
-                    toggleCompare(shot)
+                    // Arm flag so the trailing Button tap doesn't open the frame.
+                    loupedShotID = shot.id
+                    onLoupe?(shot)
                 }
         )
         .accessibilityLabel("Frame \(index + 1), \(state.rawValue)")
-        .accessibilityHint("Long press to select for compare")
+        .accessibilityHint("Long press to loupe; use context menu to compare")
         .contextMenu {
             Button {
                 onLoupe?(shot)
@@ -952,6 +1021,38 @@ private struct ContactPressStyle: ButtonStyle {
     }
 }
 
+// MARK: - Cull display cache (avoid full-res decode every body pass)
+
+final class CullDisplayCache {
+    static let shared = CullDisplayCache()
+    private let cache = NSCache<NSString, UIImage>()
+
+    private init() {
+        cache.countLimit = 14
+        cache.totalCostLimit = 96 * 1024 * 1024
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.cache.removeAllObjects()
+        }
+    }
+
+    func image(for shot: ShotMetadata, store: GalleryStore) -> UIImage? {
+        let key = shot.id.uuidString as NSString
+        if let cached = cache.object(forKey: key) { return cached }
+        if let full = store.image(for: shot) {
+            let cost = Int(full.size.width * full.size.height * 4)
+            cache.setObject(full, forKey: key, cost: max(cost, 1))
+            return full
+        }
+        return store.thumbnail(for: shot)
+    }
+
+    func purge() { cache.removeAllObjects() }
+}
+
 // MARK: - Cull session
 
 struct CullSessionView: View {
@@ -959,7 +1060,8 @@ struct CullSessionView: View {
     let session: ShootSession
     @ObservedObject var marks: FrameMarkStore
     var startIndex: Int = 0
-    var onFinished: () -> Void
+    /// Called when the session finishes; pass a book ID to open Field Book onto it.
+    var onFinished: (_ openBookID: UUID?) -> Void
 
     @Environment(\.dismiss) private var dismiss
     @StateObject private var undo = CullUndoStack()
@@ -968,6 +1070,18 @@ struct CullSessionView: View {
     @State private var showFinish = false
     @State private var isFinishing = false
     @State private var shareProofURL: URL?
+    @State private var shareKeeperItems: [Any] = []
+    @State private var showFinishDone = false
+    @State private var handledFinishDone = false
+    @State private var doneBookID: UUID?
+    @State private var doneAlbumName: String = ""
+    @State private var doneKeeperShots: [ShotMetadata] = []
+    /// Re-open FinishDone only after post-finish share (not mid-cull proof export).
+    @State private var reopenFinishDoneAfterShare = false
+    /// Re-open FinishSession after a mid-cull proof share dismisses.
+    @State private var reopenFinishAfterShare = false
+    /// Loupe drag must not commit keep/reject when the finger lifts.
+    @State private var loupeSessionActive = false
     @State private var finishMessage: String?
     @State private var flashMark: FrameMarkState?
     @State private var loupeTouch: CGPoint?
@@ -1045,9 +1159,10 @@ struct CullSessionView: View {
                 .allowsHitTesting(loupeTouch == nil)
                 .animation(CullMotion.loupeOut, value: loupeTouch != nil)
 
-                // Mark flash stamp
+                // Mark flash stamp — never blocks gestures
                 if let flashMark {
                     MarkStampFlash(state: flashMark)
+                        .allowsHitTesting(false)
                         .id(markDrawKey)
                         .transition(.opacity)
                         .zIndex(30)
@@ -1078,12 +1193,96 @@ struct CullSessionView: View {
         }
         .sheet(isPresented: Binding(
             get: { shareProofURL != nil },
-            set: { if !$0 { shareProofURL = nil } }
+            set: { if !$0 {
+                shareProofURL = nil
+                if reopenFinishDoneAfterShare {
+                    reopenFinishDoneAfterShare = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        showFinishDone = true
+                    }
+                } else if reopenFinishAfterShare {
+                    reopenFinishAfterShare = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        showFinish = true
+                    }
+                }
+            } }
         )) {
             if let url = shareProofURL {
                 ShareSheet(items: [url])
                     .preferredColorScheme(.dark)
             }
+        }
+        .sheet(isPresented: Binding(
+            get: { !shareKeeperItems.isEmpty },
+            set: { if !$0 {
+                shareKeeperItems = []
+                if reopenFinishDoneAfterShare {
+                    reopenFinishDoneAfterShare = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        showFinishDone = true
+                    }
+                }
+            } }
+        )) {
+            ShareSheet(
+                items: shareKeeperItems,
+                subject: "Shutter · \(doneAlbumName)",
+                onComplete: { shareKeeperItems = [] }
+            )
+            .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $showFinishDone, onDismiss: {
+            if !handledFinishDone {
+                // Sheet was swiped/tapped away without a button action — treat as Done.
+                onFinished(nil)
+                dismiss()
+            }
+            handledFinishDone = false
+        }) {
+            FinishDoneSheet(
+                albumName: doneAlbumName,
+                hasBook: doneBookID != nil,
+                keeperCount: doneKeeperShots.count,
+                onOpenBook: {
+                    handledFinishDone = true
+                    showFinishDone = false
+                    let id = doneBookID
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        onFinished(id)
+                        dismiss()
+                    }
+                },
+                onShareKeepers: {
+                    // Dismiss done sheet first so share isn't nested underneath.
+                    handledFinishDone = true
+                    showFinishDone = false
+                    reopenFinishDoneAfterShare = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        shareKeeperImages()
+                    }
+                },
+                onShareProof: {
+                    handledFinishDone = true
+                    showFinishDone = false
+                    reopenFinishDoneAfterShare = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                        shareDoneProofPDF()
+                    }
+                },
+                onOpenPhotos: {
+                    PhotosLibraryService.openPhotosApp()
+                },
+                onDone: {
+                    handledFinishDone = true
+                    showFinishDone = false
+                    onFinished(nil)
+                    dismiss()
+                }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .preferredColorScheme(.dark)
         }
         .overlay {
             if isFinishing {
@@ -1360,11 +1559,13 @@ struct CullSessionView: View {
 
             if let loupeTouch, let loupeImage {
                 LoupeView(image: loupeImage, touch: loupeTouch, container: size)
+                    .allowsHitTesting(false)
                     .zIndex(20)
             } else if loupeLoading, let loupeTouch {
                 ProgressView()
                     .tint(CullPalette.amber)
                     .position(x: loupeTouch.x, y: max(60, loupeTouch.y - 90))
+                    .allowsHitTesting(false)
             }
         }
     }
@@ -1407,7 +1608,7 @@ struct CullSessionView: View {
             .simultaneousGesture(
                 loupeGesture(
                     in: size,
-                    fallback: store.image(for: shot) ?? store.thumbnail(for: shot) ?? UIImage()
+                    fallback: CullDisplayCache.shared.image(for: shot, store: store) ?? UIImage()
                 )
             )
             .onTapGesture(count: 2) { performUndo() }
@@ -1416,7 +1617,7 @@ struct CullSessionView: View {
     private func cullFrameImage(shot: ShotMetadata, size: CGSize, animatedMark: Bool) -> some View {
         let state = marks.state(for: shot.id)
         let seed = strokeSeed(for: shot.id)
-        let image = store.image(for: shot) ?? store.thumbnail(for: shot)
+        let image = CullDisplayCache.shared.image(for: shot, store: store)
 
         return Group {
             if let image {
@@ -1488,7 +1689,10 @@ struct CullSessionView: View {
                 }
             }
             .onEnded { value in
-                guard loupeTouch == nil, !isAdvancing else {
+                // Loupe just ended (or still up) — never treat that pan as keep/reject.
+                if loupeSessionActive || loupeTouch != nil || isAdvancing {
+                    // Clear loupeSessionActive here (not in loupe onEnded) to avoid the race.
+                    loupeSessionActive = false
                     withAnimation(CullMotion.flick) { dragOffset = .zero }
                     return
                 }
@@ -1533,9 +1737,11 @@ struct CullSessionView: View {
                     let point = drag?.location ?? CGPoint(x: size.width / 2, y: size.height / 2)
                     if loupeTouch == nil {
                         Haptics.light()
+                        dragOffset = .zero
+                        loupeSessionActive = true
                         loupeLoading = true
                         loupeImage = fallback
-                        if let shot = current, let full = store.image(for: shot) {
+                        if let shot = current, let full = CullDisplayCache.shared.image(for: shot, store: store) {
                             loupeImage = full
                         }
                         loupeLoading = false
@@ -1554,6 +1760,7 @@ struct CullSessionView: View {
                     loupeImage = nil
                     loupeLoading = false
                 }
+                // Keep loupeSessionActive — only cull drag onEnded clears it when rejecting the mark.
             }
     }
 
@@ -1572,6 +1779,8 @@ struct CullSessionView: View {
             assetLocalIdentifier: shot.photosAssetLocalIdentifier,
             favorite: state == .keep
         )
+        // Drop rejects from Home Screen widget stack (Build 74).
+        ContentView.pushUnculledWidgetRecents(from: store, marks: marks)
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
 
         // Dismiss coach after first real mark
@@ -1607,6 +1816,7 @@ struct CullSessionView: View {
             assetLocalIdentifier: shot.photosAssetLocalIdentifier,
             favorite: action.previous == .keep
         )
+        ContentView.pushUnculledWidgetRecents(from: store, marks: marks)
         if let i = shots.firstIndex(where: { $0.id == action.shotID }) {
             advance(to: i)
         }
@@ -1690,31 +1900,95 @@ struct CullSessionView: View {
         }
 
         let albumName = session.title
-        PhotosLibraryService.exportKeepers(albumName: albumName, assetLocalIdentifiers: keeperIDs) { _ in
+        PhotosLibraryService.exportKeepers(albumName: albumName, assetLocalIdentifiers: keeperIDs) { albumOK in
+            let albumFailed = !albumOK && !keeperIDs.isEmpty
+            var createdBookID: UUID?
             if !keepers.isEmpty, let book = store.createBook(title: albumName) {
                 for shot in keepers { store.add(shot, to: book) }
+                createdBookID = book.id
+            }
+
+            let complete: () -> Void = {
+                // Clear marks only on delete-and-export — mark-only leaves them for the user.
+                if deleteRejects {
+                    marks.clear(shotIDs: rejects.map(\.id) + keepers.map(\.id))
+                }
+                // Refresh widget — rejects gone / keepers stay (Build 74).
+                ContentView.pushUnculledWidgetRecents(from: store, marks: marks)
+                doneKeeperShots = keepers
+                doneBookID = createdBookID
+                doneAlbumName = albumName
+                isFinishing = false
+                if albumFailed {
+                    finishMessage = "Album export failed — keepers in Field Book"
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                    showFinishDone = true
+                }
             }
 
             if deleteRejects {
-                finishMessage = "Deleting rejects…"
+                finishMessage = albumFailed
+                    ? "Album export failed — deleting rejects…"
+                    : "Deleting rejects…"
                 let rejectAssetIDs: [String] = rejects.compactMap { shot in
                     PhotosLibraryService.resolveAsset(
                         preferredID: shot.photosAssetLocalIdentifier,
                         creationDate: shot.date
                     )?.localIdentifier ?? shot.photosAssetLocalIdentifier
                 }
-                PhotosLibraryService.deleteAssets(localIdentifiers: rejectAssetIDs) { _ in
+                PhotosLibraryService.deleteAssets(localIdentifiers: rejectAssetIDs) { success in
+                    guard success else {
+                        finishMessage = albumFailed
+                            ? "Album export + Photos delete failed — local frames kept."
+                            : "Photos delete failed — local frames kept."
+                        // Leave marks intact so the user can retry; only surface the done sheet.
+                        doneKeeperShots = keepers
+                        doneBookID = createdBookID
+                        doneAlbumName = albumName
+                        isFinishing = false
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
+                            showFinishDone = true
+                        }
+                        return
+                    }
                     for shot in rejects { store.delete(shot) }
-                    marks.clear(shotIDs: rejects.map(\.id) + keepers.map(\.id))
-                    isFinishing = false
-                    onFinished()
-                    dismiss()
+                    complete()
                 }
             } else {
-                isFinishing = false
-                onFinished()
-                dismiss()
+                if albumFailed {
+                    finishMessage = "Album export failed — keepers in Field Book"
+                }
+                complete()
             }
+        }
+    }
+
+    private func shareKeeperImages() {
+        let images: [UIImage] = doneKeeperShots.compactMap { store.image(for: $0) ?? store.thumbnail(for: $0) }
+        guard !images.isEmpty else {
+            // Done sheet was dismissed — bring it back if packing failed.
+            showFinishDone = true
+            return
+        }
+        let urls = KeeperSharePackager.jpegFileURLs(from: images)
+        // Prefer files; fall back to UIImages so a partial JPEG write never drops keepers.
+        if urls.count == images.count {
+            shareKeeperItems = urls
+        } else if !urls.isEmpty {
+            shareKeeperItems = urls
+        } else {
+            shareKeeperItems = images
+        }
+    }
+
+    private func shareDoneProofPDF() {
+        let frames = doneKeeperShots.isEmpty ? shots : doneKeeperShots
+        if let url = ProofPDFExporter.makePDF(title: doneAlbumName.isEmpty ? session.title : doneAlbumName, shots: frames, store: store) {
+            shareProofURL = url
+        } else {
+            // Re-offer the done sheet if PDF failed.
+            showFinishDone = true
         }
     }
 
@@ -1723,8 +1997,121 @@ struct CullSessionView: View {
         let frames = keepers.isEmpty ? shots : keepers
         showFinish = false
         if let url = ProofPDFExporter.makePDF(title: session.title, shots: frames, store: store) {
+            // After the mid-cull proof share is dismissed, reopen the finish sheet.
+            reopenFinishAfterShare = true
             shareProofURL = url
         }
+    }
+}
+
+// MARK: - Finish done (handoff after export)
+
+struct FinishDoneSheet: View {
+    let albumName: String
+    let hasBook: Bool
+    let keeperCount: Int
+    let onOpenBook: () -> Void
+    let onShareKeepers: () -> Void
+    var onShareProof: (() -> Void)? = nil
+    let onOpenPhotos: () -> Void
+    let onDone: () -> Void
+
+    var body: some View {
+        ZStack {
+            DarkroomGround(intensity: 0.85)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("SHEET FILED")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .tracking(3)
+                    .foregroundColor(CullPalette.amber.opacity(0.85))
+                    .padding(.bottom, 8)
+
+                // Mono LCD title — consistent with Nikon digital-display chrome.
+                Text(albumName.uppercased())
+                    .font(.system(size: 20, weight: .semibold, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.95))
+                    .padding(.bottom, 6)
+
+                Text("\(keeperCount) KEEPERS · ALBUM")
+                    .font(.system(size: 11, weight: .medium, design: .monospaced))
+                    .foregroundColor(CullPalette.amber.opacity(0.55))
+                    .padding(.bottom, 24)
+
+                VStack(spacing: 12) {
+                    if hasBook {
+                        Button(action: onOpenBook) {
+                            finishActionRow(
+                                title: "OPEN FIELD BOOK",
+                                subtitle: "Jump straight to the new book",
+                                accent: true
+                            )
+                        }
+                    }
+
+                    Button(action: onShareKeepers) {
+                        finishActionRow(
+                            title: "SHARE KEEPERS",
+                            subtitle: "JPEG files via system share sheet",
+                            accent: false
+                        )
+                    }
+
+                    if let onShareProof {
+                        Button(action: onShareProof) {
+                            finishActionRow(
+                                title: "SHARE PROOF PDF",
+                                subtitle: "Contact sheet of keepers",
+                                accent: false
+                            )
+                        }
+                    }
+
+                    Button(action: onOpenPhotos) {
+                        finishActionRow(
+                            title: "OPEN PHOTOS",
+                            subtitle: "Find the album in Photos",
+                            accent: false
+                        )
+                    }
+
+                    Button(action: onDone) {
+                        Text("DONE")
+                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                            .tracking(1.5)
+                            .foregroundColor(.white.opacity(0.35))
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 4)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(24)
+        }
+    }
+
+    private func finishActionRow(title: String, subtitle: String, accent: Bool) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .tracking(0.8)
+                Text(subtitle)
+                    .font(.system(size: 9, weight: .medium, design: .monospaced))
+                    .foregroundColor(.white.opacity(0.45))
+            }
+            Spacer()
+        }
+        .foregroundColor(accent ? CullPalette.amber : .white.opacity(0.9))
+        .padding(14)
+        .background(accent ? CullPalette.amber.opacity(0.1) : Color.white.opacity(0.06))
+        .overlay(
+            RoundedRectangle(cornerRadius: 2)
+                .stroke(
+                    accent ? CullPalette.amber.opacity(0.5) : CullPalette.hairline.opacity(0.6),
+                    lineWidth: accent ? 0.8 : 0.6
+                )
+        )
     }
 }
 

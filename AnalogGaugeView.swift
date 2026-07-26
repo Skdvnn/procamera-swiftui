@@ -13,7 +13,7 @@ struct FocusDial: View {
     let onChanged: (Float) -> Void
 
     private let marks: [(String, Float)] = [
-        (".4m", 0.0), (".7", 0.17), ("1", 0.33), ("3", 0.5), ("5", 0.67), ("inf", 0.83)
+        (".4m", 0.0), (".7", 0.17), ("1", 0.33), ("3", 0.5), ("5", 0.67), ("inf", 1.0)
     ]
 
     var body: some View {
@@ -90,7 +90,7 @@ struct FocusDial: View {
             }
             .position(center)
             .contentShape(Circle().scale(1.3)) // Larger touch target
-            .gesture(
+            .highPriorityGesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { drag in
                         let vector = CGVector(dx: drag.location.x - center.x, dy: drag.location.y - center.y)
@@ -99,8 +99,10 @@ struct FocusDial: View {
                         if angle < 0 { angle += 360 }
                         if angle > 300 { angle = angle > 330 ? 0 : 300 }
                         let newValue = Float(min(max(angle / 300, 0), 1))
-                        // Snap to major marks for delight
-                        let snapped = round(newValue * 6) / 6
+                        // Snap to the same mark table as CompactFocusScrubber (∞ = 1.0).
+                        let snapped = marks.min(by: {
+                            abs($0.1 - newValue) < abs($1.1 - newValue)
+                        })?.1 ?? newValue
                         if abs(snapped - value) > 0.02 {
                             value = snapped
                             onChanged(snapped)
@@ -124,17 +126,33 @@ struct FocusDial: View {
 
 // MARK: - Shutter Speed Dial (premium Leica/Nikon style)
 struct ShutterSpeedDial: View {
-    @Binding var value: Int  // Index into shutter speeds array
+    /// Binding is the **CameraManager / ContentView shutterSpeedIndex** (0=4″ … 14=1/4000).
+    @Binding var value: Int
     let onChanged: (Int) -> Void
 
-    // Shutter speeds: 1/4000 to 1/15 (index 0-7)
-    private let speeds = ["4k", "2k", "1k", "500", "250", "125", "60", "30"]
+    // Full useful range: 1/4000…4″ so Night/LE aren't nearest-neighbor snapped to 1/30.
+    private let dialLabels = ["4k", "1k", "500", "125", "30", "1/8", "1\"", "4\""]
+    private let cameraIndices = [14, 12, 11, 9, 7, 5, 2, 0]
     private let marks: [(String, Float)] = [
-        ("4k", 0.0), ("2k", 0.143), ("1k", 0.286), ("500", 0.429), ("250", 0.571), ("125", 0.714), ("60", 0.857), ("30", 1.0)
+        ("4k", 0.0), ("1k", 0.143), ("500", 0.286), ("125", 0.429),
+        ("30", 0.571), ("1/8", 0.714), ("1\"", 0.857), ("4\"", 1.0)
     ]
 
+    private var dialPosition: Int {
+        var best = 0
+        var bestDist = Int.max
+        for (i, camIdx) in cameraIndices.enumerated() {
+            let d = abs(camIdx - value)
+            if d < bestDist {
+                bestDist = d
+                best = i
+            }
+        }
+        return best
+    }
+
     private var normalizedValue: Float {
-        return Float(value) / Float(speeds.count - 1)
+        Float(dialPosition) / Float(max(dialLabels.count - 1, 1))
     }
 
     var body: some View {
@@ -210,7 +228,7 @@ struct ShutterSpeedDial: View {
             }
             .position(center)
             .contentShape(Circle().scale(1.3))
-            .gesture(
+            .highPriorityGesture(
                 DragGesture(minimumDistance: 0)
                     .onChanged { drag in
                         let vector = CGVector(dx: drag.location.x - center.x, dy: drag.location.y - center.y)
@@ -219,12 +237,12 @@ struct ShutterSpeedDial: View {
                         if angle < 0 { angle += 360 }
                         if angle > 300 { angle = angle > 330 ? 0 : 300 }
                         let normalized = Float(min(max(angle / 300, 0), 1))
-                        // Find closest shutter speed index
-                        let newIndex = Int(round(normalized * Float(speeds.count - 1)))
-                        let clampedIndex = max(0, min(speeds.count - 1, newIndex))
-                        if clampedIndex != value {
-                            value = clampedIndex
-                            onChanged(clampedIndex)
+                        let dialIdx = Int(round(normalized * Float(dialLabels.count - 1)))
+                        let clampedDial = max(0, min(dialLabels.count - 1, dialIdx))
+                        let camIdx = cameraIndices[clampedDial]
+                        if camIdx != value {
+                            value = camIdx
+                            onChanged(camIdx)
                             Haptics.light()
                         }
                     }
@@ -403,13 +421,14 @@ struct NeedleShape: Shape {
 // Based on real camera meters: -2 to +2 scale with 1/3 stop increments
 struct HorizontalExposureMeter: View {
     let value: Float // -2 to +2
-    let iso: Int
+    /// Level sits under the EV scale — ISO/S live in the hist info bar (Build 73).
+    var showLevel: Bool = false
 
     // Major marks at full stops, minor marks at 1/3 stops
     private let majorMarks = ["-2", "-1", "0", "+1", "+2"]
 
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             // Meter scale - larger and more detailed
             ZStack {
                 // Dark background panel
@@ -424,11 +443,15 @@ struct HorizontalExposureMeter: View {
 
                 // Scale with ticks
                 VStack(spacing: 0) {
-                    // Tick marks row
+                    // Tick marks row — marks between 0 EV and the needle burn yellow,
+                    // so the lit run reads as how far off the meter you are (Build 79).
                     HStack(spacing: 0) {
                         ForEach(0..<13, id: \.self) { i in
                             let isMajor = i % 3 == 0
                             let stopIndex = i / 3
+                            let markEV = Float(i - 6) / 3.0
+                            let swept = markEV <= max(0, value) && markEV >= min(0, value)
+                            let leading = abs(markEV - value) <= 1.0 / 6.0
                             let edgeFade: Double = {
                                 if stopIndex == 0 || stopIndex == 4 { return 0.5 }
                                 if stopIndex == 1 || stopIndex == 3 { return 0.75 }
@@ -437,16 +460,34 @@ struct HorizontalExposureMeter: View {
 
                             VStack(spacing: 1) {
                                 Rectangle()
-                                    .fill(Color.white.opacity((isMajor ? 0.8 : 0.35) * edgeFade))
-                                    .frame(width: isMajor ? 1.5 : 1, height: isMajor ? 10 : 5)
+                                    .fill(
+                                        leading
+                                            ? DS.accent
+                                            : swept
+                                                ? DS.accent.opacity(0.60)
+                                                : Color.white.opacity((isMajor ? 0.8 : 0.35) * edgeFade)
+                                    )
+                                    .frame(
+                                        width: isMajor ? 1.5 : 1,
+                                        height: (isMajor ? 10 : 5) + (leading ? 3 : swept ? 1.5 : 0)
+                                    )
+                                    // Fixed slot, bottom-aligned: ticks grow off a shared
+                                    // baseline so the degree labels never jitter.
+                                    .frame(height: 13, alignment: .bottom)
 
                                 if isMajor {
                                     Text(majorMarks[stopIndex])
                                         .font(.system(size: 7, weight: stopIndex == 2 ? .bold : .medium, design: .monospaced))
-                                        .foregroundColor(.white.opacity(0.7 * edgeFade))
+                                        .foregroundColor(
+                                            swept || leading
+                                                ? DS.accent.opacity(0.85)
+                                                : .white.opacity(0.7 * edgeFade)
+                                        )
                                 }
                             }
                             .frame(width: 8.5)
+                            .animation(.easeOut(duration: 0.12), value: swept)
+                            .animation(.easeOut(duration: 0.12), value: leading)
                         }
                     }
 
@@ -468,14 +509,9 @@ struct HorizontalExposureMeter: View {
             }
             .frame(width: 120, height: 36)
 
-            // ISO display - cleaner
-            HStack(spacing: 4) {
-                Text("ISO")
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.5))
-                Text("\(iso)")
-                    .font(.system(size: 13, weight: .bold, design: .monospaced))
-                    .foregroundColor(.white.opacity(0.8))
+            // Level replaces ISO/S under the meter — those live in the hist bar.
+            if showLevel {
+                InfoBarMetalLevel(compact: false)
             }
         }
         .contentShape(Rectangle())
@@ -489,16 +525,23 @@ struct HorizontalExposureMeter: View {
 struct CenterDisplay: View {
     let timerSeconds: Int
     let iso: Int
+    var isoIsAuto: Bool = false
+    var shutterLabel: String = ""
+    var shutterIsAuto: Bool = false
     let flashMode: String
     let macroEnabled: Bool
     let isAutoFocus: Bool
     let exposureValue: Float
+    var showLevel: Bool = false
     let onTimerTap: () -> Void
     let onMacroTap: () -> Void
 
     var body: some View {
-        // Just the horizontal exposure meter, centered between gauges
-        HorizontalExposureMeter(value: exposureValue, iso: iso)
+        // EV meter + optional level under it (ISO/S are in the hist info bar).
+        HorizontalExposureMeter(
+            value: exposureValue,
+            showLevel: showLevel
+        )
     }
 }
 
@@ -530,13 +573,20 @@ struct AnalogDisplayPanel: View {
     @Binding var shutterSpeedIndex: Int  // Changed from apertureValue to shutter speed
     let timerSeconds: Int
     let iso: Int
+    var isoIsAuto: Bool = false
+    var shutterLabel: String = ""
+    var shutterIsAuto: Bool = false
     let flashMode: String
     let macroEnabled: Bool
     let isAutoFocus: Bool
     var compact: Bool = false
+    /// Horizon level under EV / between compact scrubbers (Build 73).
+    var showLevel: Bool = false
     let onFocusChanged: (Float) -> Void
     let onExposureChanged: (Float) -> Void
     let onShutterSpeedChanged: (Int) -> Void  // Changed from onApertureChanged
+    var onFocusScrubActive: ((Bool) -> Void)? = nil
+    var onEVScrubActive: ((Bool) -> Void)? = nil
     var onTimerTap: () -> Void = {}
     var onMacroTap: () -> Void = {}
 
@@ -544,68 +594,72 @@ struct AnalogDisplayPanel: View {
     private let cornerRadius: CGFloat = 10
 
     var body: some View {
-        ZStack {
-            // Outer black frame (matches scrubbers/buttons)
-            RoundedRectangle(cornerRadius: cornerRadius)
-                .fill(Color.black)
-
-            // Inner frame (cohesive with controls)
-            RoundedRectangle(cornerRadius: cornerRadius - 2)
-                .fill(Color(hex: "1a1a1a"))
-                .padding(2)
-
-            // Inner stroke
-            RoundedRectangle(cornerRadius: cornerRadius - 2)
-                .stroke(Color(hex: "333333"), lineWidth: 0.5)
-                .padding(2)
-
+        Group {
             if compact {
-                // Minimized: interactive FOCUS + EV scrubbers (same chrome as bottom deck)
+                // Scrubbers only — no extra outer container (Build 65).
+                // Optional level between FOCUS/EV (Build 73).
                 HStack(alignment: .center, spacing: 4) {
                     CompactFocusScrubber(
                         focusPosition: $focusPosition,
                         isAutoFocus: isAutoFocus,
-                        onChanged: onFocusChanged
+                        onChanged: onFocusChanged,
+                        onActiveChanged: onFocusScrubActive
                     )
                     .frame(maxWidth: .infinity)
+
+                    if showLevel {
+                        InfoBarMetalLevel(compact: true)
+                    }
 
                     CompactEVScrubber(
                         exposureValue: $exposureValue,
-                        onChanged: onExposureChanged
+                        onChanged: onExposureChanged,
+                        onActiveChanged: onEVScrubActive
                     )
                     .frame(maxWidth: .infinity)
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
             } else {
-                // Content - centered vertically
-                HStack(spacing: 0) {
-                    // Left: Focus dial
-                    FocusDial(value: $focusPosition, onChanged: onFocusChanged)
-                        .frame(width: 98, height: 98)
+                ZStack {
+                    RoundedRectangle(cornerRadius: cornerRadius)
+                        .fill(Color.black)
 
-                    Spacer()
+                    RoundedRectangle(cornerRadius: cornerRadius - 2)
+                        .fill(Color(hex: "1a1a1a"))
+                        .padding(2)
 
-                    // Center: Exposure meter with enhanced detail
-                    CenterDisplay(
-                        timerSeconds: timerSeconds,
-                        iso: iso,
-                        flashMode: flashMode,
-                        macroEnabled: macroEnabled,
-                        isAutoFocus: isAutoFocus,
-                        exposureValue: exposureValue,
-                        onTimerTap: onTimerTap,
-                        onMacroTap: onMacroTap
-                    )
+                    RoundedRectangle(cornerRadius: cornerRadius - 2)
+                        .stroke(Color(hex: "333333"), lineWidth: 0.5)
+                        .padding(2)
 
-                    Spacer()
+                    HStack(spacing: 0) {
+                        FocusDial(value: $focusPosition, onChanged: onFocusChanged)
+                            .frame(width: 98, height: 98)
 
-                    // Right: Shutter Speed dial
-                    ShutterSpeedDial(value: $shutterSpeedIndex, onChanged: onShutterSpeedChanged)
-                        .frame(width: 98, height: 98)
+                        Spacer()
+
+                        CenterDisplay(
+                            timerSeconds: timerSeconds,
+                            iso: iso,
+                            isoIsAuto: isoIsAuto,
+                            shutterLabel: shutterLabel,
+                            shutterIsAuto: shutterIsAuto,
+                            flashMode: flashMode,
+                            macroEnabled: macroEnabled,
+                            isAutoFocus: isAutoFocus,
+                            exposureValue: exposureValue,
+                            showLevel: showLevel,
+                            onTimerTap: onTimerTap,
+                            onMacroTap: onMacroTap
+                        )
+
+                        Spacer()
+
+                        ShutterSpeedDial(value: $shutterSpeedIndex, onChanged: onShutterSpeedChanged)
+                            .frame(width: 98, height: 98)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
             }
         }
     }
@@ -621,11 +675,12 @@ struct CompactFocusScrubber: View {
     @Binding var focusPosition: Float
     let isAutoFocus: Bool
     let onChanged: (Float) -> Void
+    var onActiveChanged: ((Bool) -> Void)? = nil
 
-    /// Discrete focus stops matching the FocusDial major marks.
-    private let stops: [Int] = Array(0...6)
-    private let stopValues: [Float] = [0.0, 0.17, 0.33, 0.5, 0.67, 0.83, 1.0]
-    private let stopLabels = [".4m", ".7m", "1m", "3m", "5m", "10m", "∞"]
+    /// Discrete focus stops matching the FocusDial major marks (shared table).
+    private let stops: [Int] = Array(0...5)
+    private let stopValues: [Float] = [0.0, 0.17, 0.33, 0.5, 0.67, 1.0]
+    private let stopLabels = [".4m", ".7m", "1m", "3m", "5m", "∞"]
 
     /// Stable index — avoids Binding get/set snap ping-pong with ScrollView.
     @State private var index: Int = 3
@@ -646,6 +701,7 @@ struct CompactFocusScrubber: View {
             selection: $index,
             sideLabelWidth: 28,
             tickCount: 14,
+            tickMajorEvery: 2,
             title: { idx in
                 let safe = min(max(idx, 0), stopLabels.count - 1)
                 if isAutoFocus && safe == index { return "AF" }
@@ -659,7 +715,8 @@ struct CompactFocusScrubber: View {
                     focusPosition = value
                 }
                 onChanged(value)
-            }
+            },
+            onActiveChanged: onActiveChanged
         )
         .onAppear { index = nearestIndex(to: focusPosition) }
         .onChange(of: focusPosition) { _, newValue in
@@ -680,6 +737,7 @@ struct CompactFocusScrubber: View {
 struct CompactEVScrubber: View {
     @Binding var exposureValue: Float
     let onChanged: (Float) -> Void
+    var onActiveChanged: ((Bool) -> Void)? = nil
 
     private let stops: [Int] = Array(0...8)
     private let stopValues: [Float] = [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]
@@ -701,6 +759,7 @@ struct CompactEVScrubber: View {
             selection: $index,
             sideLabelWidth: 28,
             tickCount: 14,
+            tickMajorEvery: 2,
             title: { idx in
                 let v = stopValues[min(max(idx, 0), stopValues.count - 1)]
                 return String(format: "%+.1f", v)
@@ -713,7 +772,8 @@ struct CompactEVScrubber: View {
                     exposureValue = value
                 }
                 onChanged(value)
-            }
+            },
+            onActiveChanged: onActiveChanged
         )
         .onAppear { index = nearestIndex(to: exposureValue) }
         .onChange(of: exposureValue) { _, newValue in
@@ -793,7 +853,7 @@ struct CompactMeter: View {
                         .frame(width: 2, height: 12)
                         .shadow(color: Color(red: 1.0, green: 0.62, blue: 0.3).opacity(0.35), radius: 1.5, y: 0)
                         .offset(x: clamped * (width - 2))
-                        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: clamped)
+                        .animation(ShutterMotion.scrub, value: clamped)
                 }
             }
             .frame(height: 12)
@@ -818,7 +878,7 @@ extension AnalogDisplayPanel {
     ) {
         self._focusPosition = focusPosition
         self._exposureValue = exposureValue
-        self._shutterSpeedIndex = .constant(4)  // Default to 1/250
+        self._shutterSpeedIndex = .constant(10)  // Default to 1/250
         self.timerSeconds = timerSeconds
         self.iso = iso
         self.flashMode = flashMode

@@ -42,6 +42,7 @@
 
 		A100002ASSSSSSSS00000001 /* ShutterSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100002ASSSSSSSS00000002 /* ShutterSettings.swift */; };
 		A100002BPPPPPPPP00000001 /* ProofExport.swift in Sources */ = {isa = PBXBuildFile; fileRef = A100002BPPPPPPPP00000002 /* ProofExport.swift */; };
+		A1000042PERFPERF00000001 /* ShutterRender.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1000042PERFPERF00000002 /* ShutterRender.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -81,6 +82,7 @@
 		A1000037EEEEEEEE00000002 /* ShutterCaptureExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ShutterCaptureExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 
 		A100002ASSSSSSSS00000002 /* ShutterSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShutterSettings.swift; sourceTree = "<group>"; };
+		A1000042PERFPERF00000002 /* ShutterRender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShutterRender.swift; sourceTree = "<group>"; };
 		A100002BPPPPPPPP00000002 /* ProofExport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProofExport.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -177,6 +179,7 @@
 				A1000029GGGGGGGG00000002 /* ShutterAppIntents.swift */,
 				A100002ASSSSSSSS00000002 /* ShutterSettings.swift */,
 				A100002BPPPPPPPP00000002 /* ProofExport.swift */,
+				A1000042PERFPERF00000002 /* ShutterRender.swift */,
 				A10000W0WWWWWWWW00000001 /* ShutterWidgets */,
 				A10000C0CCCCCCC000000001 /* ShutterCaptureExtension */,
 				A1000021BBBBBBBB00000021 /* ProCamera.entitlements */,
@@ -355,6 +358,7 @@
 				A1000029GGGGGGGG00000001 /* ShutterAppIntents.swift in Sources */,
 				A100002ASSSSSSSS00000001 /* ShutterSettings.swift in Sources */,
 				A100002BPPPPPPPP00000001 /* ProofExport.swift in Sources */,
+				A1000042PERFPERF00000001 /* ShutterRender.swift in Sources */,
 				A100000BAAAAAAAA0000000B /* AnalogGaugeView.swift in Sources */,
 				A100000DAAAAAAAA0000000D /* ViewfinderOverlay.swift in Sources */,
 				A100000FAAAAAAAA0000000F /* ControlComponents.swift in Sources */,
@@ -548,7 +552,8 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = ProCameraDebug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 79;
+				DEVELOPMENT_TEAM = 9DKG694QL7;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
@@ -557,7 +562,7 @@
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -578,7 +583,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_ENTITLEMENTS = ProCamera.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 15;
+				CURRENT_PROJECT_VERSION = 79;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = Info.plist;
@@ -587,7 +592,7 @@
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
-				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -605,9 +610,9 @@
 		A10000W6WWWWWWWW00000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = ShutterWidgets/ShutterWidgets.entitlements;
+				CODE_SIGN_ENTITLEMENTS = ShutterWidgets/ShutterWidgetsDebug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 27;
+				CURRENT_PROJECT_VERSION = 79;
 				DEVELOPMENT_TEAM = 9DKG694QL7;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShutterWidgets/Info.plist;
@@ -633,7 +638,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ShutterWidgets/ShutterWidgets.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 27;
+				CURRENT_PROJECT_VERSION = 79;
 				DEVELOPMENT_TEAM = 9DKG694QL7;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShutterWidgets/Info.plist;
@@ -658,9 +663,9 @@
 		A10000C6CCCCCCC000000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGN_ENTITLEMENTS = ShutterCaptureExtension/ShutterCaptureExtension.entitlements;
+				CODE_SIGN_ENTITLEMENTS = ShutterCaptureExtension/ShutterCaptureExtensionDebug.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 27;
+				CURRENT_PROJECT_VERSION = 79;
 				DEVELOPMENT_TEAM = 9DKG694QL7;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShutterCaptureExtension/Info.plist;
@@ -686,7 +691,7 @@
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = ShutterCaptureExtension/ShutterCaptureExtension.entitlements;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 27;
+				CURRENT_PROJECT_VERSION = 79;
 				DEVELOPMENT_TEAM = 9DKG694QL7;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = ShutterCaptureExtension/Info.plist;

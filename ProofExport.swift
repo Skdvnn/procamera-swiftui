@@ -28,18 +28,72 @@ extension ShootSession {
 
 struct SessionMapChip: View {
     let coordinate: CLLocationCoordinate2D
+    var placeLabel: String? = nil
 
     var body: some View {
-        Map(initialPosition: .region(MKCoordinateRegion(
-            center: coordinate,
-            span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
-        ))) {
-            Marker("Shoot", coordinate: coordinate)
+        Button {
+            let item = MKMapItem(placemark: MKPlacemark(coordinate: coordinate))
+            item.name = placeLabel ?? "Shutter session"
+            item.openInMaps(launchOptions: [
+                MKLaunchOptionsMapCenterKey: NSValue(mkCoordinate: coordinate),
+                MKLaunchOptionsMapSpanKey: NSValue(mkCoordinateSpan: MKCoordinateSpan(
+                    latitudeDelta: 0.02, longitudeDelta: 0.02
+                ))
+            ])
+        } label: {
+            VStack(alignment: .leading, spacing: 0) {
+                Map(initialPosition: .region(MKCoordinateRegion(
+                    center: coordinate,
+                    span: MKCoordinateSpan(latitudeDelta: 0.02, longitudeDelta: 0.02)
+                ))) {
+                    Marker(placeLabel ?? "Shoot", coordinate: coordinate)
+                }
+                .mapStyle(.standard(elevation: .flat))
+                .frame(height: 88)
+                .allowsHitTesting(false)
+
+                HStack(spacing: 6) {
+                    Image(systemName: "map")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text(placeLabel?.uppercased() ?? "OPEN IN MAPS")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .tracking(1.0)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                .foregroundColor(.white.opacity(0.55))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
+                .background(Color.black.opacity(0.35))
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6))
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.white.opacity(0.12), lineWidth: 0.6)
+            )
         }
-        .mapStyle(.standard(elevation: .flat))
-        .frame(height: 88)
-        .clipShape(RoundedRectangle(cornerRadius: 6))
-        .allowsHitTesting(false)
+        .buttonStyle(.plain)
+        .accessibilityLabel("Open session location in Maps")
+    }
+}
+
+/// Write keeper frames as temp JPEGs for a cleaner system share sheet.
+enum KeeperSharePackager {
+    static func jpegFileURLs(from images: [UIImage], quality: CGFloat = 0.92) -> [URL] {
+        images.enumerated().compactMap { index, image in
+            guard let data = image.jpegData(compressionQuality: quality) else { return nil }
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent(
+                    "Shutter-Keeper-\(index + 1)-\(UUID().uuidString.prefix(6)).jpg"
+                )
+            do {
+                try data.write(to: url, options: .atomic)
+                return url
+            } catch {
+                print("Keeper share write failed: \(error)")
+                return nil
+            }
+        }
     }
 }
 
@@ -153,8 +207,23 @@ enum ProofPDFExporter {
 
 struct ShareSheet: UIViewControllerRepresentable {
     let items: [Any]
+    var subject: String? = nil
+    var onComplete: (() -> Void)? = nil
+
     func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: items, applicationActivities: nil)
+        let vc = UIActivityViewController(activityItems: items, applicationActivities: nil)
+        vc.excludedActivityTypes = [
+            .assignToContact,
+            .addToReadingList,
+            .markupAsPDF
+        ]
+        if let subject {
+            vc.setValue(subject, forKey: "subject")
+        }
+        vc.completionWithItemsHandler = { _, _, _, _ in
+            onComplete?()
+        }
+        return vc
     }
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }

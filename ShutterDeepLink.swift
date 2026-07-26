@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import UIKit
 
 // MARK: - Deep links (Shortcuts, widgets, quick actions)
 
@@ -7,6 +8,7 @@ enum ShutterDeepLink: Equatable {
     case openCamera
     case capture
     case darkroom
+    case fieldBook
     case look(film: String?, fx: String?)
     case timer(seconds: Int)
     case peaking(Bool)
@@ -31,12 +33,19 @@ enum ShutterDeepLink: Equatable {
             return .capture
         case "darkroom", "cull", "library":
             return .darkroom
+        case "fieldbook", "books", "book":
+            return .fieldBook
         case "look", "recipe":
             return .look(film: q("film"), fx: q("fx"))
         case "timer":
-            return .timer(seconds: Int(q("seconds") ?? q("s") ?? "3") ?? 3)
+            let sec = Int(q("seconds") ?? q("s") ?? "3") ?? 3
+            // Invalid values → off (not silently 3s).
+            let clamped = [0, 3, 10].contains(sec) ? sec : 0
+            return .timer(seconds: clamped)
         case "peaking":
-            return .peaking((q("on") ?? "1") != "0")
+            let raw = (q("on") ?? "1").lowercased()
+            let on = ["1", "true", "yes", "on"].contains(raw)
+            return .peaking(on)
         case "flip":
             return .flip
         default:
@@ -52,6 +61,8 @@ enum ShutterDeepLink: Equatable {
             return URL(string: "shuttercam://capture")!
         case .darkroom:
             return URL(string: "shuttercam://darkroom")!
+        case .fieldBook:
+            return URL(string: "shuttercam://fieldbook")!
         case .look(let film, let fx):
             var c = URLComponents(string: "shuttercam://look")!
             var items: [URLQueryItem] = []
@@ -72,24 +83,233 @@ enum ShutterDeepLink: Equatable {
 extension Notification.Name {
     static let shutterDeepLink = Notification.Name("shutter.deeplink")
     static let shutterHardwareShutter = Notification.Name("shutter.hardwareShutter")
+    static let shutterOpenFieldBook = Notification.Name("shutter.openFieldBook")
 }
 
+/// Posts deep links immediately once a subscriber is ready; otherwise queues them
+/// so cold-start shortcuts/widgets aren't dropped before ContentView mounts.
 enum ShutterDeepLinkCenter {
+    private static let lock = NSLock()
+    private static var pending: [ShutterDeepLink] = []
+    private static var isReceiving = false
+
     static func post(_ link: ShutterDeepLink) {
-        NotificationCenter.default.post(name: .shutterDeepLink, object: nil, userInfo: ["link": link])
+        lock.lock()
+        if isReceiving {
+            lock.unlock()
+            NotificationCenter.default.post(
+                name: .shutterDeepLink,
+                object: nil,
+                userInfo: ["link": link]
+            )
+        } else {
+            pending.append(link)
+            lock.unlock()
+        }
     }
 
     static func post(url: URL) {
         guard let link = ShutterDeepLink.parse(url) else { return }
         post(link)
     }
+
+    /// Call from ContentView once `.onReceive` is live (prefer next main turn).
+    static func beginReceiving() {
+        lock.lock()
+        isReceiving = true
+        let queued = pending
+        pending.removeAll()
+        lock.unlock()
+        for link in queued {
+            NotificationCenter.default.post(
+                name: .shutterDeepLink,
+                object: nil,
+                userInfo: ["link": link]
+            )
+        }
+    }
+
+    /// Call from ContentView.onDisappear so links queue again across remounts.
+    static func endReceiving() {
+        lock.lock()
+        isReceiving = false
+        lock.unlock()
+    }
+
+    /// Test helper — reset queue/subscriber state between stress cases.
+    static func resetForTests() {
+        lock.lock()
+        pending.removeAll()
+        isReceiving = false
+        lock.unlock()
+    }
 }
 
-/// Shared App Group for widgets ↔ app (looks, last mode).
+/// Shared App Group for widgets ↔ app (looks, last mode, recent thumbs).
 enum ShutterAppGroup {
     static let id = "group.com.skylardann.filmcam"
+    /// Keep two overlapping frames for Home Screen widgets.
+    static let recentThumbnailSlots = 2
 
     static var defaults: UserDefaults {
         UserDefaults(suiteName: id) ?? .standard
+    }
+
+    static var containerURL: URL? {
+        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: id)
+    }
+
+    /// `widget-recents/recent-0.jpg` (newest) … `recent-1.jpg`
+    static var recentsDirectoryURL: URL? {
+        guard let base = containerURL else { return nil }
+        let dir = base.appendingPathComponent("widget-recents", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    /// Widget look payload: `"Film Name|FX Name"` (FX may be empty / None).
+    static func encodeLook(film: String, fx: String?) -> String {
+        let f = film.isEmpty ? "None" : film
+        let x = (fx?.isEmpty == false) ? fx! : "None"
+        return "\(f)|\(x)"
+    }
+
+    static func decodeLook(_ raw: String) -> (film: String, fx: String?) {
+        let parts = raw.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+        let film = parts.first.map(String.init) ?? raw
+        let fx = parts.count > 1 ? String(parts[1]) : nil
+        let cleanFX = (fx == nil || fx == "None" || fx == "—") ? nil : fx
+        return (film, cleanFX)
+    }
+
+    /// Metadata sidecar next to each widget thumb (Build 74).
+    struct WidgetRecentMeta: Codable, Equatable {
+        var shotID: String
+        var capturedAt: TimeInterval
+        var iso: Int
+        var shutter: String
+        var aperture: Float
+        var filmFilter: String
+        var lensFX: String
+        var focalLength: Int
+        /// "unmarked" | "keep" | "reject"
+        var mark: String
+
+        var exposureLine: String {
+            var parts: [String] = []
+            if !shutter.isEmpty { parts.append(shutter) }
+            if iso > 0 { parts.append("ISO \(iso)") }
+            if aperture > 0.5 { parts.append(String(format: "ƒ%.1f", aperture)) }
+            return parts.joined(separator: " · ")
+        }
+
+        var relativeTime: String {
+            let date = Date(timeIntervalSince1970: capturedAt)
+            let secs = Int(Date().timeIntervalSince(date))
+            if secs < 60 { return "NOW" }
+            if secs < 3600 { return "\(secs / 60)m" }
+            if secs < 86_400 { return "\(secs / 3600)h" }
+            return "\(secs / 86_400)d"
+        }
+    }
+
+    struct WidgetRecentFrame {
+        let image: UIImage
+        let meta: WidgetRecentMeta?
+    }
+
+    /// Downsample + persist newest still for widget stacks (App Group).
+    static func pushRecentThumbnail(_ image: UIImage, meta: WidgetRecentMeta? = nil) {
+        guard let dir = recentsDirectoryURL else { return }
+        let fm = FileManager.default
+        // Shift older slot: recent-0 → recent-1 (+ sidecars)
+        let newest = dir.appendingPathComponent("recent-0.jpg")
+        let older = dir.appendingPathComponent("recent-1.jpg")
+        let newestJSON = dir.appendingPathComponent("recent-0.json")
+        let olderJSON = dir.appendingPathComponent("recent-1.json")
+        try? fm.removeItem(at: older)
+        try? fm.removeItem(at: olderJSON)
+        if fm.fileExists(atPath: newest.path) {
+            try? fm.moveItem(at: newest, to: older)
+        }
+        if fm.fileExists(atPath: newestJSON.path) {
+            try? fm.moveItem(at: newestJSON, to: olderJSON)
+        }
+        let thumb = image.shutterWidgetThumbnail(maxSide: 360)
+        guard let data = thumb.jpegData(compressionQuality: 0.78) else { return }
+        try? data.write(to: newest, options: .atomic)
+        if let meta, let encoded = try? JSONEncoder().encode(meta) {
+            try? encoded.write(to: newestJSON, options: .atomic)
+        } else {
+            try? fm.removeItem(at: newestJSON)
+        }
+        defaults.set(Date().timeIntervalSince1970, forKey: "widget.recentsUpdatedAt")
+    }
+
+    /// Replace both slots atomically (unculled rebuild after cull — Build 74).
+    static func rebuildRecentFrames(_ frames: [WidgetRecentFrame]) {
+        guard let dir = recentsDirectoryURL else { return }
+        let fm = FileManager.default
+        for i in 0..<recentThumbnailSlots {
+            try? fm.removeItem(at: dir.appendingPathComponent("recent-\(i).jpg"))
+            try? fm.removeItem(at: dir.appendingPathComponent("recent-\(i).json"))
+        }
+        // Write newest-first: frames[0] → recent-0
+        for (i, frame) in frames.prefix(recentThumbnailSlots).enumerated() {
+            let thumb = frame.image.shutterWidgetThumbnail(maxSide: 360)
+            guard let data = thumb.jpegData(compressionQuality: 0.78) else { continue }
+            try? data.write(
+                to: dir.appendingPathComponent("recent-\(i).jpg"),
+                options: .atomic
+            )
+            if let meta = frame.meta, let encoded = try? JSONEncoder().encode(meta) {
+                try? encoded.write(
+                    to: dir.appendingPathComponent("recent-\(i).json"),
+                    options: .atomic
+                )
+            }
+        }
+        defaults.set(Date().timeIntervalSince1970, forKey: "widget.recentsUpdatedAt")
+    }
+
+    /// Newest first. Empty when the user hasn't shot yet (or App Group unavailable).
+    static func loadRecentThumbnails(max: Int = recentThumbnailSlots) -> [UIImage] {
+        loadRecentFrames(max: max).map(\.image)
+    }
+
+    /// Newest first with sidecar metadata when present.
+    static func loadRecentFrames(max: Int = recentThumbnailSlots) -> [WidgetRecentFrame] {
+        guard let dir = recentsDirectoryURL else { return [] }
+        var out: [WidgetRecentFrame] = []
+        for i in 0..<max {
+            let url = dir.appendingPathComponent("recent-\(i).jpg")
+            guard let data = try? Data(contentsOf: url),
+                  let img = UIImage(data: data) else { continue }
+            var meta: WidgetRecentMeta?
+            let jsonURL = dir.appendingPathComponent("recent-\(i).json")
+            if let jdata = try? Data(contentsOf: jsonURL) {
+                meta = try? JSONDecoder().decode(WidgetRecentMeta.self, from: jdata)
+            }
+            // Skip rejects that somehow lingered in the App Group.
+            if let mark = meta?.mark, mark == "reject" { continue }
+            out.append(WidgetRecentFrame(image: img, meta: meta))
+        }
+        return out
+    }
+}
+
+extension UIImage {
+    /// Small JPEG-friendly thumb for Home Screen widgets.
+    func shutterWidgetThumbnail(maxSide: CGFloat) -> UIImage {
+        let longest = max(size.width, size.height)
+        guard longest > maxSide, longest > 0 else { return self }
+        let scale = maxSide / longest
+        let newSize = CGSize(width: size.width * scale, height: size.height * scale)
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 1
+        format.opaque = true
+        return UIGraphicsImageRenderer(size: newSize, format: format).image { _ in
+            draw(in: CGRect(origin: .zero, size: newSize))
+        }
     }
 }

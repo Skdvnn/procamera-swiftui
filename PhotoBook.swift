@@ -53,36 +53,61 @@ final class GalleryStore: ObservableObject {
         indexURL = directory.appendingPathComponent("index.json")
         booksURL = directory.appendingPathComponent("books.json")
         try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        thumbCache.countLimit = 160
+        thumbCache.totalCostLimit = 48 * 1024 * 1024
+        NotificationCenter.default.addObserver(
+            forName: UIApplication.didReceiveMemoryWarningNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.thumbCache.removeAllObjects()
+        }
         load()
     }
 
     // MARK: Shots
 
-    func add(image: UIImage, metadata: ShotMetadata) {
-        // Publish metadata immediately so Photos ID linking can't race the disk write.
-        shots.append(metadata)
-        saveIndex()
-
+    func add(
+        image: UIImage,
+        metadata: ShotMetadata,
+        completion: (() -> Void)? = nil
+    ) {
+        // Write JPEG/thumb first so Darkroom never opens a blank frame.
+        // Only publish metadata if the JPEG write succeeded.
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self = self else { return }
 
-            if let data = image.jpegData(compressionQuality: 0.9) {
-                try? data.write(to: self.imageURL(for: metadata.id))
+            guard let data = image.jpegData(compressionQuality: 0.9) else { return }
+            do {
+                try data.write(to: self.imageURL(for: metadata.id), options: .atomic)
+            } catch {
+                return
             }
             if let thumb = Self.thumbnail(from: image, longEdge: 900),
                let thumbData = thumb.jpegData(compressionQuality: 0.8) {
-                try? thumbData.write(to: self.thumbURL(for: metadata.id))
+                try? thumbData.write(to: self.thumbURL(for: metadata.id), options: .atomic)
             }
-            // Nudge UI once thumbs land
             DispatchQueue.main.async {
-                self.objectWillChange.send()
+                self.shots.append(metadata)
+                // Burst JPEG writes can finish out of order. Keep the master
+                // roll chronological so `.last` and widget recents are honest.
+                self.shots.sort { $0.date < $1.date }
+                self.saveIndex()
+                completion?()
             }
         }
     }
 
     /// Attach the Photos library localIdentifier after dual-write completes.
-    func setPhotosAssetIdentifier(_ identifier: String?, for shotID: UUID) {
-        guard let i = shots.firstIndex(where: { $0.id == shotID }) else { return }
+    func setPhotosAssetIdentifier(_ identifier: String?, for shotID: UUID, attempt: Int = 0) {
+        guard let i = shots.firstIndex(where: { $0.id == shotID }) else {
+            // add() writes disk before publishing — Photos can finish first.
+            guard attempt < 20 else { return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                self?.setPhotosAssetIdentifier(identifier, for: shotID, attempt: attempt + 1)
+            }
+            return
+        }
         shots[i].photosAssetLocalIdentifier = identifier
         saveIndex()
     }
@@ -118,10 +143,28 @@ final class GalleryStore: ObservableObject {
     func thumbnail(for shot: ShotMetadata) -> UIImage? {
         let key = shot.id.uuidString as NSString
         if let cached = thumbCache.object(forKey: key) { return cached }
-        guard let thumb = UIImage(contentsOfFile: thumbURL(for: shot.id).path)
-                ?? image(for: shot) else { return nil }
-        thumbCache.setObject(thumb, forKey: key)
-        return thumb
+        if let disk = UIImage(contentsOfFile: thumbURL(for: shot.id).path) {
+            let cost = Int(disk.size.width * disk.size.height * 4)
+            thumbCache.setObject(disk, forKey: key, cost: cost)
+            return disk
+        }
+        // Full-res fallback: downscale off the main thread and re-cache asynchronously.
+        // Return nil for now so the caller can show a placeholder while it generates.
+        guard let full = image(for: shot) else { return nil }
+        let maxEdge: CGFloat = 360
+        let scale = min(1, maxEdge / max(full.size.width, full.size.height))
+        let targetSize = CGSize(width: full.size.width * scale, height: full.size.height * scale)
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            let renderer = UIGraphicsImageRenderer(size: targetSize)
+            let down = renderer.image { _ in full.draw(in: CGRect(origin: .zero, size: targetSize)) }
+            let cost = Int(targetSize.width * targetSize.height * 4)
+            self.thumbCache.setObject(down, forKey: key, cost: cost)
+            if let thumbData = down.jpegData(compressionQuality: 0.8) {
+                try? thumbData.write(to: self.thumbURL(for: shot.id), options: .atomic)
+            }
+        }
+        return nil
     }
 
     // MARK: Books
@@ -216,13 +259,13 @@ final class GalleryStore: ObservableObject {
 
     private func saveIndex() {
         if let data = try? JSONEncoder().encode(shots) {
-            try? data.write(to: indexURL)
+            try? data.write(to: indexURL, options: .atomic)
         }
     }
 
     private func saveBooks() {
         if let data = try? JSONEncoder().encode(books) {
-            try? data.write(to: booksURL)
+            try? data.write(to: booksURL, options: .atomic)
         }
     }
 
@@ -255,6 +298,8 @@ final class GalleryStore: ObservableObject {
 // CloudKit shared books sit on their own shelf rows below.
 struct LibraryView: View {
     @ObservedObject var store: GalleryStore
+    /// When set, open this book as soon as the shelf appears (cull finish handoff).
+    var initialBookID: UUID? = nil
     @ObservedObject private var cloud = CloudBookManager.shared
     @Environment(\.dismiss) private var dismiss
     @Namespace private var bookNamespace
@@ -266,6 +311,7 @@ struct LibraryView: View {
     @State private var pressedRouteID: String?
     /// Open a book and immediately present the file-frames picker
     @State private var pendingAddFrames = false
+    @State private var didApplyInitialBook = false
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
     private let booksPerShelf = 3
@@ -408,6 +454,24 @@ struct LibraryView: View {
             Text("Name your book — you'll pick frames from All Frames next.")
         }
         .statusBarHidden(true)
+        .onAppear {
+            guard !didApplyInitialBook, let id = initialBookID,
+                  store.books.contains(where: { $0.id == id }) else { return }
+            didApplyInitialBook = true
+            route = .book(id)
+        }
+        .onChange(of: initialBookID) { _, _ in
+            guard !didApplyInitialBook, let id = initialBookID,
+                  store.books.contains(where: { $0.id == id }) else { return }
+            didApplyInitialBook = true
+            route = .book(id)
+        }
+        .onChange(of: store.books.count) { _, _ in
+            guard !didApplyInitialBook, let id = initialBookID,
+                  store.books.contains(where: { $0.id == id }) else { return }
+            didApplyInitialBook = true
+            route = .book(id)
+        }
     }
 
     private func shelfRow(for row: [ShelfItem]) -> some View {
@@ -498,7 +562,9 @@ struct LibraryView: View {
             )
             .ignoresSafeArea()
 
-            LeicaVulcaniteTexture(scale: 28, intensity: 0.55)
+            // Non-Metal grain — stitchable vulcaniteTexture under shelf animations
+            // was a MetadataCache / EXC_BAD_ACCESS risk (same class as finder crash).
+            ControlsGrain()
                 .opacity(0.55)
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
@@ -1185,10 +1251,14 @@ struct PhotoBookView: View {
 
     var body: some View {
         ZStack {
-            // Vulcanite album cover, same material as the camera body
-            LeicaVulcaniteTexture(scale: 20, intensity: 0.8)
-                .ignoresSafeArea()
-                .opacity(contentRevealed ? 1 : 0.35)
+            // Non-Metal cover grain (avoid stitchable Metal under reveal animation).
+            ZStack {
+                Color(white: 0.075)
+                ControlsGrain()
+            }
+            .ignoresSafeArea()
+            .opacity(contentRevealed ? 1 : 0.35)
+            .transaction { $0.animation = nil }
 
             VStack(spacing: 0) {
                 header
@@ -2071,6 +2141,7 @@ struct PrintPage: View {
                         endPoint: .top
                     )
                 )
+                .allowsHitTesting(false)
         }
         .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .overlay(

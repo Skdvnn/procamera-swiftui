@@ -17,11 +17,12 @@ enum SessionClustering {
 // MARK: - Cull palette (darkroom)
 
 enum CullPalette {
-    static let amber = Color(red: 1.0, green: 0.82, blue: 0.38)
+    /// Match DS.accent — Nikon digital-display yellow across cull + finder.
+    static let amber = Color(red: 1.0, green: 0.85, blue: 0.35)
     /// Safelight red — never system red
     static let safelight = Color(red: 0x8B / 255.0, green: 0x1A / 255.0, blue: 0x1A / 255.0)
     static let safelightGlow = Color(red: 0.72, green: 0.22, blue: 0.18)
-    static let hairline = Color(red: 1.0, green: 0.82, blue: 0.38).opacity(0.32)
+    static let hairline = Color(red: 1.0, green: 0.85, blue: 0.35).opacity(0.32)
     static let sheetTop = Color(red: 0x1C / 255.0, green: 0x19 / 255.0, blue: 0x16 / 255.0)
     static let sheetBottom = Color(red: 0x14 / 255.0, green: 0x12 / 255.0, blue: 0x10 / 255.0)
     static let paper = Color(red: 0x1A / 255.0, green: 0x16 / 255.0, blue: 0x12 / 255.0)
@@ -93,7 +94,11 @@ final class FrameMarkStore: ObservableObject {
     private func load() {
         guard let data = try? Data(contentsOf: url),
               let list = try? JSONDecoder().decode([FrameMark].self, from: data) else { return }
-        marks = Dictionary(uniqueKeysWithValues: list.map { ($0.shotID, $0) })
+        // Use uniquingKeysWith to handle corrupt JSON with duplicate shot IDs —
+        // keep the most recently marked entry.
+        marks = Dictionary(list.map { ($0.shotID, $0) }, uniquingKeysWith: { lhs, rhs in
+            lhs.markedAt > rhs.markedAt ? lhs : rhs
+        })
     }
 }
 
@@ -183,21 +188,40 @@ enum SessionTitle {
         return "\(day) — \(period)"
     }
 
-    /// Reverse-geocode when a centroid is available; caches by rounded lat/lon + day.
+    /// Reverse-geocode when a centroid is available.
+    /// Caches **place name only** (not the full title) so morning/evening sessions
+    /// at the same spot don't steal each other's period strings. Failures are not cached.
     static func refine(session: ShootSession, location: CLLocation?, completion: @escaping (String) -> Void) {
         guard let location else {
             completion(session.title)
             return
         }
-        let key = String(format: "%.2f,%.2f|%@", location.coordinate.latitude, location.coordinate.longitude,
-                         ISO8601DateFormatter().string(from: Calendar.current.startOfDay(for: session.startDate)))
+        let key = String(format: "%.2f,%.2f", location.coordinate.latitude, location.coordinate.longitude)
         lock.lock()
-        if let cached = cache[key] {
-            lock.unlock()
-            completion(cached)
+        let cachedPlace = cache[key]
+        lock.unlock()
+
+        func titled(place: String?) -> String {
+            let base = fallback(for: session.shots)
+            guard let place, !place.isEmpty else { return base }
+            let df = DateFormatter()
+            df.dateFormat = "MMM d"
+            let day = df.string(from: session.startDate)
+            let hour = Calendar.current.component(.hour, from: session.startDate)
+            let period: String
+            switch hour {
+            case 5..<12: period = "morning"
+            case 12..<17: period = "afternoon"
+            case 17..<21: period = "evening"
+            default: period = "night"
+            }
+            return "\(place) — \(day), \(period)"
+        }
+
+        if let cachedPlace {
+            completion(titled(place: cachedPlace))
             return
         }
-        lock.unlock()
 
         CLGeocoder().reverseGeocodeLocation(location) { placemarks, _ in
             let place = placemarks?.first
@@ -206,29 +230,15 @@ enum SessionTitle {
                 ?? place?.subLocality
                 ?? place?.inlandWater
                 ?? place?.ocean
-            let base = fallback(for: session.shots)
-            let title: String
             if let name, !name.isEmpty {
-                // "Ocean Beach — Aug 14, morning"
-                let df = DateFormatter()
-                df.dateFormat = "MMM d"
-                let day = df.string(from: session.startDate)
-                let hour = Calendar.current.component(.hour, from: session.startDate)
-                let period: String
-                switch hour {
-                case 5..<12: period = "morning"
-                case 12..<17: period = "afternoon"
-                case 17..<21: period = "evening"
-                default: period = "night"
-                }
-                title = "\(name) — \(day), \(period)"
+                lock.lock()
+                cache[key] = name
+                lock.unlock()
+                completion(titled(place: name))
             } else {
-                title = base
+                // Do not cache failures — CLGeocoder rate limits are common.
+                completion(titled(place: nil))
             }
-            lock.lock()
-            cache[key] = title
-            lock.unlock()
-            completion(title)
         }
     }
 }
@@ -273,9 +283,14 @@ enum PhotosLibraryService {
     }
 
     static func deleteAssets(localIdentifiers: [String], completion: @escaping (Bool) -> Void) {
+        guard !localIdentifiers.isEmpty else {
+            completion(true)
+            return
+        }
         let assets = PHAsset.fetchAssets(withLocalIdentifiers: localIdentifiers, options: nil)
         guard assets.count > 0 else {
-            completion(true)
+            // Stale identifiers — assets already gone; treat as success only if all were expected to exist.
+            completion(false)
             return
         }
         PHPhotoLibrary.shared().performChanges({
@@ -302,11 +317,17 @@ enum PhotosLibraryService {
                 return
             }
 
-            let album = fetchOrCreateAlbum(named: albumName)
+            guard let album = fetchOrCreateAlbum(named: albumName) else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
             let assets = PHAsset.fetchAssets(withLocalIdentifiers: assetLocalIdentifiers, options: nil)
+            guard assets.count > 0 else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
             PHPhotoLibrary.shared().performChanges({
-                guard let album,
-                      let add = PHAssetCollectionChangeRequest(for: album) else { return }
+                guard let add = PHAssetCollectionChangeRequest(for: album) else { return }
                 add.addAssets(assets)
             }, completionHandler: { success, error in
                 if let error { print("Album export failed: \(error)") }
@@ -344,6 +365,15 @@ enum PhotosLibraryService {
     }
 
     /// Fallback match when localIdentifier is stale: exact creationDate.
+    /// Opens the Photos app (no public deep link to a named album).
+    static func openPhotosApp() {
+        // `photos-redirect://` is the supported springboard jump into Photos.
+        guard let url = URL(string: "photos-redirect://") else { return }
+        DispatchQueue.main.async {
+            UIApplication.shared.open(url)
+        }
+    }
+
     static func resolveAsset(
         preferredID: String?,
         creationDate: Date

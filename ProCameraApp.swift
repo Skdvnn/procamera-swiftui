@@ -16,9 +16,8 @@ class FingerTipAppDelegate: NSObject, UIApplicationDelegate {
         _ application: UIApplication,
         didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
     ) -> Bool {
-        if let shortcut = launchOptions?[.shortcutItem] as? UIApplicationShortcutItem {
-            handleShortcut(shortcut)
-        }
+        // Cold-start shortcuts are handled in FingerTipSceneDelegate only —
+        // posting here too double-fired capture.
         return true
     }
 
@@ -27,11 +26,22 @@ class FingerTipAppDelegate: NSObject, UIApplicationDelegate {
         performActionFor shortcutItem: UIApplicationShortcutItem,
         completionHandler: @escaping (Bool) -> Void
     ) {
-        handleShortcut(shortcutItem)
+        // Prefer scene windowScene(performActionFor:). This path is a fallback
+        // for hosts that only call the app-delegate API.
+        FingerTipSceneDelegate.postShortcut(shortcutItem)
         completionHandler(true)
     }
+}
 
-    private func handleShortcut(_ item: UIApplicationShortcutItem) {
+class FingerTipSceneDelegate: NSObject, UIWindowSceneDelegate {
+    var window: UIWindow?
+
+    /// Shared shortcut → deep-link mapping (app delegate + scene).
+    private static var lastShortcutAt: CFAbsoluteTime = 0
+    static func postShortcut(_ item: UIApplicationShortcutItem) {
+        let now = CFAbsoluteTimeGetCurrent()
+        if now - lastShortcutAt < 0.5 { return }
+        lastShortcutAt = now
         switch item.type {
         case "com.skylardann.filmcam.capture":
             ShutterDeepLinkCenter.post(.capture)
@@ -43,10 +53,6 @@ class FingerTipAppDelegate: NSObject, UIApplicationDelegate {
             ShutterDeepLinkCenter.post(.openCamera)
         }
     }
-}
-
-class FingerTipSceneDelegate: NSObject, UIWindowSceneDelegate {
-    var window: UIWindow?
 
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
@@ -73,21 +79,7 @@ class FingerTipSceneDelegate: NSObject, UIWindowSceneDelegate {
             handleUserActivity(activity)
         }
         if let shortcut = connectionOptions.shortcutItem {
-            NotificationCenter.default.post(
-                name: .shutterDeepLink,
-                object: nil,
-                userInfo: ["shortcut": shortcut.type]
-            )
-            switch shortcut.type {
-            case "com.skylardann.filmcam.capture":
-                ShutterDeepLinkCenter.post(.capture)
-            case "com.skylardann.filmcam.darkroom":
-                ShutterDeepLinkCenter.post(.darkroom)
-            case "com.skylardann.filmcam.timer":
-                ShutterDeepLinkCenter.post(.timer(seconds: 3))
-            default:
-                break
-            }
+            Self.postShortcut(shortcut)
         }
     }
 
@@ -106,16 +98,7 @@ class FingerTipSceneDelegate: NSObject, UIWindowSceneDelegate {
         performActionFor shortcutItem: UIApplicationShortcutItem,
         completionHandler: @escaping (Bool) -> Void
     ) {
-        switch shortcutItem.type {
-        case "com.skylardann.filmcam.capture":
-            ShutterDeepLinkCenter.post(.capture)
-        case "com.skylardann.filmcam.darkroom":
-            ShutterDeepLinkCenter.post(.darkroom)
-        case "com.skylardann.filmcam.timer":
-            ShutterDeepLinkCenter.post(.timer(seconds: 3))
-        default:
-            ShutterDeepLinkCenter.post(.openCamera)
-        }
+        Self.postShortcut(shortcutItem)
         completionHandler(true)
     }
 

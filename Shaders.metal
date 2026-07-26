@@ -133,28 +133,28 @@ float noise(float2 st) {
 ) {
     float2 uv = position / size;
 
-    // Dense horizontal brush + coarser lathe — bevel texture, not flat fill
-    float brushed = noise(float2(uv.x * 340.0, uv.y * 12.0)) * roughness;
-    float brushed2 = noise(float2(uv.x * 130.0, uv.y * 5.0)) * roughness * 0.72;
-    float micro = (noise(uv * 520.0) - 0.5) * roughness * 0.30;
+    // Softer brush — matte steel, less try-hard texture
+    float brushed = noise(float2(uv.x * 280.0, uv.y * 14.0)) * roughness;
+    float brushed2 = noise(float2(uv.x * 90.0, uv.y * 6.0)) * roughness * 0.65;
+    float micro = (noise(uv * 420.0) - 0.5) * roughness * 0.30;
 
     // Anisotropic specular streak (brushed metal, not mirror chrome)
     float2 lightDir = normalize(lightPos - uv);
     float ndl = max(dot(lightDir, float2(0.18, 0.98)), 0.0);
-    float soft = pow(ndl, 7.5) * 0.30;
-    float streak = pow(ndl, 26.0) * 0.24;
+    float soft = pow(ndl, 6.0) * 0.22;
+    float streak = pow(ndl, 22.0) * 0.10;
     float specular = soft + streak;
 
-    // Cool rim — machined edge for bevel read
+    // Neutral rim — no cool blue cast on press
     float edge = length(uv - float2(0.5, 0.5)) * 2.0;
-    float fresnel = pow(smoothstep(0.56, 1.0, edge), 1.45) * 0.20;
+    float fresnel = pow(smoothstep(0.60, 1.0, edge), 1.6) * 0.14;
 
     half3 result = color.rgb;
-    // Cool steel cast
-    result = mix(result, half3(result.r * 0.90, result.g * 0.94, result.b * 1.06), half(0.32));
-    result += half3((brushed * 0.19 + brushed2 * 0.14 + micro) * 1.12);
-    result += half3(specular * 0.40) * half3(0.88, 0.93, 1.0);
-    result += half3(fresnel) * half3(0.78, 0.84, 0.95);
+    // Neutral steel cast (was cool blue — read as cyan on press)
+    result = mix(result, half3(result.r * 0.94, result.g * 0.96, result.b * 1.02), half(0.28));
+    result += half3((brushed * 0.14 + brushed2 * 0.11 + micro) * 0.95);
+    result += half3(specular * 0.28) * half3(0.92, 0.94, 0.97);
+    result += half3(fresnel) * half3(0.75, 0.78, 0.84);
     // Raised contact shadow — mixes with UI drop shadow
     result *= half(1.0 - smoothstep(0.50, 1.05, uv.y) * 0.22);
 

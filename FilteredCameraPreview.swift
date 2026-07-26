@@ -5,11 +5,76 @@ import AVKit
 import CoreImage
 import MetalKit
 
+/// Pushes live FX frames straight into Metal — never via `@Published`, so
+/// 12–15fps film/FX does not invalidate the whole SwiftUI camera tree.
+final class LivePreviewBridge {
+    private weak var view: FilteredPreviewView?
+    private var showingFiltered = false
+    private let lock = NSLock()
+    private var pending: CIImage?
+    private var hasPending = false
+    private var scheduled = false
+
+    func attach(_ view: FilteredPreviewView) {
+        lock.lock()
+        let replacing = self.view !== view
+        self.view = view
+        if replacing {
+            pending = nil
+            hasPending = false
+            scheduled = false
+            showingFiltered = false
+        }
+        lock.unlock()
+        if replacing {
+            view.restoreCleanPreview()
+        }
+    }
+
+    /// Latest-wins coalesce — video queue can outrun main without stacking hops.
+    func push(_ image: CIImage?) {
+        lock.lock()
+        pending = image
+        hasPending = true
+        if scheduled {
+            lock.unlock()
+            return
+        }
+        scheduled = true
+        lock.unlock()
+
+        let work = { [weak self] in
+            guard let self else { return }
+            self.lock.lock()
+            let next = self.hasPending ? self.pending : nil
+            let deliver = self.hasPending
+            self.pending = nil
+            self.hasPending = false
+            self.scheduled = false
+            self.lock.unlock()
+            guard deliver else { return }
+            if next == nil {
+                guard self.showingFiltered else { return }
+                self.showingFiltered = false
+            } else {
+                self.showingFiltered = true
+            }
+            self.view?.updateFilteredImage(next)
+        }
+        if Thread.isMainThread {
+            work()
+        } else {
+            DispatchQueue.main.async(execute: work)
+        }
+    }
+}
+
 // MARK: - Filtered Camera Preview (renders CIImage with film filters)
 struct FilteredCameraPreview: UIViewRepresentable {
     let session: AVCaptureSession
-    let filteredImage: CIImage?
-    var onTap: ((CGPoint) -> Void)?
+    let livePreview: LivePreviewBridge
+    /// (viewNormalized 0…1, devicePointOfInterest) — UI reticle uses view; AF uses device.
+    var onTap: ((CGPoint, CGPoint) -> Void)?
     var onPinch: ((CGFloat) -> Void)?
     /// Drag / press on the viewfinder for morphic Lens FX.
     /// point: normalized UIKit (0…1), velocity: normalized deltas, active: finger down.
@@ -25,6 +90,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
         let view = FilteredPreviewView()
         view.session = session
         view.backgroundColor = .black
+        livePreview.attach(view)
 
         let tapGesture = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleTap(_:)))
         view.addGestureRecognizer(tapGesture)
@@ -34,25 +100,30 @@ struct FilteredCameraPreview: UIViewRepresentable {
 
         // Pan drives exposure scrub (after focus) or morph FX.
         let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
-        panGesture.maximumNumberOfTouches = 2
+        // Pinch owns two fingers. A two-finger pan used to change EV/morph
+        // while zooming whenever the pinch centroid drifted.
+        panGesture.maximumNumberOfTouches = 1
+        // Don't steal vertical deck swipes near the bottom chrome.
         panGesture.delegate = context.coordinator
         view.addGestureRecognizer(panGesture)
 
         let longPress = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
-        longPress.minimumPressDuration = 0.45
-        longPress.allowableMovement = 12
+        // Tight movement so EV scrub cancels compare before it arms (Build 74).
+        longPress.minimumPressDuration = 0.55
+        longPress.allowableMovement = 4
         longPress.delegate = context.coordinator
         view.addGestureRecognizer(longPress)
 
         context.coordinator.tapGesture = tapGesture
         context.coordinator.panGesture = panGesture
+        context.coordinator.longPressGesture = longPress
 
         return view
     }
 
     func updateUIView(_ uiView: FilteredPreviewView, context: Context) {
         uiView.session = session
-        uiView.updateFilteredImage(filteredImage)
+        livePreview.attach(uiView)
         context.coordinator.onTap = onTap
         context.coordinator.onPinch = onPinch
         context.coordinator.onMorphTouch = onMorphTouch
@@ -73,7 +144,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
     }
 
     class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        var onTap: ((CGPoint) -> Void)?
+        var onTap: ((CGPoint, CGPoint) -> Void)?
         var onPinch: ((CGFloat) -> Void)?
         var onMorphTouch: ((CGPoint, CGPoint, Bool) -> Void)?
         var exposureDragEnabled: Bool
@@ -82,6 +153,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
         var lastScale: CGFloat = 1.0
         weak var tapGesture: UITapGestureRecognizer?
         weak var panGesture: UIPanGestureRecognizer?
+        weak var longPressGesture: UILongPressGestureRecognizer?
         private var lastPanTime: CFAbsoluteTime = 0
         private var lastPanPoint: CGPoint = .zero
         /// Once a pan chooses exposure vs morph, stick with it until lift.
@@ -95,7 +167,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
         }
 
         init(
-            onTap: ((CGPoint) -> Void)?,
+            onTap: ((CGPoint, CGPoint) -> Void)?,
             onPinch: ((CGFloat) -> Void)?,
             onMorphTouch: ((CGPoint, CGPoint, Bool) -> Void)?,
             exposureDragEnabled: Bool,
@@ -114,21 +186,69 @@ struct FilteredCameraPreview: UIViewRepresentable {
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
-            true
+            // Zoom and EV/morph are mutually exclusive.
+            if gestureRecognizer is UIPinchGestureRecognizer,
+               otherGestureRecognizer is UIPanGestureRecognizer { return false }
+            if gestureRecognizer is UIPanGestureRecognizer,
+               otherGestureRecognizer is UIPinchGestureRecognizer { return false }
+            // Hold-to-compare must not fight EV scrub / morph pan (Build 74).
+            if gestureRecognizer is UILongPressGestureRecognizer,
+               otherGestureRecognizer is UIPanGestureRecognizer { return false }
+            if gestureRecognizer is UIPanGestureRecognizer,
+               otherGestureRecognizer is UILongPressGestureRecognizer { return false }
+            return true
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldReceive touch: UITouch
+        ) -> Bool {
+            // Bottom chrome owns vertical swipes / shutter — don't let the
+            // UIKit pan eat them before SwiftUI sees the drag.
+            guard gestureRecognizer is UIPanGestureRecognizer,
+                  let view = gestureRecognizer.view else {
+                return true
+            }
+            // Bottom ~20% belongs to SwiftUI chrome (histogram / shutter / swipe).
+            // Was 32% — too much dead zone for sun-drag brightness (Build 74).
+            let y = touch.location(in: view).y
+            return y < view.bounds.height * 0.80
+        }
+
+        private func cancelCompareIfNeeded() {
+            guard compareActive else { return }
+            compareActive = false
+            onCompareHold?(false)
+            longPressGesture?.isEnabled = false
+            longPressGesture?.isEnabled = true
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
             let location = gesture.location(in: gesture.view)
-            guard let view = gesture.view, view.bounds.width > 0, view.bounds.height > 0 else { return }
+            guard let view = gesture.view as? FilteredPreviewView,
+                  view.bounds.width > 0, view.bounds.height > 0 else { return }
 
-            let point = CGPoint(
+            let viewNorm = CGPoint(
                 x: location.x / view.bounds.width,
                 y: location.y / view.bounds.height
             )
-            onTap?(point)
+            // AVFoundation POI is in device sensor space — not raw view 0…1.
+            let devicePOI: CGPoint
+            if let layer = view.previewLayer {
+                devicePOI = layer.captureDevicePointConverted(fromLayerPoint: location)
+            } else {
+                devicePOI = viewNorm
+            }
+            onTap?(viewNorm, devicePOI)
         }
 
         @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+            // Never arm compare while EV scrub owns the finger.
+            if panMode == .exposure {
+                gesture.isEnabled = false
+                gesture.isEnabled = true
+                return
+            }
             switch gesture.state {
             case .began:
                 compareActive = true
@@ -172,20 +292,20 @@ struct FilteredCameraPreview: UIViewRepresentable {
             case .began:
                 lastPanTime = now
                 lastPanPoint = point
+                // Wait for direction — vertical = EV (iOS Camera), else morph FX.
                 panMode = .undecided
-                if exposureDragEnabled {
-                    panMode = .exposure
-                    onExposureDrag?(translation.y, false)
-                } else {
-                    panMode = .morph
-                    onMorphTouch?(point, .zero, true)
-                }
 
             case .changed:
                 if panMode == .undecided {
-                    // Prefer exposure when focus reticle is up; otherwise morph after a hint of movement
-                    if exposureDragEnabled && abs(translation.y) >= abs(translation.x) {
+                    // Prefer vertical EV sooner (4pt) so brightness feels instant.
+                    let verticalEnough = exposureDragEnabled && abs(translation.y) > 4
+                    let horizontalEnough = abs(translation.x) > 6
+                    guard verticalEnough || horizontalEnough else { break }
+                    if exposureDragEnabled
+                        && abs(translation.y) >= abs(translation.x) * 0.85 {
                         panMode = .exposure
+                        cancelCompareIfNeeded()
+                        onExposureDrag?(translation.y, false)
                     } else {
                         panMode = .morph
                         onMorphTouch?(point, .zero, true)
@@ -193,8 +313,9 @@ struct FilteredCameraPreview: UIViewRepresentable {
                 }
 
                 if panMode == .exposure {
+                    cancelCompareIfNeeded()
                     onExposureDrag?(translation.y, false)
-                } else {
+                } else if panMode == .morph {
                     let dt = max(1.0 / 120.0, now - lastPanTime)
                     velocity = CGPoint(
                         x: (point.x - lastPanPoint.x) / CGFloat(dt),
@@ -210,7 +331,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
             case .ended, .cancelled, .failed:
                 if panMode == .exposure {
                     onExposureDrag?(translation.y, true)
-                } else {
+                } else if panMode == .morph {
                     let uiVel = gesture.velocity(in: view)
                     velocity = CGPoint(
                         x: min(8, max(-8, uiVel.x / view.bounds.width)),
@@ -230,27 +351,46 @@ struct FilteredCameraPreview: UIViewRepresentable {
 // MARK: - Custom Preview View with Metal rendering
 class FilteredPreviewView: UIView {
     private var metalView: MTKView?
-    private var previewLayer: AVCaptureVideoPreviewLayer?
+    fileprivate(set) var previewLayer: AVCaptureVideoPreviewLayer?
+    /// Own CIContext — never share ShutterRender.ciContext / ciQueue from
+    /// main-thread `draw(in:)`. Shared-context sync froze the UI whenever
+    /// bake/LE owned the queue (black finder + dead shutter).
     private let ciContext: CIContext
     private var commandQueue: MTLCommandQueue?
     private var device: MTLDevice?
     private var currentCIImage: CIImage?
+    /// Avoid re-locking LensFXEngine on every Metal frame.
+    private var lastPreviewRotation: PreviewBufferRotation?
+    /// Consecutive failed Metal draws → fall back to AV preview.
+    private var consecutiveDrawFails = 0
 
     var session: AVCaptureSession? {
         didSet {
             previewLayer?.session = session
+            // Session (re)attach — never leave Metal covering a dead feed.
+            if currentCIImage == nil {
+                restoreCleanPreview()
+            }
         }
     }
 
-    override init(frame: CGRect) {
-        // Create CIContext with Metal for GPU-accelerated rendering
-        if let device = MTLCreateSystemDefaultDevice() {
-            self.device = device
-            self.commandQueue = device.makeCommandQueue()
-            self.ciContext = CIContext(mtlDevice: device, options: [.workingColorSpace: CGColorSpaceCreateDeviceRGB()])
-        } else {
-            self.ciContext = CIContext(options: [.useSoftwareRenderer: false])
+    private static func makePreviewCIContext(device: MTLDevice?) -> CIContext {
+        if let device {
+            return CIContext(
+                mtlDevice: device,
+                options: [
+                    .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
+                    .cacheIntermediates: false
+                ]
+            )
         }
+        return CIContext(options: [.cacheIntermediates: false])
+    }
+
+    override init(frame: CGRect) {
+        self.device = ShutterRender.device
+        self.commandQueue = ShutterRender.device?.makeCommandQueue()
+        self.ciContext = Self.makePreviewCIContext(device: ShutterRender.device)
 
         super.init(frame: frame)
         setupViews()
@@ -258,13 +398,9 @@ class FilteredPreviewView: UIView {
     }
 
     required init?(coder: NSCoder) {
-        if let device = MTLCreateSystemDefaultDevice() {
-            self.device = device
-            self.commandQueue = device.makeCommandQueue()
-            self.ciContext = CIContext(mtlDevice: device, options: [.workingColorSpace: CGColorSpaceCreateDeviceRGB()])
-        } else {
-            self.ciContext = CIContext(options: [.useSoftwareRenderer: false])
-        }
+        self.device = ShutterRender.device
+        self.commandQueue = ShutterRender.device?.makeCommandQueue()
+        self.ciContext = Self.makePreviewCIContext(device: ShutterRender.device)
 
         super.init(coder: coder)
         setupViews()
@@ -306,8 +442,11 @@ class FilteredPreviewView: UIView {
             mtkView.framebufferOnly = false
             mtkView.enableSetNeedsDisplay = true
             mtkView.isPaused = true
+            // Transparent until a real frame presents — opaque Metal over AV
+            // was the solid pink/magenta frozen finder (Build 75).
             mtkView.backgroundColor = .clear
             mtkView.isOpaque = false
+            mtkView.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
             mtkView.isHidden = true  // Hidden when no filter
             // Gestures live on the parent; keep Metal view from eating touches
             mtkView.isUserInteractionEnabled = false
@@ -319,36 +458,80 @@ class FilteredPreviewView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         previewLayer?.frame = bounds
-        metalView?.frame = bounds
+        // Keep clean (non-Metal) preview upright in landscape.
+        if let conn = previewLayer?.connection {
+            let angle = CameraManager.videoRotationAngle(for: Self.interfaceOrientation())
+            if conn.isVideoRotationAngleSupported(angle) {
+                conn.videoRotationAngle = angle
+            }
+            let front = (session?.inputs.contains(where: {
+                ($0 as? AVCaptureDeviceInput)?.device.position == .front
+            }) ?? false)
+            if conn.isVideoMirroringSupported {
+                conn.automaticallyAdjustsVideoMirroring = false
+                conn.isVideoMirrored = front
+            }
+        }
+        guard let metalView else { return }
+        metalView.frame = bounds
+        // Explicit drawable size — first FX toggle used to hit a 0×0 layer.
+        if bounds.width > 1, bounds.height > 1 {
+            let scale = window?.screen.scale ?? UIScreen.main.scale
+            let size = CGSize(width: bounds.width * scale, height: bounds.height * scale)
+            if metalView.drawableSize != size {
+                metalView.drawableSize = size
+            }
+        }
     }
+
+    private static func interfaceOrientation() -> UIInterfaceOrientation {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        if let orient = scenes.first(where: { $0.activationState == .foregroundActive })?.interfaceOrientation {
+            return orient
+        }
+        return scenes.first?.interfaceOrientation ?? .portrait
+    }
+
+    /// True after Metal has presented at least one filtered frame.
+    private var metalHasPresented = false
 
     func updateFilteredImage(_ image: CIImage?) {
         currentCIImage = image
 
         if image != nil {
             let wasHidden = metalView?.isHidden ?? true
+            // Always keep AV visible until Metal has painted a real frame.
+            // Opaque pink/black Metal covering AV was the frozen finder.
+            previewLayer?.isHidden = metalHasPresented
             metalView?.isHidden = false
-            previewLayer?.isHidden = true
-            // First enable after FX/film toggle: wait for a real drawable.
+            if !metalHasPresented {
+                metalView?.isOpaque = false
+                metalView?.backgroundColor = .clear
+                metalView?.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+                metalView?.alpha = 1 // draws transparent clear; AV shows through
+            }
             if wasHidden {
                 setNeedsLayout()
                 layoutIfNeeded()
                 metalView?.setNeedsLayout()
                 metalView?.layoutIfNeeded()
-                scheduleMetalDraw(attemptsLeft: 8)
+                scheduleMetalDraw(attemptsLeft: 12)
             } else {
                 metalView?.setNeedsDisplay()
             }
         } else {
-            metalView?.isHidden = true
-            previewLayer?.isHidden = false
+            restoreCleanPreview()
         }
     }
 
-    /// Retries until MTKView has a non-zero drawable (avoids Metal crash on FX enable).
+    /// Retries until MTKView has a non-zero drawable. On exhaustion, fall back
+    /// to AVCaptureVideoPreviewLayer so the finder never stays pink/black.
     private func scheduleMetalDraw(attemptsLeft: Int) {
-        guard attemptsLeft > 0 else { return }
-        DispatchQueue.main.async { [weak self] in
+        if attemptsLeft <= 0 {
+            restoreCleanPreview()
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.016) { [weak self] in
             guard let self, let metalView = self.metalView, !metalView.isHidden else { return }
             self.layoutIfNeeded()
             metalView.layoutIfNeeded()
@@ -360,6 +543,37 @@ class FilteredPreviewView: UIView {
             }
         }
     }
+
+    fileprivate func restoreCleanPreview() {
+        metalHasPresented = false
+        consecutiveDrawFails = 0
+        currentCIImage = nil
+        metalView?.isHidden = true
+        metalView?.isOpaque = false
+        metalView?.alpha = 1
+        metalView?.backgroundColor = .clear
+        metalView?.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+        previewLayer?.isHidden = false
+    }
+
+    fileprivate func markMetalPresented() {
+        guard !metalHasPresented else { return }
+        metalHasPresented = true
+        consecutiveDrawFails = 0
+        // Now safe to cover AV — drawable has real film/FX pixels.
+        metalView?.isOpaque = true
+        metalView?.backgroundColor = .black
+        metalView?.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        previewLayer?.isHidden = true
+    }
+
+    private func noteDrawFailure() {
+        consecutiveDrawFails += 1
+        // Never leave a non-presenting Metal layer covering the live feed.
+        if !metalHasPresented || consecutiveDrawFails >= 3 {
+            restoreCleanPreview()
+        }
+    }
 }
 
 // MARK: - MTKViewDelegate for Metal rendering
@@ -369,32 +583,58 @@ extension FilteredPreviewView: MTKViewDelegate {
     }
 
     func draw(in view: MTKView) {
-        guard var ciImage = currentCIImage,
-              let commandBuffer = commandQueue?.makeCommandBuffer(),
-              let drawable = view.currentDrawable else {
-            return
-        }
-
-        // First frame after un-hiding the MTKView often has a 0×0 drawable —
-        // rendering into that crashes Metal when Lens FX/film filters turn on.
+        // Size-guard BEFORE currentDrawable — acquiring a 0×0 drawable has
+        // crashed Metal on the first film/FX toggle.
         let drawableSize = view.drawableSize
         guard drawableSize.width > 1, drawableSize.height > 1,
               view.bounds.width > 1, view.bounds.height > 1 else {
+            noteDrawFailure()
             return
         }
 
-        // Texture must match drawable size
-        guard drawable.texture.width > 1, drawable.texture.height > 1 else { return }
-
-        // Apply orientation correction for portrait mode
-        // Video frames come in landscape orientation, rotate for portrait display
-        let deviceOrientation = UIDevice.current.orientation
-        if deviceOrientation.isPortrait || deviceOrientation == .unknown || deviceOrientation == .faceUp || deviceOrientation == .faceDown {
-            ciImage = ciImage.oriented(.right)
-        } else if deviceOrientation == .landscapeLeft {
-            ciImage = ciImage.oriented(.down)
+        guard var ciImage = currentCIImage else {
+            // Metal visible with nothing to draw — snap back to live camera.
+            restoreCleanPreview()
+            return
         }
-        // landscapeRight is the native orientation, no transform needed
+        guard let commandBuffer = commandQueue?.makeCommandBuffer(),
+              let drawable = view.currentDrawable,
+              drawable.texture.width > 1,
+              drawable.texture.height > 1 else {
+            noteDrawFailure()
+            return
+        }
+
+        // Video buffers are sensor-native (landscape). Map to the *interface*
+        // orientation so portrait + landscape left/right all read upright.
+        let orient = Self.interfaceOrientation()
+        // Only push FX touch mapping when orientation changes — locking every
+        // Metal frame was freezing the UI under load.
+        let rotation = PreviewBufferRotation.from(interfaceOrientation: orient)
+        if lastPreviewRotation != rotation {
+            lastPreviewRotation = rotation
+            LensFXEngine.shared.setPreviewBufferRotation(rotation)
+        }
+        switch orient {
+        case .portrait, .unknown:
+            ciImage = ciImage.oriented(.right)
+        case .portraitUpsideDown:
+            ciImage = ciImage.oriented(.left)
+        case .landscapeLeft:
+            // Home button / indicator on the right → buffer needs 180°
+            ciImage = ciImage.oriented(.down)
+        case .landscapeRight:
+            break // sensor-native
+        @unknown default:
+            ciImage = ciImage.oriented(.right)
+        }
+
+        // Orientation shifts origin off (0,0). Without this normalize the crop
+        // is empty → solid clear color (pink/magenta freeze). Mirror still bake.
+        ciImage = ciImage.transformed(by: CGAffineTransform(
+            translationX: -ciImage.extent.origin.x,
+            y: -ciImage.extent.origin.y
+        ))
 
         let extent = ciImage.extent
         let imageSize = extent.size
@@ -403,6 +643,7 @@ extension FilteredPreviewView: MTKViewDelegate {
               imageSize.height > 1,
               imageSize.width.isFinite,
               imageSize.height.isFinite else {
+            noteDrawFailure()
             return
         }
 
@@ -410,7 +651,10 @@ extension FilteredPreviewView: MTKViewDelegate {
         let scaleX = drawableSize.width / imageSize.width
         let scaleY = drawableSize.height / imageSize.height
         let scale = max(scaleX, scaleY)
-        guard scale.isFinite, scale > 0 else { return }
+        guard scale.isFinite, scale > 0 else {
+            noteDrawFailure()
+            return
+        }
 
         // Center the scaled image
         let scaledWidth = imageSize.width * scale
@@ -426,8 +670,12 @@ extension FilteredPreviewView: MTKViewDelegate {
         // Crop to drawable bounds
         let drawableRect = CGRect(origin: .zero, size: drawableSize)
         transformedImage = transformedImage.cropped(to: drawableRect)
+        guard transformedImage.extent.width > 1, transformedImage.extent.height > 1 else {
+            noteDrawFailure()
+            return
+        }
 
-        // Render to Metal texture
+        // Preview-only CIContext (not ShutterRender.ciQueue) — never block main.
         let colorSpace = CGColorSpaceCreateDeviceRGB()
         ciContext.render(
             transformedImage,
@@ -437,6 +685,10 @@ extension FilteredPreviewView: MTKViewDelegate {
             colorSpace: colorSpace
         )
 
+        consecutiveDrawFails = 0
+        // Reveal Metal as soon as this drawable is queued — not after GPU
+        // completes (that window was the pink flash over live AV).
+        markMetalPresented()
         commandBuffer.present(drawable)
         commandBuffer.commit()
     }
