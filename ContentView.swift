@@ -1983,18 +1983,21 @@ struct ContentView: View {
 
     /// Bottom deck: swipe down collapses, swipe up expands.
     private var bottomDeckSwipe: some Gesture {
-        DragGesture(minimumDistance: 16, coordinateSpace: .local)
+        DragGesture(minimumDistance: 12, coordinateSpace: .local)
             .onChanged { value in
                 let dy = value.translation.height
                 let dx = value.translation.width
-                // Stronger vertical bias so ISO/shutter scrubs don't collapse the deck.
-                guard abs(dy) > abs(dx) * 1.6 else { return }
+                // Collapsed (expand): keep a stronger bias so finder pans don't
+                // accidentally open the deck. Expanded (collapse): looser bias so
+                // a vertical pull still wins over ISO/S horizontal scrubs (Build 96).
+                let bias: CGFloat = bottomCollapsed ? 1.6 : 1.25
+                guard abs(dy) > abs(dx) * bias else { return }
                 // Use visible collapsed state (landscape forces compact chrome).
                 let collapsed = bottomCollapsed
                 if collapsed {
                     bottomDeckDrag = min(0, max(dy, -160))
                 } else {
-                    bottomDeckDrag = max(0, min(dy, 160))
+                    bottomDeckDrag = max(0, min(dy, 180))
                 }
             }
             .onEnded { value in
@@ -2007,15 +2010,17 @@ struct ContentView: View {
                 }()
 
                 let committedDrag = bottomDeckDrag
+                let bias: CGFloat = bottomCollapsed ? 1.6 : 1.25
                 withAnimation(ShutterMotion.deck) {
                     bottomDeckDrag = 0
-                    guard abs(effective) > abs(dx) * 1.6 else { return }
+                    guard abs(effective) > abs(dx) * bias else { return }
                     if bottomCollapsed {
                         // Swipe up (negative) expands out of fullscreen finder.
                         if effective < -20 || committedDrag < -18 {
                             bottomCollapsed = false
                         }
-                    } else if effective > 28 || committedDrag > 24 {
+                    } else if effective > 22 || committedDrag > 18 {
+                        // Easier pull-down to leave explore after scrubbing ISO/S.
                         bottomCollapsed = true
                     }
                 }
@@ -2091,13 +2096,23 @@ struct ContentView: View {
             )
             .frame(height: 40)
             .padding(.horizontal, DS.pageMargin)
+            .contentShape(Rectangle())
+            .simultaneousGesture(bottomDeckSwipe)
 
             Spacer().frame(height: 1)
 
-            // ROW 2: ISO & Shutter side by side
+            // ROW 2: Shutter left / ISO right — ISO scrub was eating vertical
+            // pull-down to leave explore; right side + shared deck swipe fixes it.
             HStack(spacing: 4) {
-                // No arch peel here — that treatment belongs to the viewfinder
-                // sun-drag now (Build 81); these scrubbers read their own values.
+                ShutterScrubber(
+                    shutterSpeed: $shutterSpeedIndex,
+                    onChanged: { idx in
+                        guard !isLocked else { return }
+                        // Pass UI ISO; shutter and EV stay independent.
+                        camera.setShutterSpeed(index: idx, iso: Float(isoValue))
+                    }
+                )
+
                 ISOScrubberHorizontal(
                     iso: $isoValue,
                     onChanged: { iso in
@@ -2107,18 +2122,11 @@ struct ContentView: View {
                         camera.setISO(Float(capped))
                     }
                 )
-
-                ShutterScrubber(
-                    shutterSpeed: $shutterSpeedIndex,
-                    onChanged: { idx in
-                        guard !isLocked else { return }
-                        // Pass UI ISO; shutter and EV stay independent.
-                        camera.setShutterSpeed(index: idx, iso: Float(isoValue))
-                    }
-                )
             }
             .frame(height: 40)
             .padding(.horizontal, DS.pageMargin)
+            .contentShape(Rectangle())
+            .simultaneousGesture(bottomDeckSwipe)
 
             // Breathing room from scrubbers (Build 72) — flash drops toward the
             // pinned preview/shutter row without inserting gap between them.
