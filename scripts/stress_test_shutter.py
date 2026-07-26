@@ -289,7 +289,7 @@ def test_source_guards() -> None:
         "shutter 3d press no shrink",
         "NO scaleEffect shrink" in shutter_chrome
         and "scaleEffect(isPressed" not in shutter_chrome
-        and "3D press-in: face keeps size" in shutter_chrome,
+        and "Press-in: face keeps size" in shutter_chrome,
     )
     check(
         "shutter LE ring on button",
@@ -683,14 +683,14 @@ def test_source_guards() -> None:
     check("shutter face sink offset", "offset(y: isPressed ? sink : -proud)" in content)
     check("shutter face clipped to well", ".clipShape(Circle())" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
     check("shutter constant face fill", "Face fill is CONSTANT" in content)
-    check("shutter press dim overlay", "isPressed ? 0.42 : 0" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
+    check("shutter press dim overlay", "isPressed ? 0.38 : 0" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
     check("shutter top lip inset shadow", "Top lip inset shadow" in content)
 
-    # Build 79 — extruded cap so the press is unmistakably 3D
-    check("shutter barrel side wall", "Button barrel" in content and "barrelFill" in content)
-    check("shutter barrel collapses", "opacity(isPressed ? 0 : 1)" in shutter_chrome)
+    # Build 80 — round silhouette restored: no extruded barrel behind a round cap
+    check("shutter no barrel capsule", "barrelFill" not in content and "Button barrel" not in content)
+    check("shutter idle silhouette unchanged", "Only shows while pressed" in shutter_chrome)
     check("shutter proud/sink travel", "private var proud" in content and "private var sink" in content)
-    check("shutter crown sheen dies on press", "Crown sheen" in content)
+    check("shutter face clipped by well edge", ".frame(width: well, height: well)" in shutter_chrome)
 
     # Build 68 — Nikon LCD chrome + tighter deck + no white shutter flash
     check("shutter no white top glow", "Color.white.opacity(isPressed ? 0 : 0.06)" not in content)
