@@ -334,7 +334,7 @@ def test_source_guards() -> None:
     check("optional shootMode in film dock", "var shootMode: ShootMode?" in (ROOT / "ViewfinderOverlay.swift").read_text())
     check("burst count on shutter chrome", "burstCount:" in content and "isBursting" in content)
     check("loupe magnification badge", "magnification" in cull and "%.1f×" in cull)
-    check("settings night+burst toggles", "Low-light Night tip" in settings and "Hold shutter for burst" in settings)
+    check("settings night+burst toggles", "NIGHT TIP" in settings and "HOLD BURST" in settings)
     check("ContentView body split for type-checker", "finderCanvas(geo:" in content and "struct FinderStatusOverlays" in content and "struct ContentViewLifecycle" in content)
 
     # Build 51 — deep device-breaker guards (not just "string exists")
@@ -678,7 +678,8 @@ def test_source_guards() -> None:
     # Build 68 — Nikon LCD chrome + tighter deck + no white shutter flash
     check("shutter no white top glow", "Color.white.opacity(isPressed ? 0 : 0.06)" not in content)
     check("shutter collar dims on press", "isPressed ? 0.18 : 0" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
-    check("tight scrubber chrome gap", "Tight scrubber → chrome gap" in content)
+    check("scrubber flash breathing room", "Breathing room from scrubbers" in content)
+    check("flash snug on preview row", ".padding(.bottom, -6)" in content)
     check("pill height 44", "pillHeight: CGFloat = 44" in content)
     overlay = (ROOT / "ViewfinderOverlay.swift").read_text()
     settings = (ROOT / "ShutterSettings.swift").read_text()
@@ -686,17 +687,18 @@ def test_source_guards() -> None:
     check("nikon lcd yellow picker", "lcdYellow" in overlay and "0.85, blue: 0.35" in overlay)
     check("nikon picker tight rows", "heightForRowAt" in overlay and "return 28" in overlay)
     check("nikon picker iso badge", "isoBadge(for" in overlay)
-    check("settings lcd headers", "lcdHeader" in settings and "VIEWFINDER" in settings)
-    check("settings tint accent", ".tint(DS.accent)" in settings)
+    check("settings dslr menu", "DSLRToggleRow" in settings and "presentationBackground(.ultraThinMaterial)" in settings)
+    check("settings no List toggles", "Toggle(" not in settings and "List {" not in settings)
     check("cull amber matches DS.accent", "1.0, green: 0.85, blue: 0.35" in cull)
 
-    # Build 69 — horizon level integrated into histogram glass
+    # Build 69/72 — level in info-bar glass middle (with hist, not instead)
     aids = (ROOT / "ViewfinderAids.swift").read_text()
     check("histogram horizon overlay", "struct HistogramHorizonOverlay" in aids)
-    check("GlassHistogram showLevel", "showLevel: Bool = false" in content[content.find("struct GlassHistogram"):content.find("struct ResponsiveHistogram")])
+    check("info bar metal level", "struct InfoBarMetalLevel" in aids)
     check("info bar passes showLevel", "showLevel: showLevel" in content)
     check("no floating top level chip", "HorizonLevelIndicator()" not in content)
-    check("level lives in hist comment", "Horizon level lives inside the histogram glass" in content)
+    check("level mid info glass", "Metal spirit level — middle of the blurred info glass" in content)
+    check("hist without showLevel", "showLevel" not in content[content.find("struct GlassHistogram"):content.find("struct ResponsiveHistogram")])
 
     # Build 70 — widget overlapping recent photos
     deep = (ROOT / "ShutterDeepLink.swift").read_text()
@@ -725,6 +727,11 @@ def test_source_guards() -> None:
     check("shutter scrub feeds arch", "setScrubEdge(.shutter" in content)
     check("focus scrub active wiring", "onFocusScrubActive" in content and "onFocusScrubActive" in gauge)
     check("active edge readout helper", "activeEdgeReadout" in content)
+
+    # Build 72 — DSLR settings + metal level mid + deck spacing
+    check("dslr toggle row type", "struct DSLRToggleRow" in (ROOT / "ShutterSettings.swift").read_text())
+    check("settings frosted glass bg", "presentationBackground(.ultraThinMaterial)" in (ROOT / "ShutterSettings.swift").read_text())
+    check("settings cycle format row", "DSLRCycleRow" in (ROOT / "ShutterSettings.swift").read_text())
 
 
 
@@ -804,11 +811,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 71", m is not None and int(ver) >= 71, ver)
+    check("Info.plist build >= 72", m is not None and int(ver) >= 72, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 71+", any(v >= 71 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 72+", any(v >= 72 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

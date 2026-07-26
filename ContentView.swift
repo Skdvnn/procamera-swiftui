@@ -878,8 +878,7 @@ struct ContentView: View {
                         .padding(.horizontal, effectiveBottomCollapsed ? 6 : DS.pageMargin)
                         .zIndex(5)
 
-                        // Horizon level lives inside the histogram glass (info bar),
-                        // not as a floating top chip.
+                        // Horizon level lives mid info-bar glass (metal well), with hist.
 
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -1993,8 +1992,9 @@ struct ContentView: View {
             .frame(height: 40)
             .padding(.horizontal, DS.pageMargin)
 
-            // Tight scrubber → chrome gap (Build 68).
-            Spacer().frame(height: 1)
+            // Breathing room from scrubbers (Build 72) — flash drops toward the
+            // pinned preview/shutter row without inserting gap between them.
+            Spacer().frame(height: 10)
 
             // ROW 3: Flash | Format (true center above shutter) | Settings/Macro/Timer
             ZStack {
@@ -2045,10 +2045,12 @@ struct ContentView: View {
                 }
             }
             .padding(.horizontal, DS.pageMargin)
+            // Snug onto the bottom row — no extra flash→preview gap.
+            .padding(.bottom, -6)
             .contentShape(Rectangle())
             .simultaneousGesture(bottomDeckSwipe)
 
-            // ROW 4: Thumbnail | Shutter | WB
+            // ROW 4: Thumbnail | Shutter | WB — stays put; flash sits just above.
             HStack(alignment: .center, spacing: 0) {
                 ThumbnailPill(image: lastCapturedImage) {
                     Haptics.click()
@@ -2520,7 +2522,7 @@ struct RefractiveGlassInfoBar: View {
     var isLocked: Bool = false
     var isManualExposure: Bool = false
     var naturalCapture: Bool = true
-    /// Horizon level drawn inside the histogram glass (not a floating chip).
+    /// Horizon level in the info-bar glass middle (metal well) — with hist, not instead.
     var showLevel: Bool = false
     /// Landscape: denser readout, smaller histogram.
     var compact: Bool = false
@@ -2531,11 +2533,10 @@ struct RefractiveGlassInfoBar: View {
 
     var body: some View {
         HStack(spacing: compact ? 8 : 10) {
-            // Histogram (+ optional inline horizon) in glass container
+            // Histogram stays its own well
             GlassHistogram(
                 exposureValue: exposureValue,
-                bins: histogramBus.bins,
-                showLevel: showLevel
+                bins: histogramBus.bins
             )
             .frame(width: compact ? 54 : 70, height: compact ? 32 : 40)
 
@@ -2585,7 +2586,14 @@ struct RefractiveGlassInfoBar: View {
             }
             .foregroundColor(.white)
 
-            Spacer()
+            Spacer(minLength: 4)
+
+            // Metal spirit level — middle of the blurred info glass (Build 72).
+            if showLevel {
+                InfoBarMetalLevel(compact: compact)
+            }
+
+            Spacer(minLength: 4)
 
             // ISO & Shutter
             VStack(alignment: .trailing, spacing: 2) {
@@ -2638,11 +2646,10 @@ struct RefractiveGlassInfoBar: View {
     }
 }
 
-// MARK: - Glass Histogram (Clean container + optional inline horizon)
+// MARK: - Glass Histogram (Clean container — level lives mid info bar)
 struct GlassHistogram: View {
     let exposureValue: Float
     var bins: [Float] = []
-    var showLevel: Bool = false
 
     var body: some View {
         ZStack {
@@ -2654,11 +2661,9 @@ struct GlassHistogram: View {
             // synthetic EV-shifted curve until the first frame arrives
             Canvas { ctx, size in
                 let padding: CGFloat = 4
-                // Leave a little headroom when the level overlay is active.
-                let topPad: CGFloat = showLevel ? 5 : 0
                 let barCount = bins.isEmpty ? 40 : bins.count
                 let barWidth = (size.width - padding * 2) / CGFloat(barCount)
-                let usableH = size.height - padding * 2 - topPad
+                let usableH = size.height - padding * 2
 
                 for i in 0..<barCount {
                     let x = padding + CGFloat(i) * barWidth
@@ -2680,17 +2685,10 @@ struct GlassHistogram: View {
                         width: barWidth - 0.5,
                         height: barHeight
                     )
-                    // Slightly dimmer under the level so the spirit bar reads cleanly.
-                    ctx.fill(Path(rect), with: .color(.white.opacity(showLevel ? 0.55 : 0.8)))
+                    ctx.fill(Path(rect), with: .color(.white.opacity(0.8)))
                 }
             }
             .padding(2)
-
-            // Horizon level — integrated into the hist well (Build 69).
-            if showLevel {
-                HistogramHorizonOverlay()
-                    .padding(3)
-            }
         }
     }
 }

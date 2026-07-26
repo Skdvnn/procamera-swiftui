@@ -150,7 +150,7 @@ struct HorizonLevelIndicator: View {
     }
 }
 
-/// Compact spirit level drawn inside the histogram glass — Nikon LCD style.
+/// Compact spirit level drawn inside the histogram glass — kept for reuse.
 struct HistogramHorizonOverlay: View {
     @StateObject private var motion = HorizonMotion()
 
@@ -163,7 +163,6 @@ struct HistogramHorizonOverlay: View {
             let w = geo.size.width
             let h = geo.size.height
             ZStack {
-                // Fixed center ticks (horizon reference).
                 HStack(spacing: w * 0.42) {
                     Capsule()
                         .fill(Color.white.opacity(0.28))
@@ -173,14 +172,12 @@ struct HistogramHorizonOverlay: View {
                         .frame(width: 5, height: 1.5)
                 }
 
-                // Rotating level bar.
                 Capsule()
                     .fill(level ? accent.opacity(0.95) : Color.white.opacity(0.70))
                     .frame(width: max(22, w * 0.62), height: level ? 2.0 : 1.5)
                     .rotationEffect(.degrees(Double(roll)))
                     .shadow(color: level ? accent.opacity(0.45) : .clear, radius: 2)
 
-                // Degree readout — bottom trailing corner of the hist well.
                 Text(level ? "LVL" : String(format: "%+.0f°", roll))
                     .font(.system(size: 7, weight: .bold, design: .monospaced))
                     .foregroundColor(level ? accent : .white.opacity(0.65))
@@ -190,6 +187,81 @@ struct HistogramHorizonOverlay: View {
             }
             .frame(width: w, height: h)
         }
+        .allowsHitTesting(false)
+        .onAppear { motion.start() }
+        .onDisappear { motion.stop() }
+    }
+}
+
+/// Metal spirit level for the info-bar glass middle (Build 72) — sits with hist, not instead.
+struct InfoBarMetalLevel: View {
+    @StateObject private var motion = HorizonMotion()
+    var compact: Bool = false
+
+    private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
+
+    var body: some View {
+        let roll = motion.rollDegrees
+        let level = abs(roll) < 1.2
+        let w: CGFloat = compact ? 52 : 64
+        let h: CGFloat = compact ? 28 : 34
+
+        ZStack {
+            // Machined steel well
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color(white: 0.18),
+                            Color(white: 0.10),
+                            Color(white: 0.14)
+                        ],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .stroke(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.28),
+                            Color.black.opacity(0.55),
+                            Color.white.opacity(0.08)
+                        ],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 0.9
+                )
+            RoundedRectangle(cornerRadius: 3.5, style: .continuous)
+                .stroke(Color.black.opacity(0.55), lineWidth: 1)
+                .padding(2)
+
+            // Horizon reference ticks
+            HStack(spacing: w * 0.38) {
+                Capsule()
+                    .fill(Color.white.opacity(0.3))
+                    .frame(width: 4, height: 1.5)
+                Capsule()
+                    .fill(Color.white.opacity(0.3))
+                    .frame(width: 4, height: 1.5)
+            }
+
+            // Spirit bar
+            Capsule()
+                .fill(level ? accent : Color.white.opacity(0.75))
+                .frame(width: w * 0.55, height: level ? 2.2 : 1.6)
+                .rotationEffect(.degrees(Double(roll)))
+                .shadow(color: level ? accent.opacity(0.5) : .clear, radius: 2)
+
+            // Degree / LVL
+            Text(level ? "LVL" : String(format: "%+.0f°", roll))
+                .font(.system(size: compact ? 7 : 8, weight: .bold, design: .monospaced))
+                .foregroundStyle(level ? accent : .white.opacity(0.7))
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .padding(.bottom, 3)
+        }
+        .frame(width: w, height: h)
         .allowsHitTesting(false)
         .onAppear { motion.start() }
         .onDisappear { motion.stop() }
