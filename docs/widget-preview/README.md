@@ -12,8 +12,8 @@ which is where the stacks are tightest.
 | File | Face |
 | --- | --- |
 | `launch-small.png` | Home small — day count, recent stack, sparkline |
-| `launch-medium.png` | Home medium — week chart, exposure, shoot capsule, 2×2 sheet |
-| `launch-large.png` | Home large — 3×2 contact sheet, labelled week, stat row |
+| `launch-medium.png` | Home medium — week chart, exposure, metal shoot chip, 2×2 sheet |
+| `launch-large.png` | Home large — film-sprocket 3×2 sheet, labelled week, LCD stat well |
 | `looks-medium.png` | Looks medium — armed look, four chips, recents strip |
 | `looks-large.png` | Looks large — chips, contact sheet, week + counts |
 | `lock-accessories.png` | Circular roll gauge, rectangular, inline |

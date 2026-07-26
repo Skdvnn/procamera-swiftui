@@ -19,15 +19,112 @@ struct ShutterWidgetsBundle: WidgetBundle {
     }
 }
 
-// MARK: - Shared chrome
+// MARK: - Shared chrome (match in-camera vulcanite + Nikon LCD)
 
 enum WidgetPalette {
+    /// Nikon digital-display yellow — same as DS.accent / CullPalette.amber.
     static let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
     static let fx = Color(red: 0.55, green: 0.88, blue: 0.95)
-    static let keep = Color(red: 0.55, green: 0.90, blue: 0.60)
+    /// Keep marks use the cull amber, not a foreign green.
+    static let keep = accent
+    /// Vulcanite body + machined well (DS.pageBg / settings glass).
+    static let body = Color(red: 0x13 / 255.0, green: 0x13 / 255.0, blue: 0x13 / 255.0)
+    static let well = Color(red: 0x0A / 255.0, green: 0x0A / 255.0, blue: 0x0A / 255.0)
+    static let paper = Color(red: 0x1A / 255.0, green: 0x16 / 255.0, blue: 0x12 / 255.0)
+    static let hairline = accent.opacity(0.32)
+
+    static var vulcaniteBackground: some View {
+        LinearGradient(
+            colors: [
+                Color(red: 0.10, green: 0.10, blue: 0.10),
+                body,
+                well
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
 }
 
-/// Two nicely overlapping recent stills — the small widget's photo block.
+/// Machined DSLR inset well — same lip language as the settings sheet.
+struct WidgetDSLRWell<Content: View>: View {
+    var corner: CGFloat = 8
+    @ViewBuilder var content: () -> Content
+
+    var body: some View {
+        content()
+            .background(
+                ZStack {
+                    RoundedRectangle(cornerRadius: corner, style: .continuous)
+                        .fill(WidgetPalette.well.opacity(0.92))
+                    RoundedRectangle(cornerRadius: corner, style: .continuous)
+                        .fill(Color.white.opacity(0.03))
+                    RoundedRectangle(cornerRadius: corner, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.14),
+                                    Color.black.opacity(0.55),
+                                    Color.white.opacity(0.05)
+                                ],
+                                startPoint: .topLeading,
+                                endPoint: .bottomTrailing
+                            ),
+                            lineWidth: 1
+                        )
+                    RoundedRectangle(cornerRadius: max(2, corner - 2), style: .continuous)
+                        .stroke(Color.black.opacity(0.55), lineWidth: 1.2)
+                        .padding(1.5)
+                }
+            )
+    }
+}
+
+/// Round metal shutter face — mirrors the in-app shutter, not a yellow pill.
+struct WidgetShootButton: View {
+    var compact: Bool = false
+
+    var body: some View {
+        VStack(spacing: compact ? 2 : 3) {
+            ZStack {
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            colors: [
+                                Color(red: 0.28, green: 0.28, blue: 0.29),
+                                Color(red: 0.14, green: 0.14, blue: 0.15),
+                                Color(red: 0.08, green: 0.08, blue: 0.09)
+                            ],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                Circle()
+                    .stroke(
+                        LinearGradient(
+                            colors: [Color.white.opacity(0.28), Color.black.opacity(0.6)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        ),
+                        lineWidth: 1.2
+                    )
+                Circle()
+                    .fill(WidgetPalette.accent)
+                    .padding(compact ? 7 : 9)
+                Circle()
+                    .stroke(Color.black.opacity(0.35), lineWidth: 0.8)
+                    .padding(compact ? 7 : 9)
+            }
+            .frame(width: compact ? 28 : 34, height: compact ? 28 : 34)
+
+            Text("SHOOT")
+                .font(.system(size: compact ? 8 : 9, weight: .bold, design: .monospaced))
+                .foregroundStyle(.white.opacity(0.7))
+        }
+    }
+}
+
+/// Two overlapping recent stills — small widget photo block, film-card corners.
 struct WidgetRecentStack: View {
     let images: [UIImage]
     var large: Bool = false
@@ -45,14 +142,14 @@ struct WidgetRecentStack: View {
                 } else {
                     if images.count >= 2 {
                         photoCard(images[1], width: cardW * 0.92, height: cardH * 0.92)
-                            .rotationEffect(.degrees(-9))
+                            .rotationEffect(.degrees(-7))
                             .offset(x: -w * 0.12, y: h * 0.04)
                             .opacity(0.88)
                     }
                     photoCard(images[0], width: cardW, height: cardH)
-                        .rotationEffect(.degrees(images.count >= 2 ? 6 : 0))
+                        .rotationEffect(.degrees(images.count >= 2 ? 5 : 0))
                         .offset(x: images.count >= 2 ? w * 0.10 : 0, y: images.count >= 2 ? -h * 0.02 : 0)
-                        .shadow(color: .black.opacity(0.45), radius: 6, y: 3)
+                        .shadow(color: .black.opacity(0.5), radius: 5, y: 2)
                 }
             }
             .frame(width: w, height: h)
@@ -61,74 +158,109 @@ struct WidgetRecentStack: View {
     }
 
     private func photoCard(_ image: UIImage, width: CGFloat, height: CGFloat) -> some View {
-        Image(uiImage: image)
+        let r: CGFloat = 5
+        return Image(uiImage: image)
             .resizable()
             .aspectRatio(contentMode: .fill)
             .frame(width: width, height: height)
-            .clipShape(RoundedRectangle(cornerRadius: large ? 8 : 6, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: r, style: .continuous))
             .overlay(
-                RoundedRectangle(cornerRadius: large ? 8 : 6, style: .continuous)
-                    .stroke(Color.white.opacity(0.18), lineWidth: 0.8)
+                RoundedRectangle(cornerRadius: r, style: .continuous)
+                    .stroke(WidgetPalette.hairline, lineWidth: 0.8)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: r, style: .continuous)
+                    .stroke(Color.black.opacity(0.45), lineWidth: 1)
+                    .padding(1)
             )
     }
 
-    /// Soft film frames when the user hasn't shot yet — still fills the blank.
+    /// Unexposed film frames when the roll is still empty.
     private func emptyPlaceholders(cardW: CGFloat, cardH: CGFloat) -> some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.white.opacity(0.06))
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(WidgetPalette.paper)
                 .frame(width: cardW * 0.9, height: cardH * 0.9)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(Color.white.opacity(0.12), lineWidth: 0.8)
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(Color.white.opacity(0.10), lineWidth: 0.7)
                 )
-                .rotationEffect(.degrees(-8))
+                .rotationEffect(.degrees(-7))
                 .offset(x: -14, y: 6)
 
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Color.white.opacity(0.09))
+            RoundedRectangle(cornerRadius: 5, style: .continuous)
+                .fill(WidgetPalette.paper.opacity(0.95))
                 .frame(width: cardW, height: cardH)
                 .overlay(
                     VStack(spacing: 4) {
                         Image(systemName: "camera.fill")
-                            .font(.system(size: large ? 18 : 14, weight: .semibold))
-                            .foregroundStyle(WidgetPalette.accent.opacity(0.7))
+                            .font(.system(size: large ? 16 : 13, weight: .semibold))
+                            .foregroundStyle(WidgetPalette.accent.opacity(0.75))
                         Text("SHOOT")
                             .font(.system(size: 8, weight: .bold, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.35))
                     }
                 )
                 .overlay(
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .stroke(WidgetPalette.accent.opacity(0.25), lineWidth: 0.8)
+                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                        .stroke(WidgetPalette.accent.opacity(0.28), lineWidth: 0.8)
                 )
-                .rotationEffect(.degrees(5))
+                .rotationEffect(.degrees(4))
                 .offset(x: 10, y: -4)
         }
     }
 }
 
-/// Darkroom contact sheet — every recent frame gets a numbered cell, empty
-/// slots read as unexposed film rather than dead space (Build 83).
+/// Darkroom contact sheet on film paper — sprocket rail + numbered cells.
+/// Empty slots read as unexposed emulsion, not dead space (Build 83/92).
 struct WidgetContactSheet: View {
     let frames: [ShutterAppGroup.WidgetRecentFrame]
     var columns: Int = 3
     var rows: Int = 2
     var spacing: CGFloat = 4
-    var corner: CGFloat = 5
+    var corner: CGFloat = 4
     var numbered: Bool = true
+    var showSprockets: Bool = true
 
     var body: some View {
-        VStack(spacing: spacing) {
-            ForEach(0..<rows, id: \.self) { row in
-                HStack(spacing: spacing) {
-                    ForEach(0..<columns, id: \.self) { column in
-                        cell(at: row * columns + column)
+        HStack(spacing: 3) {
+            if showSprockets { sprocketRail }
+            VStack(spacing: spacing) {
+                ForEach(0..<rows, id: \.self) { row in
+                    HStack(spacing: spacing) {
+                        ForEach(0..<columns, id: \.self) { column in
+                            cell(at: row * columns + column)
+                        }
                     }
                 }
             }
+            if showSprockets { sprocketRail }
         }
+        .padding(5)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(WidgetPalette.paper)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .stroke(Color.white.opacity(0.08), lineWidth: 0.7)
+        )
         .accessibilityHidden(true)
+    }
+
+    private var sprocketRail: some View {
+        VStack(spacing: 4) {
+            ForEach(0..<(rows * 3), id: \.self) { _ in
+                RoundedRectangle(cornerRadius: 0.8)
+                    .fill(Color.black.opacity(0.55))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 0.8)
+                            .stroke(Color.white.opacity(0.08), lineWidth: 0.4)
+                    )
+                    .frame(width: 5, height: 3.5)
+            }
+        }
+        .frame(maxHeight: .infinity)
     }
 
     @ViewBuilder
@@ -136,7 +268,7 @@ struct WidgetContactSheet: View {
         let shape = RoundedRectangle(cornerRadius: corner, style: .continuous)
         ZStack(alignment: .topLeading) {
             if index < frames.count {
-                Color.white.opacity(0.05)
+                WidgetPalette.well
                     .overlay(
                         Image(uiImage: frames[index].image)
                             .resizable()
@@ -146,8 +278,8 @@ struct WidgetContactSheet: View {
                     .overlay(
                         shape.stroke(
                             index == 0
-                                ? WidgetPalette.accent.opacity(0.65)
-                                : Color.white.opacity(0.14),
+                                ? WidgetPalette.accent.opacity(0.75)
+                                : Color.white.opacity(0.12),
                             lineWidth: index == 0 ? 1 : 0.6
                         )
                     )
@@ -155,18 +287,18 @@ struct WidgetContactSheet: View {
                     Circle()
                         .fill(WidgetPalette.keep)
                         .frame(width: 5, height: 5)
-                        .padding(4)
+                        .padding(3)
                 }
             } else {
                 shape
-                    .fill(Color.white.opacity(0.04))
-                    .overlay(shape.stroke(Color.white.opacity(0.07), lineWidth: 0.6))
+                    .fill(Color.black.opacity(0.35))
+                    .overlay(shape.stroke(Color.white.opacity(0.06), lineWidth: 0.6))
             }
 
             if numbered {
                 Text(String(format: "%02d", index + 1))
                     .font(.system(size: 7, weight: .bold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(index < frames.count ? 0.55 : 0.18))
+                    .foregroundStyle(WidgetPalette.accent.opacity(index < frames.count ? 0.55 : 0.18))
                     .padding(.horizontal, 3)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     .padding(3)
@@ -254,11 +386,19 @@ struct ShutterLaunchProvider: TimelineProvider {
         )
     }
     func getSnapshot(in context: Context, completion: @escaping (ShutterLaunchEntry) -> Void) {
-        completion(currentEntry())
+        let entry = currentEntry()
+        // Widget gallery has no App Group / Photos — keep the numbered placeholder
+        // so the picker never looks empty. Installed widgets always get live data.
+        if context.isPreview, entry.frames.isEmpty, !entry.stats.hasHistory {
+            completion(placeholder(in: context))
+        } else {
+            completion(entry)
+        }
     }
     func getTimeline(in context: Context, completion: @escaping (Timeline<ShutterLaunchEntry>) -> Void) {
         let entry = currentEntry()
-        completion(Timeline(entries: [entry], policy: .after(Date().addingTimeInterval(300))))
+        // Relative times ("9m AGO") go stale; refresh about once a minute.
+        completion(Timeline(entries: [entry], policy: .after(Date().addingTimeInterval(90))))
     }
     private func currentEntry() -> ShutterLaunchEntry {
         let ctx = ShutterCaptureContext.loadFromAppGroup()
@@ -270,19 +410,33 @@ struct ShutterLaunchProvider: TimelineProvider {
         let film: String
         let fx: String
         if let meta = frames.first?.meta {
-            film = meta.filmFilter == "None" ? "Clean" : meta.filmFilter
-            fx = meta.lensFX == "None" ? "None" : meta.lensFX
+            // Explicit "None" means that frame was clean; do not relabel it with
+            // whatever look happens to be selected now. Photos-fallback metas
+            // also store "None" with empty exposure — those keep the armed look.
+            if framesArePhotosFallback(frames) {
+                film = ctx.filmName
+                fx = ctx.lensFXName
+            } else {
+                film = meta.filmFilter == "None" ? "Clean" : meta.filmFilter
+                fx = meta.lensFX == "None" ? "None" : meta.lensFX
+            }
         } else {
             film = ctx.filmName
             fx = ctx.lensFXName
         }
         return ShutterLaunchEntry(
             date: Date(),
-            film: film,
+            film: film.isEmpty ? "Shutter" : film,
             fx: fx,
             frames: frames,
             stats: stats
         )
+    }
+
+    /// Photos fallback metas carry no film name — don't stamp "Clean" over the armed look.
+    private func framesArePhotosFallback(_ frames: [ShutterAppGroup.WidgetRecentFrame]) -> Bool {
+        guard let meta = frames.first?.meta else { return false }
+        return meta.shutter.isEmpty && meta.iso == 0 && meta.focalLength == 0
     }
 }
 
@@ -302,15 +456,7 @@ struct ShutterLaunchWidget: Widget {
         StaticConfiguration(kind: "ShutterLaunchWidget", provider: ShutterLaunchProvider()) { entry in
             ShutterLaunchView(entry: entry)
                 .containerBackground(for: .widget) {
-                    LinearGradient(
-                        colors: [
-                            Color.black,
-                            Color(red: 0.10, green: 0.10, blue: 0.12),
-                            Color(red: 0.06, green: 0.06, blue: 0.07)
-                        ],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
+                    WidgetPalette.vulcaniteBackground
                 }
         }
         .configurationDisplayName("Shutter Cam")
@@ -351,8 +497,8 @@ struct ShutterLaunchView: View {
                 HStack(spacing: 4) {
                     Text("SHUTTER")
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
-                        .tracking(1)
-                        .foregroundStyle(.white)
+                        .tracking(1.2)
+                        .foregroundStyle(accent.opacity(0.9))
                     Spacer(minLength: 0)
                     Text("\(stats.framesToday)")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
@@ -362,8 +508,11 @@ struct ShutterLaunchView: View {
                         .foregroundStyle(.white.opacity(0.35))
                 }
 
-                WidgetRecentStack(images: entry.recents, large: false)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                WidgetDSLRWell(corner: 6) {
+                    WidgetRecentStack(images: entry.recents, large: false)
+                        .padding(5)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 WidgetWeekBars(
                     week: stats.week,
@@ -400,8 +549,8 @@ struct ShutterLaunchView: View {
                 HStack(spacing: 4) {
                     Text("SHUTTER")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .tracking(1)
-                        .foregroundStyle(.white)
+                        .tracking(1.2)
+                        .foregroundStyle(accent.opacity(0.9))
                     Spacer(minLength: 0)
                     Text("\(stats.framesToday)/\(ShutterStats.rollLength)")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -429,17 +578,42 @@ struct ShutterLaunchView: View {
 
                 Spacer(minLength: 0)
 
+                // Compact metal shutter chip — keeps the SE medium budget (no tall stack).
                 Link(destination: ShutterDeepLink.capture.url) {
                     HStack(spacing: 6) {
-                        Image(systemName: "circle.fill")
-                            .font(.system(size: 11, weight: .semibold))
+                        ZStack {
+                            Circle()
+                                .fill(
+                                    LinearGradient(
+                                        colors: [
+                                            Color(red: 0.28, green: 0.28, blue: 0.29),
+                                            Color(red: 0.10, green: 0.10, blue: 0.11)
+                                        ],
+                                        startPoint: .topLeading,
+                                        endPoint: .bottomTrailing
+                                    )
+                                )
+                            Circle()
+                                .stroke(Color.white.opacity(0.22), lineWidth: 0.8)
+                            Circle()
+                                .fill(accent)
+                                .padding(4)
+                        }
+                        .frame(width: 18, height: 18)
                         Text("SHOOT")
                             .font(.system(size: 11, weight: .bold, design: .monospaced))
+                            .foregroundStyle(accent)
                     }
-                    .foregroundStyle(.black)
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 10)
                     .padding(.vertical, 6)
-                    .background(Capsule().fill(accent))
+                    .background(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .fill(WidgetPalette.well)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            .stroke(WidgetPalette.hairline, lineWidth: 0.8)
+                    )
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -450,7 +624,8 @@ struct ShutterLaunchView: View {
                         frames: Array(entry.frames.prefix(4)),
                         columns: 2,
                         rows: 2,
-                        numbered: false
+                        numbered: false,
+                        showSprockets: false
                     )
                     .frame(width: 122, height: 96)
 
@@ -487,39 +662,42 @@ struct ShutterLaunchView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("SHUTTER")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
-                        .tracking(1.5)
-                        .foregroundStyle(.white.opacity(0.55))
+                        .tracking(1.6)
+                        .foregroundStyle(accent.opacity(0.75))
                     Text(entry.film.uppercased())
                         .font(.system(size: 19, weight: .semibold, design: .monospaced))
                         .foregroundStyle(accent)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
-                    if let meta = entry.latestMeta {
+                    if let meta = entry.latestMeta, !meta.exposureLine.isEmpty {
                         Text(meta.exposureLine.uppercased())
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.8))
                             .lineLimit(1)
-                        Text("\(meta.relativeTime) AGO · \(meta.focalLength)mm")
+                        Text(largeMetaLine(meta))
                             .font(.system(size: 9, weight: .medium, design: .monospaced))
                             .foregroundStyle(.white.opacity(0.4))
                     } else if entry.fx != "None" {
                         Text(entry.fx.uppercased())
                             .font(.system(size: 11, weight: .medium, design: .monospaced))
                             .foregroundStyle(WidgetPalette.fx)
+                    } else if stats.hasHistory {
+                        Text("\(stats.lastCaptureRelative) AGO · \(stats.framesToday)/\(ShutterStats.rollLength) ROLL")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.45))
                     }
                 }
                 Spacer(minLength: 6)
                 Link(destination: ShutterDeepLink.capture.url) {
-                    VStack(spacing: 3) {
-                        Image(systemName: "circle.fill")
-                            .font(.system(size: 26, weight: .semibold))
-                            .foregroundStyle(accent)
-                        Text("SHOOT")
-                            .font(.system(size: 9, weight: .bold, design: .monospaced))
-                            .foregroundStyle(.white.opacity(0.7))
-                    }
-                    .padding(9)
-                    .background(Circle().fill(Color.white.opacity(0.08)))
+                    WidgetShootButton(compact: false)
+                        .padding(8)
+                        .background(
+                            Circle()
+                                .fill(WidgetPalette.well.opacity(0.95))
+                                .overlay(
+                                    Circle().stroke(WidgetPalette.hairline, lineWidth: 0.8)
+                                )
+                        )
                 }
             }
 
@@ -528,29 +706,39 @@ struct ShutterLaunchView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
-            HStack(alignment: .bottom, spacing: 10) {
-                WidgetWeekBars(week: stats.week, labels: stats.weekLabels, barHeight: 28)
-                    .frame(width: 116)
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(spacing: 8) {
-                        WidgetStatTile(
-                            value: "\(stats.framesToday)",
-                            caption: "TODAY",
-                            tint: accent
-                        )
-                        WidgetStatTile(value: "\(stats.framesWeek)", caption: "WEEK")
-                        WidgetStatTile(value: "\(stats.keepers)", caption: "KEEP")
-                        WidgetStatTile(value: "\(stats.unculled)", caption: "UNCULLED")
+            WidgetDSLRWell(corner: 8) {
+                HStack(alignment: .bottom, spacing: 10) {
+                    WidgetWeekBars(week: stats.week, labels: stats.weekLabels, barHeight: 28)
+                        .frame(width: 116)
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(spacing: 8) {
+                            WidgetStatTile(
+                                value: "\(stats.framesToday)",
+                                caption: "TODAY",
+                                tint: accent
+                            )
+                            WidgetStatTile(value: "\(stats.framesWeek)", caption: "WEEK")
+                            WidgetStatTile(value: "\(stats.keepers)", caption: "KEEP")
+                            WidgetStatTile(value: "\(stats.unculled)", caption: "UNCULLED")
+                        }
+                        Text(rollLine)
+                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.35))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.7)
                     }
-                    Text(rollLine)
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
-                        .foregroundStyle(.white.opacity(0.35))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.7)
                 }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 7)
             }
         }
         .padding(16)
+    }
+
+    private func largeMetaLine(_ meta: ShutterAppGroup.WidgetRecentMeta) -> String {
+        var parts = ["\(meta.relativeTime) AGO"]
+        if meta.focalLength > 0 { parts.append("\(meta.focalLength)mm") }
+        return parts.joined(separator: " · ")
     }
 
     private var rollLine: String {
@@ -581,10 +769,15 @@ struct ShutterLooksProvider: TimelineProvider {
         )
     }
     func getSnapshot(in context: Context, completion: @escaping (ShutterLooksEntry) -> Void) {
-        completion(current())
+        let entry = current()
+        if context.isPreview, entry.frames.isEmpty, !entry.stats.hasHistory {
+            completion(placeholder(in: context))
+        } else {
+            completion(entry)
+        }
     }
     func getTimeline(in context: Context, completion: @escaping (Timeline<ShutterLooksEntry>) -> Void) {
-        completion(Timeline(entries: [current()], policy: .after(Date().addingTimeInterval(600))))
+        completion(Timeline(entries: [current()], policy: .after(Date().addingTimeInterval(90))))
     }
     private func current() -> ShutterLooksEntry {
         let defaults = ShutterAppGroup.defaults
@@ -639,11 +832,7 @@ struct ShutterLooksWidget: Widget {
         StaticConfiguration(kind: "ShutterLooksWidget", provider: ShutterLooksProvider()) { entry in
             ShutterLooksView(entry: entry)
                 .containerBackground(for: .widget) {
-                    LinearGradient(
-                        colors: [Color.black, Color(red: 0.08, green: 0.08, blue: 0.09)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
+                    WidgetPalette.vulcaniteBackground
                 }
         }
         .configurationDisplayName("Shutter Looks")
@@ -741,7 +930,8 @@ struct ShutterLooksView: View {
                             frames: Array(entry.frames.prefix(3)),
                             columns: 3,
                             rows: 1,
-                            numbered: false
+                            numbered: false,
+                            showSprockets: false
                         )
                         .frame(width: 132, height: 34)
                         VStack(alignment: .leading, spacing: 2) {
@@ -779,12 +969,13 @@ struct ShutterLooksView: View {
     private func chipBody(_ chip: ShutterLookChip) -> some View {
         let isArmed = chip.raw == entry.armed
         return HStack(spacing: 5) {
-            Circle()
-                .fill(isArmed ? accent : Color.white.opacity(0.18))
-                .frame(width: 5, height: 5)
+            Text(isArmed ? ">" : " ")
+                .font(.system(size: 11, weight: .bold, design: .monospaced))
+                .foregroundStyle(accent)
+                .frame(width: 10)
             Text(chip.title.uppercased())
                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                .foregroundStyle(isArmed ? accent : .white)
+                .foregroundStyle(isArmed ? accent : .white.opacity(0.78))
                 .lineLimit(2)
                 .minimumScaleFactor(0.75)
             Spacer(minLength: 0)
@@ -792,11 +983,15 @@ struct ShutterLooksView: View {
         .padding(.horizontal, 8)
         .frame(maxWidth: .infinity, minHeight: family == .systemLarge ? 38 : 28)
         .background(
-            RoundedRectangle(cornerRadius: 8)
-                .fill(Color.white.opacity(isArmed ? 0.13 : 0.08))
+            ZStack {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(WidgetPalette.well.opacity(isArmed ? 0.95 : 0.75))
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Color.white.opacity(isArmed ? 0.05 : 0.02))
+            }
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .stroke(
                     isArmed ? accent.opacity(0.55) : Color.white.opacity(0.08),
                     lineWidth: isArmed ? 1 : 0.6

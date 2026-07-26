@@ -30,8 +30,13 @@ MEDIUM = (329, 155)
 LARGE = (329, 345)
 
 ACCENT = (255, 217, 89)
-KEEP = (140, 230, 153)
+# Cull amber — same as DS.accent / WidgetPalette.keep (not a foreign green).
+KEEP = ACCENT
 INK = (255, 255, 255)
+BODY_TOP = (26, 26, 26)
+BODY_BOTTOM = (10, 10, 10)
+PAPER = (26, 22, 18)
+WELL = (10, 10, 10)
 
 MONO = "/usr/share/fonts/truetype/dejavu/DejaVuSansMono"
 SANS = "/usr/share/fonts/truetype/dejavu/DejaVuSans"
@@ -110,7 +115,7 @@ def font(pt: float, mono: bool = True, bold: bool = False) -> ImageFont.FreeType
 class Face:
     """A widget face in points; every draw call scales to pixels."""
 
-    def __init__(self, size: tuple[int, int], gradient=((16, 16, 18), (7, 7, 9))):
+    def __init__(self, size: tuple[int, int], gradient=(BODY_TOP, BODY_BOTTOM)):
         self.w, self.h = size
         self.img = Image.new("RGB", (self.w * S, self.h * S), gradient[0])
         top, bottom = gradient
@@ -183,14 +188,35 @@ class Face:
         if number:
             self.text(x + w - 3, y + h - 3, number, pt=7, alpha=46, anchor="rd")
 
-    def contact_sheet(self, x, y, w, h, cols, rows, filled, numbered=True, gap=4):
-        cw = (w - gap * (cols - 1)) / cols
-        ch = (h - gap * (rows - 1)) / rows
+    def contact_sheet(self, x, y, w, h, cols, rows, filled, numbered=True, gap=4, sprockets=True):
+        # Film paper plate + optional sprocket rails — matches WidgetContactSheet.
+        # Compact medium/strip sheets skip sprockets (same as showSprockets: false).
+        self.rect(x, y, w, h, fill=PAPER + (255,), outline=(255, 255, 255, 20), radius=6)
+        pad = 5 if sprockets else 3
+        rail = 5 if sprockets else 0
+        rail_gap = 3 if sprockets else 0
+        inner_x = x + pad + rail + rail_gap
+        inner_y = y + pad
+        inner_w = w - (pad + rail + rail_gap) * 2
+        inner_h = h - pad * 2
+        if inner_w < 8 or inner_h < 8:
+            # Degenerate size — draw cells flush (shouldn't happen for SE budgets).
+            inner_x, inner_y, inner_w, inner_h = x, y, w, h
+            sprockets = False
+        if sprockets:
+            holes = max(2, rows * 3)
+            for side in (0, 1):
+                sx = x + pad if side == 0 else x + w - pad - rail
+                for i in range(holes):
+                    hy = inner_y + (inner_h - 3.5) * (i / max(1, holes - 1))
+                    self.rect(sx, hy, rail, 3.5, fill=(0, 0, 0, 160), radius=0.8)
+        cw = (inner_w - gap * (cols - 1)) / cols
+        ch = (inner_h - gap * (rows - 1)) / rows
         for r in range(rows):
             for c in range(cols):
                 i = r * cols + c
-                cx = x + c * (cw + gap)
-                cy = y + r * (ch + gap)
+                cx = inner_x + c * (cw + gap)
+                cy = inner_y + r * (ch + gap)
                 num = f"{i + 1:02d}" if numbered else None
                 if i < filled:
                     self.photo(cx, cy, cw, ch, seed=i, newest=(i == 0), keep=(i in (1, 3)), number=num)
@@ -267,18 +293,24 @@ def launch_medium(g) -> Image.Image:
     y += 15
     f.text(x, y, f"9m AGO · 33mm · {STATS['top_film']}", pt=9, alpha=120)
 
-    # SHOOT capsule pinned to the bottom of the column
+    # Metal shutter chip — matches WidgetShootButton compact (not a yellow pill).
     cap_h = 26
     cap_y = MEDIUM[1] - p - cap_h
-    f.rect(x, cap_y, 86, cap_h, fill=ACCENT, radius=cap_h / 2)
+    f.rect(x, cap_y, 86, cap_h, fill=WELL + (255,), outline=ACCENT + (80,), radius=6)
+    cx0, cy0 = x + 12, cap_y + cap_h / 2
     f.d.ellipse(
-        [(x + 12) * S, (cap_y + cap_h / 2 - 5) * S, (x + 22) * S, (cap_y + cap_h / 2 + 5) * S],
-        fill=(20, 20, 20),
+        [(cx0 - 7) * S, (cy0 - 7) * S, (cx0 + 7) * S, (cy0 + 7) * S],
+        fill=(40, 40, 42),
+        outline=(70, 70, 72),
     )
-    f.text(x + 28, cap_y + cap_h / 2, "SHOOT", pt=11, fill=(20, 20, 20), anchor="lm")
+    f.d.ellipse(
+        [(cx0 - 4) * S, (cy0 - 4) * S, (cx0 + 4) * S, (cy0 + 4) * S],
+        fill=ACCENT,
+    )
+    f.text(x + 28, cap_y + cap_h / 2, "SHOOT", pt=11, fill=ACCENT, anchor="lm")
 
     sx = MEDIUM[0] - p - sheet_w
-    f.contact_sheet(sx, p, sheet_w, sheet_h, cols=2, rows=2, filled=4, numbered=False)
+    f.contact_sheet(sx, p, sheet_w, sheet_h, cols=2, rows=2, filled=4, numbered=False, sprockets=False)
     f.text(
         sx, p + sheet_h + 5,
         f"{STATS['unculled']} UNCULLED · {STATS['keepers']} KEEP",
@@ -297,14 +329,24 @@ def launch_large(g) -> Image.Image:
     f.text(x, y + 38, EXPOSURE, pt=11, alpha=205)
     f.text(x, y + 52, "9m AGO · 33mm", pt=9, alpha=105)
 
-    # Shoot button
-    br = 30
-    bx, by = LARGE[0] - p - br, p + 4
-    f.d.ellipse([bx * S, by * S, (bx + br) * S, (by + br) * S], fill=(255, 255, 255, 20))
+    # Round metal shutter face
+    br = 34
+    bx, by = LARGE[0] - p - br - 4, p + 2
     f.d.ellipse(
-        [(bx + 6) * S, (by + 5) * S, (bx + br - 6) * S, (by + br - 11) * S], fill=ACCENT
+        [bx * S, by * S, (bx + br) * S, (by + br) * S],
+        fill=WELL,
+        outline=ACCENT + (80,),
     )
-    f.text(bx + br / 2, by + br - 9, "SHOOT", pt=8, alpha=180, anchor="ma")
+    f.d.ellipse(
+        [(bx + 4) * S, (by + 3) * S, (bx + br - 4) * S, (by + br - 10) * S],
+        fill=(45, 45, 48),
+        outline=(80, 80, 82),
+    )
+    f.d.ellipse(
+        [(bx + 10) * S, (by + 8) * S, (bx + br - 10) * S, (by + br - 15) * S],
+        fill=ACCENT,
+    )
+    f.text(bx + br / 2, by + br - 2, "SHOOT", pt=8, alpha=180, anchor="ma")
 
     header_h = 66
     footer_h = 44
@@ -335,7 +377,7 @@ def launch_large(g) -> Image.Image:
 
 def looks_face(g, large: bool) -> Image.Image:
     size = LARGE if large else MEDIUM
-    f = Face(size, gradient=((10, 10, 12), (5, 5, 6)))
+    f = Face(size, gradient=(BODY_TOP, BODY_BOTTOM))
     p = g["looks_pad"]
     gap = 10 if large else g["looks_gap"]
     x, y, w = p, p, size[0] - p * 2
@@ -353,17 +395,12 @@ def looks_face(g, large: bool) -> Image.Image:
         armed = i == 0
         f.rect(
             cx, cy, cw, chip_h,
-            fill=(255, 255, 255, 33 if armed else 20),
+            fill=WELL + (242 if armed else 190,),
             outline=(ACCENT + (140,)) if armed else (255, 255, 255, 20),
-            radius=8,
-        )
-        dot = (cx + 8) * S
-        f.d.ellipse(
-            [dot, (cy + chip_h / 2 - 2.5) * S, dot + 5 * S, (cy + chip_h / 2 + 2.5) * S],
-            fill=ACCENT if armed else (255, 255, 255, 46),
+            radius=6,
         )
         f.text(
-            cx + 17, cy + chip_h / 2, name,
+            cx + 8, cy + chip_h / 2, ("> " if armed else "  ") + name,
             pt=10, fill=ACCENT if armed else INK, anchor="lm",
         )
     y += chip_h * 2 + 8 + gap
@@ -385,7 +422,7 @@ def looks_face(g, large: bool) -> Image.Image:
             tx += (w - 124) / 3
     else:
         strip_h = g["looks_strip"]
-        f.contact_sheet(x, y + 2, 132, strip_h, cols=3, rows=1, filled=3, numbered=False)
+        f.contact_sheet(x, y + 2, 132, strip_h, cols=3, rows=1, filled=3, numbered=False, sprockets=False)
         f.text(x + 140, y + 6, f"{STATS['today']} TODAY · {STATS['week_total']} WK", pt=9, fill=ACCENT)
         f.text(x + 140, y + 18, "OPEN DARKROOM", pt=8, alpha=110)
     return f.save("looks-large.png" if large else "looks-medium.png")

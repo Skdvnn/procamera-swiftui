@@ -1092,6 +1092,16 @@ def test_widget_content() -> None:
         "app rebuilds stats with recents",
         "ShutterAppGroup.saveStats(" in content and "ShutterStats.compute(" in content,
     )
+    # Debug Cmd+R ships empty App Group entitlements — widgets must still
+    # surface the user's real frames via the Photos "Shutter" album.
+    check("photos fallback frames", "func loadPhotosFallbackFrames" in link)
+    check("photos fallback stats", "func loadPhotosFallbackStats" in link)
+    check("loadRecentFrames prefers app group", "loadAppGroupFrames" in link)
+    check("dual-write mirrors shutter album", "addAssetsToShutterAlbum" in (ROOT / "ShootCull.swift").read_text())
+    check("widget photo library usage key", "NSPhotoLibraryUsageDescription" in (ROOT / "ShutterWidgets" / "Info.plist").read_text())
+    check("vulcanite widget chrome", "vulcaniteBackground" in wsrc)
+    check("metal shoot button", "struct WidgetShootButton" in wsrc)
+    check("film sprocket contact sheet", "sprocketRail" in wsrc)
     # Without this an upgrade shows 2 frames in a 6-cell sheet and no numbers
     # until the user happens to shoot again.
     check(
