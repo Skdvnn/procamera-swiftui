@@ -795,6 +795,16 @@ def test_source_guards() -> None:
         ".supportedFamilies([.systemSmall, .systemMedium, .systemLarge])" in widgets,
     )
     check("looks large recents section", '"RECENTS"' in widgets and "darkroom.url" in widgets)
+    # Build 102 — matched outer pad + fun photo previews.
+    check("widget shared contentPad", "static let contentPad: CGFloat = 14" in widgets)
+    check(
+        "widget bodies use contentPad",
+        widgets.count("padding(WidgetPalette.contentPad)") >= 4,
+    )
+    check("widget viewfinder brackets", "struct ViewfinderBrackets" in widgets)
+    check("widget stack exposure stamp", "exposureStamp" in widgets)
+    check("widget contact scan-line", "Soft scan-line" in widgets)
+    check("widget empty emulsion ghost", "Unexposed emulsion ghost" in widgets)
 
     # Build 71 — fun scrubbers + fullscreen arch vibe
     aids = (ROOT / "ViewfinderAids.swift").read_text()
@@ -1218,7 +1228,18 @@ def test_widget_content() -> None:
     _, med_h = WIDGET_BOX["medium"]
     _, large_h = WIDGET_BOX["large"]
 
-    pad = parse_int(medium, r"\.padding\((\d+)\)", "launch medium padding", 12, last=True)
+    # Build 102 — outer pad is WidgetPalette.contentPad on every Home face.
+    content_pad = parse_int(
+        wsrc, r"static let contentPad: CGFloat = (\d+)", "shared contentPad", 14
+    )
+
+    def face_pad(chunk: str, name: str, fallback: int) -> int:
+        if "WidgetPalette.contentPad" in chunk:
+            check(f"widget parses {name}", True)
+            return content_pad
+        return parse_int(chunk, r"\.padding\((\d+)\)", name, fallback, last=True)
+
+    pad = face_pad(medium, "launch medium padding", 14)
     gap = parse_int(medium, r"VStack\(alignment: \.leading, spacing: (\d+)\)", "launch medium gap", 6)
     bars = parse_int(medium, r"barHeight: (\d+)", "launch medium bar height", 24)
     sheet = parse_int(medium, r"\.frame\(width: 122, height: (\d+)\)", "launch medium sheet", 96)
@@ -1235,7 +1256,7 @@ def test_widget_content() -> None:
     check("launch medium sheet fits", right <= budget, f"{right}pt in {budget}pt")
 
     looks = source_chunk(wsrc, "struct ShutterLooksView", "// MARK: - Lock Screen")
-    lpad = parse_int(looks, r"\.padding\((\d+)\)", "looks padding", 12, last=True)
+    lpad = face_pad(looks, "looks padding", 14)
     lgap = parse_int(looks, r"spacing: family == \.systemLarge \? \d+ : (\d+)", "looks medium gap", 6)
     chip = parse_int(looks, r"minHeight: family == \.systemLarge \? \d+ : (\d+)", "looks chip", 30)
     strip = parse_int(looks, r"\.frame\(width: 132, height: (\d+)\)", "looks strip", 34)
@@ -1261,7 +1282,7 @@ def test_widget_content() -> None:
         f"{looks_large}pt in {large_h - lpad * 2}pt",
     )
 
-    lgpad = parse_int(large, r"\.padding\((\d+)\)", "launch large padding", 16, last=True)
+    lgpad = face_pad(large, "launch large padding", 14)
     lggap = parse_int(large, r"VStack\(alignment: \.leading, spacing: (\d+)\)", "launch large gap", 9)
     lgbars = parse_int(large, r"barHeight: (\d+)", "launch large bars", 28)
     header = max(
