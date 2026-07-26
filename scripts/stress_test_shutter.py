@@ -671,7 +671,7 @@ def test_source_guards() -> None:
     check("night clears looks", "filmFilter = .none" in content[content.find("case .night:"):content.find("case .night:")+700])
     check("night no peaking", "focusPeaking = false" in content[content.find("case .night:"):content.find("case .night:")+500])
     check("night 1/15 not 1 inch", "shutterSpeedIndex = 6" in content[content.find("case .night:"):content.find("case .night:")+500])
-    check("EV drag anytime AUTO", "exposureDragEnabled: !isLocked && !camera.isManualExposure" in content)
+    check("EV drag anytime unlocked", "exposureDragEnabled: !isLocked," in content)
     check("EV drag seeds without tap", "park the sun reticle mid-finder" in content)
     check("pan waits for direction", "Wait for direction" in (ROOT / "FilteredCameraPreview.swift").read_text())
 
@@ -731,10 +731,21 @@ def test_source_guards() -> None:
     check("scrub edge kind enum", "enum ScrubEdgeKind" in content)
     check("scrubber moving tick phase", "tickPhase" in content and "Moving tick strip" in content)
     check("scrubber onActiveChanged", "onActiveChanged:" in content[content.find("struct NativeSnapScrubber"):content.find("struct ISOScrubberHorizontal")])
-    check("ISO scrub feeds arch", "setScrubEdge(.iso" in content)
-    check("shutter scrub feeds arch", "setScrubEdge(.shutter" in content)
-    check("focus scrub active wiring", "onFocusScrubActive" in content and "onFocusScrubActive" in gauge)
     check("active edge readout helper", "activeEdgeReadout" in content)
+
+    # Build 81 — viewfinder sun-drag owns the arch; scrubbers no longer peel it
+    preview_src = (ROOT / "FilteredCameraPreview.swift").read_text()
+    check("sun drag feeds arch", "setScrubEdge(.ev, active: true" in content)
+    check("manual sun drag feeds arch", "setScrubEdge(.iso, active: true" in content)
+    check(
+        "arch reserved for viewfinder",
+        "onFocusScrubActive:" not in content and "onEVScrubActive:" not in content,
+    )
+    check("sun drag not gated on manual", "exposureDragEnabled: !isLocked," in content)
+    check("manual sun drag moves gain", "dragStartISO" in content and "powf(2, stops)" in content)
+    check("half stop detents", "func halfStopDetent" in content and "exposureDetentHaptic" in content)
+    check("sun drag dead zone is a strip", "view.bounds.height - 64" in preview_src)
+    check("vertical wins over morph", "abs(translation.x) * 0.6" in preview_src)
 
     # Build 72 — DSLR settings + deck spacing
     check("dslr toggle row type", "struct DSLRToggleRow" in (ROOT / "ShutterSettings.swift").read_text())
@@ -759,7 +770,7 @@ def test_source_guards() -> None:
     preview = (ROOT / "FilteredCameraPreview.swift").read_text()
     deep = (ROOT / "ShutterDeepLink.swift").read_text()
     widgets = (ROOT / "ShutterWidgets" / "ShutterWidgetsBundle.swift").read_text()
-    check("EV pan dead zone 80%", "view.bounds.height * 0.80" in preview)
+    check("EV pan dead zone is a 64pt strip", "view.bounds.height - 64" in preview)
     check("EV cancels compare", "cancelCompareIfNeeded" in preview)
     check("long press no fight pan", "UILongPressGestureRecognizer" in preview and "return false" in preview)
     check("unsuspend resets preview clock", "lastPreviewFrameTime = 0" in cam)

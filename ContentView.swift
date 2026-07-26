@@ -312,6 +312,8 @@ struct ContentView: View {
     @State private var viewfinderSize: CGSize = .zero
     /// EV captured when the focus reticle appeared — vertical drag offsets from this.
     @State private var focusStartEV: Float = 0
+    /// ISO captured at drag start — MANUAL sun-drag moves gain, not bias.
+    @State private var dragStartISO: Int = 100
     @State private var isDraggingExposure = false
     @State private var focusHideWorkItem: DispatchWorkItem?
     @State private var lastExposureHapticStep: Int = 0
@@ -721,36 +723,8 @@ struct ContentView: View {
                                 shutterSpeedIndex = idx
                                 camera.setShutterSpeed(index: idx, iso: Float(isoValue))
                             },
-                            onFocusScrubActive: { active in
-                                // Fullscreen vibe — arch peels while FOCUS snaps.
-                                guard bottomCollapsed || effectiveTopCollapsed else { return }
-                                if active {
-                                    let label: String = {
-                                        if !isManualFocusEnabled { return "AF" }
-                                        let stops: [Float] = [0.0, 0.17, 0.33, 0.5, 0.67, 1.0]
-                                        let names = [".4m", ".7m", "1m", "3m", "5m", "∞"]
-                                        let idx = stops.enumerated().min(by: {
-                                            abs($0.element - focusPosition) < abs($1.element - focusPosition)
-                                        })?.offset ?? 3
-                                        return names[min(max(idx, 0), names.count - 1)]
-                                    }()
-                                    setScrubEdge(.focus, active: true, value: label)
-                                } else {
-                                    setScrubEdge(.focus, active: false, value: scrubEdgeValue)
-                                }
-                            },
-                            onEVScrubActive: { active in
-                                guard bottomCollapsed || effectiveTopCollapsed else { return }
-                                if active {
-                                    setScrubEdge(
-                                        .ev,
-                                        active: true,
-                                        value: String(format: "%+.1f", exposureValue)
-                                    )
-                                } else {
-                                    setScrubEdge(.ev, active: false, value: scrubEdgeValue)
-                                }
-                            },
+                            // Arch peel is reserved for the viewfinder sun-drag (Build 81) —
+                            // the scrubbers have their own inline readouts.
                             onTimerTap: {
                                 Haptics.click()
                                 if timerSeconds == 0 { timerSeconds = 3 }
@@ -1531,7 +1505,7 @@ struct ContentView: View {
         isManualFocusEnabled = false
         focusPoint = CGPoint(x: viewNorm.x * size.width, y: viewNorm.y * size.height)
         focusStartEV = exposureValue
-        lastExposureHapticStep = Int((exposureValue * 10).rounded())
+        lastExposureHapticStep = halfStopDetent(exposureValue)
         isDraggingExposure = false
         // Local reticle animation via .animation on the preview chrome — not withAnimation
         // (avoids walking the Metal shutter tree).
@@ -1548,36 +1522,65 @@ struct ContentView: View {
     }
 
     /// iOS Camera-style sun drag: finger up brightens, down darkens.
-    /// Works anytime in AUTO (not only after a focus tap).
+    /// Works anywhere on the finder, expanded or collapsed, without a prior tap.
+    /// In MANUAL the device ignores exposure bias, so the same drag moves gain
+    /// instead — the gesture must never be a silent no-op.
     private func handleExposureDrag(_ translationY: CGFloat, ended: Bool) {
-        guard !isLocked, !camera.isManualExposure else { return }
-        if !ended {
-            if !isDraggingExposure {
-                focusStartEV = exposureValue
-                lastExposureHapticStep = Int((exposureValue * 10).rounded())
-                // No prior tap — park the sun reticle mid-finder.
-                if !showFocusPoint, viewfinderSize.width > 1, viewfinderSize.height > 1 {
-                    focusPoint = CGPoint(x: viewfinderSize.width / 2, y: viewfinderSize.height / 2)
-                }
-            }
-            isDraggingExposure = true
-            showFocusPoint = true
-            // ~140pt per EV stop; clamp to device bias range
-            let delta = -Float(translationY) / 140.0
-            let newEV = max(camera.minExposure, min(camera.maxExposure, focusStartEV + delta))
-            let step = Int((newEV * 10).rounded())
-            if step != lastExposureHapticStep {
-                lastExposureHapticStep = step
-                UISelectionFeedbackGenerator().selectionChanged()
-            }
-            exposureValue = newEV
-            camera.setExposure(newEV)
-            scheduleFocusHide(after: 2.8)
-        } else {
+        guard !isLocked else { return }
+        let manual = camera.isManualExposure
+
+        if ended {
             focusStartEV = exposureValue
             isDraggingExposure = false
+            setScrubEdge(manual ? .iso : .ev, active: false, value: scrubEdgeValue)
             scheduleFocusHide(after: 2.2)
+            return
         }
+
+        if !isDraggingExposure {
+            focusStartEV = exposureValue
+            dragStartISO = isoValue
+            lastExposureHapticStep = halfStopDetent(exposureValue)
+            // No prior tap — park the sun reticle mid-finder.
+            if !showFocusPoint, viewfinderSize.width > 1, viewfinderSize.height > 1 {
+                focusPoint = CGPoint(x: viewfinderSize.width / 2, y: viewfinderSize.height / 2)
+            }
+        }
+        isDraggingExposure = true
+        showFocusPoint = true
+
+        // ~140pt per stop, up is brighter.
+        let stops = -Float(translationY) / 140.0
+
+        if manual {
+            let target = Float(dragStartISO) * powf(2, stops)
+            let capped = Int(max(camera.minISO, min(camera.maxISO, target)).rounded())
+            if capped != isoValue {
+                isoValue = capped
+                camera.setISO(Float(capped))
+            }
+            exposureDetentHaptic(stops)
+            setScrubEdge(.iso, active: true, value: "\(capped)")
+        } else {
+            let newEV = max(camera.minExposure, min(camera.maxExposure, focusStartEV + stops))
+            exposureValue = newEV
+            camera.setExposure(newEV)
+            exposureDetentHaptic(newEV)
+            setScrubEdge(.ev, active: true, value: String(format: "%+.1f", newEV))
+        }
+        scheduleFocusHide(after: 2.8)
+    }
+
+    /// Half-stop detents — the arch reads in half stops, so the finger should too.
+    private func halfStopDetent(_ stops: Float) -> Int {
+        Int((stops / 0.5).rounded())
+    }
+
+    private func exposureDetentHaptic(_ stops: Float) {
+        let detent = halfStopDetent(stops)
+        guard detent != lastExposureHapticStep else { return }
+        lastExposureHapticStep = detent
+        UISelectionFeedbackGenerator().selectionChanged()
     }
 
     private func scheduleFocusHide(after delay: TimeInterval) {
@@ -1657,9 +1660,9 @@ struct ContentView: View {
                             // Focus and zoom are independent — never write zoom into FOCUS.
                         },
                         onMorphTouch: handleMorphTouch,
-                        // iOS Camera sun-drag anytime unlocked — not gated on a prior tap.
-                        // Manual ISO/S still blocks bias (device ignores it in .custom).
-                        exposureDragEnabled: !isLocked && !camera.isManualExposure,
+                        // iOS Camera sun-drag anytime unlocked — no prior tap needed, and
+                        // MANUAL is allowed too (the handler moves gain instead of bias).
+                        exposureDragEnabled: !isLocked,
                         onExposureDrag: handleExposureDrag,
                         onCompareHold: { holding in
                             showingCleanCompare = holding
@@ -1993,6 +1996,8 @@ struct ContentView: View {
 
             // ROW 2: ISO & Shutter side by side
             HStack(spacing: 4) {
+                // No arch peel here — that treatment belongs to the viewfinder
+                // sun-drag now (Build 81); these scrubbers read their own values.
                 ISOScrubberHorizontal(
                     iso: $isoValue,
                     onChanged: { iso in
@@ -2000,10 +2005,6 @@ struct ContentView: View {
                         let capped = min(iso, max(1, Int(camera.maxISO)))
                         if capped != isoValue { isoValue = capped }
                         camera.setISO(Float(capped))
-                        setScrubEdge(.iso, active: true, value: "\(capped)")
-                    },
-                    onActiveChanged: { active in
-                        if !active { setScrubEdge(.iso, active: false, value: scrubEdgeValue) }
                     }
                 )
 
@@ -2013,11 +2014,6 @@ struct ContentView: View {
                         guard !isLocked else { return }
                         // Pass UI ISO; shutter and EV stay independent.
                         camera.setShutterSpeed(index: idx, iso: Float(isoValue))
-                        let label = shutterSpeeds[min(max(idx, 0), shutterSpeeds.count - 1)]
-                        setScrubEdge(.shutter, active: true, value: label)
-                    },
-                    onActiveChanged: { active in
-                        if !active { setScrubEdge(.shutter, active: false, value: scrubEdgeValue) }
                     }
                 )
             }

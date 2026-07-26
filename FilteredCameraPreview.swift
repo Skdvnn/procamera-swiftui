@@ -209,10 +209,11 @@ struct FilteredCameraPreview: UIViewRepresentable {
                   let view = gestureRecognizer.view else {
                 return true
             }
-            // Bottom ~20% belongs to SwiftUI chrome (histogram / shutter / swipe).
-            // Was 32% — too much dead zone for sun-drag brightness (Build 74).
+            // Fixed strip, not a percentage: 20% of a tall finder was ~140pt of
+            // dead sun-drag, and in the expanded deck the chrome isn't even there.
+            // Hit-testable chrome already swallows its own touches (Build 81).
             let y = touch.location(in: view).y
-            return y < view.bounds.height * 0.80
+            return y < view.bounds.height - 64
         }
 
         private func cancelCompareIfNeeded() {
@@ -297,12 +298,14 @@ struct FilteredCameraPreview: UIViewRepresentable {
 
             case .changed:
                 if panMode == .undecided {
-                    // Prefer vertical EV sooner (4pt) so brightness feels instant.
-                    let verticalEnough = exposureDragEnabled && abs(translation.y) > 4
-                    let horizontalEnough = abs(translation.x) > 6
+                    // Prefer vertical EV sooner (3pt) so brightness feels instant.
+                    let verticalEnough = exposureDragEnabled && abs(translation.y) > 3
+                    let horizontalEnough = abs(translation.x) > 8
                     guard verticalEnough || horizontalEnough else { break }
+                    // Anything roughly vertical is brightness; morph needs a clearly
+                    // sideways drag. 0.85 handed too many sun-drags to the FX warp.
                     if exposureDragEnabled
-                        && abs(translation.y) >= abs(translation.x) * 0.85 {
+                        && abs(translation.y) >= abs(translation.x) * 0.6 {
                         panMode = .exposure
                         cancelCompareIfNeeded()
                         onExposureDrag?(translation.y, false)

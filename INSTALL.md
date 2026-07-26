@@ -8,14 +8,14 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 80 phone test pack (yellow sweep ticks, shutter back to round):**
+**Build 81 phone test pack (viewfinder sun-drag + round shutter):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **80**.
-Level and EV ticks burn yellow from center out to your tilt / exposure offset;
-the shutter is back to its old round silhouette (idle identical to build 77,
-press drops without shrinking); gear / macro / timer span one WB-pill width.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **81**.
+Press anywhere on the finder and scrub up/down for brightness — expanded or
+collapsed, AUTO or MANUAL — and the trailing arch peels while you do it. The
+shutter keeps its old round silhouette with a no-shrink press.
 
 **Note:** Cmd+R uses empty Debug entitlements — widgets / Lock Screen capture
 need a Release or TestFlight build with App Groups enabled in the developer
