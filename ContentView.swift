@@ -673,8 +673,8 @@ struct ContentView: View {
             let effectiveBottomCollapsed = bottomCollapsed
 
             // Layout measurements — top collapse keeps FOCUS/EV strip as the hero
-            // Compact strip is 34pt — panel just clears it (Build 88).
-            let topPanelHeight: CGFloat = effectiveTopCollapsed ? (isLandscape ? 40 : 46) : 110
+            // Compact strip is 38pt — panel just clears it (Build 90; 34 was stubby).
+            let topPanelHeight: CGFloat = effectiveTopCollapsed ? (isLandscape ? 44 : 50) : 110
             let gaugeToViewfinderSpacing: CGFloat = effectiveTopCollapsed ? 3 : 4
             let viewfinderToControlsSpacing: CGFloat = max(2, CollapsedChrome.viewfinderToDeckGap - 2)
 
@@ -2835,6 +2835,10 @@ struct NativeSnapScrubber<Value: Hashable>: View {
     var tickCount: Int = 16
     /// Denser majors for ISO; slightly airier for shutter.
     var tickMajorEvery: Int = 4
+    /// Classic `#242424` deck chrome (ISO / S). Instrument is the darker
+    /// top FOCUS / EV face — keep those separate so the bottom deck doesn't
+    /// go true-black with the instrument strip (Build 90).
+    var instrumentFace: Bool = false
     var title: (Value) -> String
     var onChanged: (Value) -> Void
     /// Fires while the scrubber is actively snapping (fullscreen arch vibe).
@@ -2863,55 +2867,63 @@ struct NativeSnapScrubber<Value: Hashable>: View {
         currentIndex < values.count - 1 ? title(values[currentIndex + 1]) : ""
     }
 
+    /// Classic deck grey for ISO/S; true-black instrument for top FOCUS / EV.
+    private var faceHex: String { instrumentFace ? "0a0a0a" : "242424" }
+    private var idleStrokeHex: String { instrumentFace ? "2a2a2a" : "444444" }
+
     var body: some View {
         GeometryReader { geo in
             let itemWidth = max(36, geo.size.width / 5)
             let sideInset = max((geo.size.width - itemWidth) / 2, 0)
 
             ZStack {
-                // Instrument face — same true-black well as the level / EV meter
-                // (Build 84). #242424 used to make FOCUS/EV read as grey pills.
+                // Face chrome — classic deck grey for ISO/S; true-black instrument
+                // well only when asked (top FOCUS / EV). Build 84 made every
+                // scrubber #0a0a0a and the bottom deck went too dark.
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
                     .fill(Color.black)
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(Color(hex: "0a0a0a"))
-                    .padding(1.5)
-                // Inner lip — machined recess catching a little light at the top.
-                RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .stroke(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(isScrolling ? 0.14 : 0.08),
-                                Color.black.opacity(0.55),
-                                Color.white.opacity(0.03)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ),
-                        lineWidth: 0.8
-                    )
-                    .padding(2)
+                    .fill(Color(hex: faceHex))
+                    .padding(instrumentFace ? 1.5 : 0)
+                if instrumentFace {
+                    // Inner lip — machined recess catching a little light at the top.
+                    RoundedRectangle(cornerRadius: 4, style: .continuous)
+                        .stroke(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(isScrolling ? 0.14 : 0.08),
+                                    Color.black.opacity(0.55),
+                                    Color.white.opacity(0.03)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 0.8
+                        )
+                        .padding(2)
+                }
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .stroke(
                         isScrolling
                             ? DS.accent.opacity(0.55)
-                            : Color(hex: "2a2a2a"),
+                            : Color(hex: idleStrokeHex),
                         lineWidth: isScrolling ? 0.9 : 0.5
                     )
-                    .padding(1.5)
+                    .padding(instrumentFace ? 1.5 : 2)
                     .animation(ShutterMotion.scrub, value: isScrolling)
 
                 // Soft LCD wash while scrubbing
                 if isScrolling {
                     RoundedRectangle(cornerRadius: 4, style: .continuous)
                         .fill(DS.accent.opacity(0.07))
-                        .padding(1.5)
+                        .padding(instrumentFace ? 1.5 : 2)
                         .allowsHitTesting(false)
                         .transition(.opacity)
                 }
 
                 // Moving tick strip — film-gate feel (Build 71).
-                // Tick marks — white only; yellow is reserved for the center indicator.
+                // Yellow majors + yellow center indicator (Build 90 restores the
+                // yellow detail that went white-only after the film-gate pass).
                 Canvas { ctx, size in
                     let usableWidth = size.width - 24
                     let spacing = usableWidth / CGFloat(max(tickCount - 1, 1))
@@ -2927,10 +2939,15 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                         let isMajor = abs(i) % tickMajorEvery == 0
                         let h: CGFloat = isMajor ? (isScrolling ? 6.5 : 5) : (isScrolling ? 3.5 : 3)
                         let rect = CGRect(x: x - 0.5, y: size.height - h - 4, width: 1, height: h)
-                        let opacity: Double = isScrolling
-                            ? (isMajor ? 0.42 : 0.18)
-                            : (isMajor ? 0.25 : 0.10)
-                        ctx.fill(Path(rect), with: .color(.white.opacity(opacity)))
+                        if isMajor {
+                            ctx.fill(
+                                Path(rect),
+                                with: .color(yellow.opacity(isScrolling ? 0.75 : 0.40))
+                            )
+                        } else {
+                            let opacity: Double = isScrolling ? 0.18 : 0.10
+                            ctx.fill(Path(rect), with: .color(.white.opacity(opacity)))
+                        }
                     }
 
                     let indicatorHeight: CGFloat = isScrolling ? 15 : 10
@@ -2943,7 +2960,7 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                     )
                     ctx.fill(
                         Path(indicatorRect),
-                        with: .color(isScrolling ? yellow : Color.white.opacity(0.7))
+                        with: .color(isScrolling ? yellow : yellow.opacity(0.70))
                     )
                 }
                 .allowsHitTesting(false)
@@ -3561,46 +3578,46 @@ private struct ShutterButtonChrome: View {
 
     var body: some View {
         ZStack {
-            // Outer collar — brushed mid steel. Build 80 went too dark and the
-            // ring disappeared into the deck; keep it solid (never press-animates)
-            // but lift the angular stops so it reads as a bezel again (Build 84).
+            // Outer collar — muted dark steel. Build 84's mid-bright ring read
+            // too strong / too light on the deck; sit between that and the old
+            // near-black bezel so it still separates without glowing (Build 90).
             Circle()
                 .fill(
                     AngularGradient(
                         colors: [
-                            Color(red: 0.42, green: 0.43, blue: 0.45),
                             Color(red: 0.28, green: 0.29, blue: 0.31),
-                            Color(red: 0.48, green: 0.49, blue: 0.51),
-                            Color(red: 0.24, green: 0.25, blue: 0.27),
-                            Color(red: 0.40, green: 0.41, blue: 0.43),
+                            Color(red: 0.16, green: 0.17, blue: 0.18),
                             Color(red: 0.32, green: 0.33, blue: 0.35),
-                            Color(red: 0.42, green: 0.43, blue: 0.45)
+                            Color(red: 0.14, green: 0.15, blue: 0.16),
+                            Color(red: 0.26, green: 0.27, blue: 0.29),
+                            Color(red: 0.18, green: 0.19, blue: 0.20),
+                            Color(red: 0.28, green: 0.29, blue: 0.31)
                         ],
                         center: .center
                     )
                 )
                 .frame(width: outer, height: outer)
-                // Cool highlight on the top-left of the bezel — steel catching light.
+                // Soft highlight — enough to read the bezel, not a chrome flash.
                 .overlay {
                     Circle()
                         .stroke(
                             AngularGradient(
                                 colors: [
-                                    Color.white.opacity(0.28),
+                                    Color.white.opacity(0.14),
+                                    Color.white.opacity(0.02),
+                                    Color.black.opacity(0.45),
                                     Color.white.opacity(0.04),
-                                    Color.black.opacity(0.35),
-                                    Color.white.opacity(0.08),
-                                    Color.white.opacity(0.22)
+                                    Color.white.opacity(0.10)
                                 ],
                                 center: .center
                             ),
-                            lineWidth: 1.4
+                            lineWidth: 1.1
                         )
                 }
                 // Outer edge into the deck
                 .overlay {
                     Circle()
-                        .stroke(Color.black.opacity(0.55), lineWidth: 1.2)
+                        .stroke(Color.black.opacity(0.70), lineWidth: 1.4)
                 }
                 // Inner lip stepping down into the well
                 .overlay {
@@ -3608,13 +3625,13 @@ private struct ShutterButtonChrome: View {
                         .stroke(
                             LinearGradient(
                                 colors: [
-                                    Color.white.opacity(0.18),
-                                    Color.black.opacity(0.55)
+                                    Color.white.opacity(0.10),
+                                    Color.black.opacity(0.65)
                                 ],
                                 startPoint: .top,
                                 endPoint: .bottom
                             ),
-                            lineWidth: 1.6
+                            lineWidth: 1.5
                         )
                         .padding(compact ? 3.5 : 4.0)
                 }
@@ -3624,7 +3641,7 @@ private struct ShutterButtonChrome: View {
                     radius: 5,
                     y: 0
                 )
-                .shadow(color: Color.black.opacity(0.55), radius: 6, y: 3)
+                .shadow(color: Color.black.opacity(0.62), radius: 6, y: 3)
 
             // Deep well — stays darker than the collar so the ring reads.
             Circle()
