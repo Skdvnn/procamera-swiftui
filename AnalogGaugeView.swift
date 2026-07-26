@@ -604,6 +604,8 @@ struct AnalogDisplayPanel: View {
     let onFocusChanged: (Float) -> Void
     let onExposureChanged: (Float) -> Void
     let onShutterSpeedChanged: (Int) -> Void  // Changed from onApertureChanged
+    var onFocusScrubActive: ((Bool) -> Void)? = nil
+    var onEVScrubActive: ((Bool) -> Void)? = nil
     var onTimerTap: () -> Void = {}
     var onMacroTap: () -> Void = {}
 
@@ -618,13 +620,15 @@ struct AnalogDisplayPanel: View {
                     CompactFocusScrubber(
                         focusPosition: $focusPosition,
                         isAutoFocus: isAutoFocus,
-                        onChanged: onFocusChanged
+                        onChanged: onFocusChanged,
+                        onActiveChanged: onFocusScrubActive
                     )
                     .frame(maxWidth: .infinity)
 
                     CompactEVScrubber(
                         exposureValue: $exposureValue,
-                        onChanged: onExposureChanged
+                        onChanged: onExposureChanged,
+                        onActiveChanged: onEVScrubActive
                     )
                     .frame(maxWidth: .infinity)
                 }
@@ -684,6 +688,7 @@ struct CompactFocusScrubber: View {
     @Binding var focusPosition: Float
     let isAutoFocus: Bool
     let onChanged: (Float) -> Void
+    var onActiveChanged: ((Bool) -> Void)? = nil
 
     /// Discrete focus stops matching the FocusDial major marks (shared table).
     private let stops: [Int] = Array(0...5)
@@ -709,6 +714,7 @@ struct CompactFocusScrubber: View {
             selection: $index,
             sideLabelWidth: 28,
             tickCount: 14,
+            tickMajorEvery: 2,
             title: { idx in
                 let safe = min(max(idx, 0), stopLabels.count - 1)
                 if isAutoFocus && safe == index { return "AF" }
@@ -722,7 +728,8 @@ struct CompactFocusScrubber: View {
                     focusPosition = value
                 }
                 onChanged(value)
-            }
+            },
+            onActiveChanged: onActiveChanged
         )
         .onAppear { index = nearestIndex(to: focusPosition) }
         .onChange(of: focusPosition) { _, newValue in
@@ -743,6 +750,7 @@ struct CompactFocusScrubber: View {
 struct CompactEVScrubber: View {
     @Binding var exposureValue: Float
     let onChanged: (Float) -> Void
+    var onActiveChanged: ((Bool) -> Void)? = nil
 
     private let stops: [Int] = Array(0...8)
     private let stopValues: [Float] = [-2, -1.5, -1, -0.5, 0, 0.5, 1, 1.5, 2]
@@ -764,6 +772,7 @@ struct CompactEVScrubber: View {
             selection: $index,
             sideLabelWidth: 28,
             tickCount: 14,
+            tickMajorEvery: 2,
             title: { idx in
                 let v = stopValues[min(max(idx, 0), stopValues.count - 1)]
                 return String(format: "%+.1f", v)
@@ -776,7 +785,8 @@ struct CompactEVScrubber: View {
                     exposureValue = value
                 }
                 onChanged(value)
-            }
+            },
+            onActiveChanged: onActiveChanged
         )
         .onAppear { index = nearestIndex(to: exposureValue) }
         .onChange(of: exposureValue) { _, newValue in

@@ -11,6 +11,29 @@ struct Haptics {
     static func click() { UIImpactFeedbackGenerator(style: .rigid).impactOccurred() }
 }
 
+/// Trailing-edge scrub peel identity (Build 71 fullscreen arch vibe).
+enum ScrubEdgeKind: Equatable {
+    case focus, ev, iso, shutter
+
+    var title: String {
+        switch self {
+        case .focus: return "FOCUS"
+        case .ev: return "EV"
+        case .iso: return "ISO"
+        case .shutter: return "S"
+        }
+    }
+
+    var subtitle: String {
+        switch self {
+        case .focus: return "DIST"
+        case .ev: return "STOP"
+        case .iso: return "GAIN"
+        case .shutter: return "TIME"
+        }
+    }
+}
+
 // MARK: - Finder motion
 /// Timing curves for camera chrome. Prefer these over bouncy springs so motion
 /// stays mechanical and never walks animated Metal shutter params.
@@ -318,6 +341,10 @@ struct ContentView: View {
     @State private var bottomCollapsed = true
     /// Live vertical drag on the bottom deck (positive = pulling down / collapsing).
     @State private var bottomDeckDrag: CGFloat = 0
+    /// Fullscreen scrub arch — FOCUS/EV (and expanded ISO/S) peel the trailing edge.
+    @State private var scrubEdgeKind: ScrubEdgeKind? = nil
+    @State private var scrubEdgeProgress: CGFloat = 0
+    @State private var scrubEdgeValue: String = ""
     @StateObject private var gallery = GalleryStore()
     @StateObject private var volumeShutter = VolumeShutterObserver()
     @State private var showPhotoBook = false
@@ -335,6 +362,55 @@ struct ContentView: View {
     private let shutterSpeeds = ["4\"", "2\"", "1\"", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60", "1/125", "1/250", "1/500", "1/1000", "1/2000", "1/4000"]
     private let isoValues = [100, 200, 400, 800, 1600, 3200]
     private let focalLengths = [13, 24, 48, 120]
+
+    /// Trailing-edge peel content while collapsing or scrubbing.
+    private struct EdgeReadout: Equatable {
+        var title: String
+        var value: String
+        var subtitle: String
+        var progress: CGFloat
+        var serif: Bool
+    }
+
+    private var activeEdgeReadout: EdgeReadout? {
+        // Collapse drag still owns the ƒ peel when expanded.
+        if !bottomCollapsed && bottomDeckDrag > 4 && apertureValue > 0.5 {
+            return EdgeReadout(
+                title: "ƒ",
+                value: String(format: "%.1f", apertureValue),
+                subtitle: "EQ",
+                progress: min(max(bottomDeckDrag / 120.0, 0), 1),
+                serif: true
+            )
+        }
+        // Fullscreen (or any) active scrub — arch becomes the scrub vibe.
+        if let kind = scrubEdgeKind, scrubEdgeProgress > 0.05 {
+            return EdgeReadout(
+                title: kind.title,
+                value: scrubEdgeValue,
+                subtitle: kind.subtitle,
+                progress: scrubEdgeProgress,
+                serif: false
+            )
+        }
+        return nil
+    }
+
+    private func setScrubEdge(_ kind: ScrubEdgeKind?, active: Bool, value: String) {
+        if active {
+            let first = scrubEdgeKind != kind || scrubEdgeProgress < 0.4
+            scrubEdgeKind = kind
+            scrubEdgeValue = value
+            if first {
+                withAnimation(ShutterMotion.deck) { scrubEdgeProgress = 0.92 }
+            }
+        } else if scrubEdgeKind == kind {
+            withAnimation(ShutterMotion.scrub) { scrubEdgeProgress = 0 }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+                if scrubEdgeProgress < 0.08 { scrubEdgeKind = nil }
+            }
+        }
+    }
 
     /// Shared collapsed chrome metrics — histogram floats above fade/deck.
     private enum CollapsedChrome {
@@ -648,6 +724,36 @@ struct ContentView: View {
                                 // Pass UI ISO so we don't lock shutter with CameraManager's stale 100.
                                 shutterSpeedIndex = idx
                                 camera.setShutterSpeed(index: idx, iso: Float(isoValue))
+                            },
+                            onFocusScrubActive: { active in
+                                // Fullscreen vibe — arch peels while FOCUS snaps.
+                                guard bottomCollapsed || effectiveTopCollapsed else { return }
+                                if active {
+                                    let label: String = {
+                                        if !isManualFocusEnabled { return "AF" }
+                                        let stops: [Float] = [0.0, 0.17, 0.33, 0.5, 0.67, 1.0]
+                                        let names = [".4m", ".7m", "1m", "3m", "5m", "∞"]
+                                        let idx = stops.enumerated().min(by: {
+                                            abs($0.element - focusPosition) < abs($1.element - focusPosition)
+                                        })?.offset ?? 3
+                                        return names[min(max(idx, 0), names.count - 1)]
+                                    }()
+                                    setScrubEdge(.focus, active: true, value: label)
+                                } else {
+                                    setScrubEdge(.focus, active: false, value: scrubEdgeValue)
+                                }
+                            },
+                            onEVScrubActive: { active in
+                                guard bottomCollapsed || effectiveTopCollapsed else { return }
+                                if active {
+                                    setScrubEdge(
+                                        .ev,
+                                        active: true,
+                                        value: String(format: "%+.1f", exposureValue)
+                                    )
+                                } else {
+                                    setScrubEdge(.ev, active: false, value: scrubEdgeValue)
+                                }
                             },
                             onTimerTap: {
                                 Haptics.click()
@@ -1593,17 +1699,22 @@ struct ContentView: View {
                 }
                 .animation(ShutterMotion.press, value: showingCleanCompare)
 
-                // Curved ƒ readout peels from the trailing edge while scrubbing down.
-                if !bottomCollapsed && bottomDeckDrag > 4 && apertureValue > 0.5 {
-                    CurvedFStopEdgeReadout(
-                        aperture: apertureValue,
-                        progress: min(max(bottomDeckDrag / 120.0, 0), 1)
+                // Trailing-edge peel: collapse ƒ theater, or active scrub vibe (Build 71).
+                if let edge = activeEdgeReadout {
+                    CurvedParamEdgeReadout(
+                        title: edge.title,
+                        value: edge.value,
+                        subtitle: edge.subtitle,
+                        progress: edge.progress,
+                        serifValue: edge.serif
                     )
                     .padding(.vertical, 36)
                     .padding(.trailing, 2)
                     .allowsHitTesting(false)
                     .zIndex(6)
                     .transition(.opacity)
+                    .animation(ShutterMotion.scrub, value: edge.value)
+                    .animation(ShutterMotion.deck, value: edge.progress)
                 }
 
                 // Histogram inside frame only when expanded — sits above the deck
@@ -1858,6 +1969,10 @@ struct ContentView: View {
                         let capped = min(iso, max(1, Int(camera.maxISO)))
                         if capped != isoValue { isoValue = capped }
                         camera.setISO(Float(capped))
+                        setScrubEdge(.iso, active: true, value: "\(capped)")
+                    },
+                    onActiveChanged: { active in
+                        if !active { setScrubEdge(.iso, active: false, value: scrubEdgeValue) }
                     }
                 )
 
@@ -1867,6 +1982,11 @@ struct ContentView: View {
                         guard !isLocked else { return }
                         // Pass UI ISO; shutter and EV stay independent.
                         camera.setShutterSpeed(index: idx, iso: Float(isoValue))
+                        let label = shutterSpeeds[min(max(idx, 0), shutterSpeeds.count - 1)]
+                        setScrubEdge(.shutter, active: true, value: label)
+                    },
+                    onActiveChanged: { active in
+                        if !active { setScrubEdge(.shutter, active: false, value: scrubEdgeValue) }
                     }
                 )
             }
@@ -2648,7 +2768,7 @@ struct TickerValue: View {
 }
 
 // MARK: - Native snap scrubber
-/// Classic DSLR chrome (prev | label+value | next + ticks) with UIScrollView snap under the hood.
+/// Classic DSLR chrome (prev | label+value | next + moving ticks) with UIScrollView snap.
 struct NativeSnapScrubber<Value: Hashable>: View {
     let label: String
     let values: [Value]
@@ -2656,8 +2776,12 @@ struct NativeSnapScrubber<Value: Hashable>: View {
     var suffix: String? = nil
     var sideLabelWidth: CGFloat = 32
     var tickCount: Int = 16
+    /// Denser majors for ISO; slightly airier for shutter.
+    var tickMajorEvery: Int = 4
     var title: (Value) -> String
     var onChanged: (Value) -> Void
+    /// Fires while the scrubber is actively snapping (fullscreen arch vibe).
+    var onActiveChanged: ((Bool) -> Void)? = nil
 
     @State private var scrollID: Value?
     @State private var isScrolling = false
@@ -2667,6 +2791,8 @@ struct NativeSnapScrubber<Value: Hashable>: View {
     @State private var applyingExternal = false
     /// Cancels stacked isScrolling=false asyncAfters during rapid snaps.
     @State private var scrollGeneration = 0
+    /// Film-gate tick phase — advances with each snap for mechanical travel.
+    @State private var tickPhase: CGFloat = 0
 
     private var currentIndex: Int {
         values.firstIndex(of: selection) ?? 0
@@ -2693,30 +2819,49 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                     .fill(Color(hex: "242424"))
                     .padding(2)
                 RoundedRectangle(cornerRadius: 4)
-                    .stroke(Color(hex: "444444"), lineWidth: 0.5)
+                    .stroke(
+                        isScrolling
+                            ? DS.accent.opacity(0.55)
+                            : Color(hex: "444444"),
+                        lineWidth: isScrolling ? 0.9 : 0.5
+                    )
                     .padding(2)
+                    .animation(ShutterMotion.scrub, value: isScrolling)
 
-                // Tick marks — white only; yellow is reserved for the center indicator
+                // Soft LCD wash while scrubbing
+                if isScrolling {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(DS.accent.opacity(0.07))
+                        .padding(2)
+                        .allowsHitTesting(false)
+                        .transition(.opacity)
+                }
+
+                // Moving tick strip — film-gate feel (Build 71).
+                // Tick marks — white only; yellow is reserved for the center indicator.
                 Canvas { ctx, size in
                     let usableWidth = size.width - 24
                     let spacing = usableWidth / CGFloat(max(tickCount - 1, 1))
                     let centerX = size.width / 2
                     let yellow = Color(red: 1.0, green: 0.85, blue: 0.35)
+                    let phase = tickPhase.truncatingRemainder(dividingBy: spacing)
 
-                    for i in 0..<tickCount {
-                        let x = 12 + CGFloat(i) * spacing
-                        guard x >= 6 && x <= size.width - 6 else { continue }
-                        let isMajor = i % 4 == 0
-                        let h: CGFloat = isMajor ? 5 : 3
+                    // Extra ticks off-screen so scrolling doesn't leave gaps.
+                    let extra = 3
+                    for i in -extra..<(tickCount + extra) {
+                        let x = 12 + CGFloat(i) * spacing - phase
+                        guard x >= 4 && x <= size.width - 4 else { continue }
+                        let isMajor = abs(i) % tickMajorEvery == 0
+                        let h: CGFloat = isMajor ? (isScrolling ? 6.5 : 5) : (isScrolling ? 3.5 : 3)
                         let rect = CGRect(x: x - 0.5, y: size.height - h - 4, width: 1, height: h)
-                        ctx.fill(
-                            Path(rect),
-                            with: .color(.white.opacity(isMajor ? 0.25 : 0.1))
-                        )
+                        let opacity: Double = isScrolling
+                            ? (isMajor ? 0.42 : 0.18)
+                            : (isMajor ? 0.25 : 0.10)
+                        ctx.fill(Path(rect), with: .color(.white.opacity(opacity)))
                     }
 
-                    let indicatorHeight: CGFloat = isScrolling ? 14 : 10
-                    let indicatorWidth: CGFloat = isScrolling ? 2.5 : 2
+                    let indicatorHeight: CGFloat = isScrolling ? 15 : 10
+                    let indicatorWidth: CGFloat = isScrolling ? 2.6 : 2
                     let indicatorRect = CGRect(
                         x: centerX - indicatorWidth / 2,
                         y: size.height - indicatorHeight - 2,
@@ -2729,6 +2874,7 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                     )
                 }
                 .allowsHitTesting(false)
+                .animation(ShutterMotion.scrub, value: tickPhase)
 
                 // Classic readout: prev | label + value (+suffix) | next
                 HStack(spacing: 0) {
@@ -2738,7 +2884,8 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                         .frame(width: sideLabelWidth, alignment: .center)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
-                        .opacity(isScrolling ? 0.7 : 0.4)
+                        .opacity(isScrolling ? 0.85 : 0.4)
+                        .offset(x: isScrolling ? -2 : 0)
 
                     Spacer(minLength: 0)
 
@@ -2772,7 +2919,8 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                         .frame(width: sideLabelWidth, alignment: .center)
                         .lineLimit(1)
                         .minimumScaleFactor(0.7)
-                        .opacity(isScrolling ? 0.7 : 0.4)
+                        .opacity(isScrolling ? 0.85 : 0.4)
+                        .offset(x: isScrolling ? 2 : 0)
                 }
                 .padding(.horizontal, 6)
                 .padding(.bottom, 8)
@@ -2799,6 +2947,7 @@ struct NativeSnapScrubber<Value: Hashable>: View {
         .onAppear {
             applyingExternal = true
             scrollID = selection
+            tickPhase = CGFloat(currentIndex) * 6
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
                 applyingExternal = false
                 scrubberReady = true
@@ -2809,6 +2958,9 @@ struct NativeSnapScrubber<Value: Hashable>: View {
             guard scrubberReady, scrollID != newValue else { return }
             applyingExternal = true
             scrollID = newValue
+            if let idx = values.firstIndex(of: newValue) {
+                tickPhase = CGFloat(idx) * 6
+            }
             DispatchQueue.main.async {
                 applyingExternal = false
             }
@@ -2821,9 +2973,17 @@ struct NativeSnapScrubber<Value: Hashable>: View {
             isScrolling = true
             selection = newValue
             onChanged(newValue)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            // After onChanged so parent state (focus/EV/ISO) is current for the arch.
+            onActiveChanged?(true)
+            if let idx = values.firstIndex(of: newValue) {
+                withAnimation(ShutterMotion.scrub) {
+                    tickPhase = CGFloat(idx) * 6
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.38) {
                 if gen == scrollGeneration {
                     isScrolling = false
+                    onActiveChanged?(false)
                 }
             }
         }
@@ -2857,6 +3017,7 @@ struct NativeSnapScrubber<Value: Hashable>: View {
 struct ISOScrubberHorizontal: View {
     @Binding var iso: Int
     let onChanged: (Int) -> Void
+    var onActiveChanged: ((Bool) -> Void)? = nil
 
     private let isoValues = [100, 200, 400, 800, 1600, 3200, 6400]
     @State private var selection: Int = 800
@@ -2867,12 +3028,14 @@ struct ISOScrubberHorizontal: View {
             values: isoValues,
             selection: $selection,
             sideLabelWidth: 32,
-            tickCount: 16,
+            tickCount: 18,
+            tickMajorEvery: 3,
             title: { "\($0)" },
             onChanged: { value in
                 if iso != value { iso = value }
                 onChanged(value)
-            }
+            },
+            onActiveChanged: onActiveChanged
         )
         .onAppear { selection = nearest(iso, in: isoValues) }
         .onChange(of: iso) { _, newValue in
@@ -4605,6 +4768,7 @@ struct ISOScrubberVertical: View {
 struct ShutterScrubber: View {
     @Binding var shutterSpeed: Int
     let onChanged: (Int) -> Void
+    var onActiveChanged: ((Bool) -> Void)? = nil
 
     private let speeds = ["4\"", "2\"", "1\"", "1/2", "1/4", "1/8", "1/15", "1/30", "1/60", "1/125", "1/250", "1/500", "1/1000", "1/2000", "1/4000"]
     private var indices: [Int] { Array(speeds.indices) }
@@ -4616,12 +4780,14 @@ struct ShutterScrubber: View {
             values: indices,
             selection: $selection,
             sideLabelWidth: 36,
-            tickCount: 16,
+            tickCount: 20,
+            tickMajorEvery: 4,
             title: { speeds[$0] },
             onChanged: { idx in
                 if shutterSpeed != idx { shutterSpeed = idx }
                 onChanged(idx)
-            }
+            },
+            onActiveChanged: onActiveChanged
         )
         .onAppear { selection = min(max(shutterSpeed, 0), speeds.count - 1) }
         .onChange(of: shutterSpeed) { _, newValue in

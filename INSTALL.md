@@ -8,12 +8,12 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 70 phone test pack (widget overlapping recents):**
+**Build 71 phone test pack (fun scrubbers + fullscreen arch vibe):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **70**.
-Home widgets show 2 overlapping recent frames (esp. large). Needs Release/TestFlight App Group for live photos.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **71**.
+Expanded: ISO/S scrubbers have moving ticks + yellow wash. Fullscreen: scrub FOCUS/EV (or ISO/S when expanded) peels the side arch.
 
 **Note:** Cmd+R uses empty Debug entitlements — widgets / Lock Screen capture
 need a Release or TestFlight build with App Groups enabled in the developer

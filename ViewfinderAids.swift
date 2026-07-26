@@ -218,21 +218,26 @@ final class HorizonMotion: ObservableObject {
     }
 }
 
-// MARK: - Curved f-stop edge readout (collapse scrub)
+// MARK: - Curved edge readout (collapse + fullscreen scrub vibe)
 
-/// Animated aperture curve that peels in from the trailing edge while scrubbing
-/// the bottom deck down into fullscreen. Hardware ƒ only — not a fake stop control.
-struct CurvedFStopEdgeReadout: View {
-    let aperture: Float
-    /// 0…1 scrub progress (deck drag / collapse distance).
+/// Trailing-edge peel used for collapse ƒ theater and fullscreen FOCUS/EV scrub.
+struct CurvedParamEdgeReadout: View {
+    let title: String
+    let value: String
+    var subtitle: String = ""
+    /// 0…1 peel intensity.
     let progress: CGFloat
+    /// Serif value (ƒ) vs mono LCD (ISO / S / EV / FOCUS).
+    var serifValue: Bool = false
+
+    private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
 
     var body: some View {
         GeometryReader { geo in
             let h = geo.size.height
             let w = geo.size.width
             let inset = 10 + (1 - progress) * 28
-            let curve = FStopEdgeCurve(progress: progress)
+            let curve = EdgeParamCurve(progress: progress)
 
             ZStack(alignment: .trailing) {
                 curve
@@ -240,7 +245,7 @@ struct CurvedFStopEdgeReadout: View {
                         LinearGradient(
                             colors: [
                                 Color.white.opacity(0.05 + 0.35 * progress),
-                                Color(red: 1.0, green: 0.85, blue: 0.35).opacity(0.15 + 0.55 * progress),
+                                accent.opacity(0.18 + 0.55 * progress),
                                 Color.white.opacity(0.08 + 0.25 * progress)
                             ],
                             startPoint: .top,
@@ -253,17 +258,33 @@ struct CurvedFStopEdgeReadout: View {
                     .opacity(Double(min(1, progress * 1.4)))
 
                 VStack(spacing: 4) {
-                    Text("ƒ")
-                        .font(.system(size: 11, weight: .semibold, design: .serif))
+                    Text(title)
+                        .font(.system(
+                            size: serifValue ? 11 : 10,
+                            weight: .semibold,
+                            design: serifValue ? .serif : .monospaced
+                        ))
                         .foregroundStyle(Color.white.opacity(0.55 + 0.35 * progress))
-                    Text(String(format: "%.1f", aperture))
-                        .font(.system(size: 22, weight: .medium, design: .serif))
-                        .foregroundStyle(Color.white.opacity(0.75 + 0.25 * progress))
+                    Text(value)
+                        .font(.system(
+                            size: serifValue ? 22 : 20,
+                            weight: serifValue ? .medium : .semibold,
+                            design: serifValue ? .serif : .monospaced
+                        ))
+                        .foregroundStyle(
+                            progress > 0.55
+                                ? accent.opacity(0.75 + 0.25 * progress)
+                                : Color.white.opacity(0.75 + 0.25 * progress)
+                        )
                         .monospacedDigit()
-                    Text("EQ")
-                        .font(.system(size: 8, weight: .bold, design: .monospaced))
-                        .tracking(1.2)
-                        .foregroundStyle(Color.white.opacity(0.35 + 0.25 * progress))
+                        .contentTransition(.numericText())
+                        .animation(ShutterMotion.scrub, value: value)
+                    if !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(.system(size: 8, weight: .bold, design: .monospaced))
+                            .tracking(1.2)
+                            .foregroundStyle(Color.white.opacity(0.35 + 0.25 * progress))
+                    }
                 }
                 .padding(.trailing, inset + 18)
                 .offset(y: (0.5 - progress) * 18)
@@ -271,10 +292,27 @@ struct CurvedFStopEdgeReadout: View {
             }
             .frame(width: w, height: h, alignment: .trailing)
         }
+        .allowsHitTesting(false)
     }
 }
 
-private struct FStopEdgeCurve: Shape {
+/// Collapse gesture — hardware ƒ only (not a fake stop control).
+struct CurvedFStopEdgeReadout: View {
+    let aperture: Float
+    let progress: CGFloat
+
+    var body: some View {
+        CurvedParamEdgeReadout(
+            title: "ƒ",
+            value: String(format: "%.1f", aperture),
+            subtitle: "EQ",
+            progress: progress,
+            serifValue: true
+        )
+    }
+}
+
+struct EdgeParamCurve: Shape {
     var progress: CGFloat
 
     var animatableData: CGFloat {

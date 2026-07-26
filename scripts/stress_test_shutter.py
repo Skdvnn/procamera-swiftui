@@ -713,6 +713,19 @@ def test_source_guards() -> None:
     )
     check("looks large recents section", '"RECENTS"' in widgets and "darkroom.url" in widgets)
 
+    # Build 71 — fun scrubbers + fullscreen arch vibe
+    aids = (ROOT / "ViewfinderAids.swift").read_text()
+    gauge = (ROOT / "AnalogGaugeView.swift").read_text()
+    check("curved param edge readout", "struct CurvedParamEdgeReadout" in aids)
+    check("edge param curve shape", "struct EdgeParamCurve" in aids)
+    check("scrub edge kind enum", "enum ScrubEdgeKind" in content)
+    check("scrubber moving tick phase", "tickPhase" in content and "Moving tick strip" in content)
+    check("scrubber onActiveChanged", "onActiveChanged:" in content[content.find("struct NativeSnapScrubber"):content.find("struct ISOScrubberHorizontal")])
+    check("ISO scrub feeds arch", "setScrubEdge(.iso" in content)
+    check("shutter scrub feeds arch", "setScrubEdge(.shutter" in content)
+    check("focus scrub active wiring", "onFocusScrubActive" in content and "onFocusScrubActive" in gauge)
+    check("active edge readout helper", "activeEdgeReadout" in content)
+
 
 
 # ── Landscape layout invariants ─────────────────────────────────────────────
@@ -791,11 +804,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 70", m is not None and int(ver) >= 70, ver)
+    check("Info.plist build >= 71", m is not None and int(ver) >= 71, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 70+", any(v >= 70 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 71+", any(v >= 71 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)
