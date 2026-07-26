@@ -788,11 +788,14 @@ def test_source_guards() -> None:
     gauge = (ROOT / "AnalogGaugeView.swift").read_text()
     check("curved param edge readout", "struct CurvedParamEdgeReadout" in aids)
     check("edge param curve shape", "struct EdgeParamCurve" in aids)
-    # Numbers clear the bulge; arc carries ticks / dual stroke / end caps (Build 84/85).
+    # Numbers clear the bulge; single accent rail + traveling needle (Build 94).
     check("arch detail canvas", "struct EdgeParamArcDetail" in aids)
     check("arch shared geometry", "struct EdgeParamArcGeometry" in aids)
-    check("arch half-stop ticks", "Half-stop ticks" in aids and "tickCount = 9" in aids)
+    check("arch half-stop ticks", "Half-stop ticks" in aids and "tickCount = 17" in aids)
     check("arch end caps", "End caps" in aids)
+    check("arch single rail", "One accent rail" in aids)
+    check("arch no double line", "Outer hairline" not in aids and "Inner bright filament" not in aids)
+    check("arch traveling needle", "Traveling needle pip" in aids and "needle:" in aids)
     check("arch numbers clear the curve", "valueClearance" in aids and "arcColumn" in aids)
     check(
         "arch value sits left of column",
@@ -802,14 +805,15 @@ def test_source_guards() -> None:
     check("scrubber moving tick phase", "tickPhase" in content and "Moving tick strip" in content)
     check("scrubber onActiveChanged", "onActiveChanged:" in content[content.find("struct NativeSnapScrubber"):content.find("struct ISOScrubberHorizontal")])
     check("active edge readout helper", "activeEdgeReadout" in content)
+    check("scrub needle mapper", "func scrubNeedle(for" in content)
 
-    # Build 81 — viewfinder sun-drag owns the arch; scrubbers no longer peel it
+    # Build 94 — sun-drag + top FOCUS/EV scrubs both peel the interactive dial
     preview_src = (ROOT / "FilteredCameraPreview.swift").read_text()
     check("sun drag feeds arch", "setScrubEdge(.ev, active: true" in content)
     check("manual sun drag feeds arch", "setScrubEdge(.iso, active: true" in content)
     check(
-        "arch reserved for viewfinder",
-        "onFocusScrubActive:" not in content and "onEVScrubActive:" not in content,
+        "top scrubbers feed arch",
+        "onFocusScrubActive:" in content and "onEVScrubActive:" in content,
     )
     check("sun drag not gated on manual", "exposureDragEnabled: !isLocked," in content)
     check("manual sun drag moves gain", "dragStartISO" in content and "powf(2, stops)" in content)
@@ -1015,10 +1019,18 @@ def test_project_sanity() -> None:
     plist = (ROOT / "Info.plist").read_text()
     pbx = (ROOT / "ProCamera.xcodeproj/project.pbxproj").read_text()
     wf = (ROOT / ".github/workflows/build-ipa.yml").read_text()
+    app_entry = (ROOT / "ProCameraApp.swift").read_text()
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
     check("Info.plist build >= 77", m is not None and int(ver) >= 77, ver)
+    check(
+        "launch screen colorset exists",
+        (ROOT / "Assets.xcassets/LaunchScreenBackground.colorset/Contents.json").is_file(),
+    )
+    check("forced dark UI style", "UIUserInterfaceStyle" in plist and "Dark" in plist)
+    check("window vulcanite boot", "0x13 / 255" in app_entry and "host.view.backgroundColor" in app_entry)
+    check("content dark scheme", "preferredColorScheme(.dark)" in (ROOT / "ContentView.swift").read_text())
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]

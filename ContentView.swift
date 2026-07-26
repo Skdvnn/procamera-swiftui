@@ -372,6 +372,8 @@ struct ContentView: View {
         var subtitle: String
         var progress: CGFloat
         var serif: Bool
+        /// 0…1 position of the dial needle along the arch (top → bottom).
+        var needle: CGFloat
     }
 
     private var activeEdgeReadout: EdgeReadout? {
@@ -382,7 +384,8 @@ struct ContentView: View {
                 value: String(format: "%.1f", apertureValue),
                 subtitle: "EQ",
                 progress: min(max(bottomDeckDrag / 120.0, 0), 1),
-                serif: true
+                serif: true,
+                needle: 0.5
             )
         }
         // Fullscreen (or any) active scrub — arch becomes the scrub vibe.
@@ -392,10 +395,49 @@ struct ContentView: View {
                 value: scrubEdgeValue,
                 subtitle: kind.subtitle,
                 progress: scrubEdgeProgress,
-                serif: false
+                serif: false,
+                needle: scrubNeedle(for: kind)
             )
         }
         return nil
+    }
+
+    /// Map live control value onto the arch dial (0 at top, 1 at bottom).
+    private func scrubNeedle(for kind: ScrubEdgeKind) -> CGFloat {
+        switch kind {
+        case .ev:
+            let lo = camera.minExposure
+            let hi = camera.maxExposure
+            let span = max(0.001, hi - lo)
+            return CGFloat(min(1, max(0, (exposureValue - lo) / span)))
+        case .iso:
+            let lo = log2(max(1, camera.minISO))
+            let hi = log2(max(lo + 0.001, camera.maxISO))
+            let v = log2(Float(max(1, isoValue)))
+            return CGFloat(min(1, max(0, (v - lo) / (hi - lo))))
+        case .focus:
+            return CGFloat(min(1, max(0, focusPosition)))
+        case .shutter:
+            let last = max(1, shutterSpeeds.count - 1)
+            return CGFloat(min(max(shutterSpeedIndex, 0), last)) / CGFloat(last)
+        }
+    }
+
+    private func focusDistanceLabel(_ position: Float) -> String {
+        let stops: [(String, Float)] = [
+            (".4m", 0.0), (".7m", 0.17), ("1m", 0.33),
+            ("3m", 0.5), ("5m", 0.67), ("∞", 1.0)
+        ]
+        var best = stops[0]
+        var bestDist = abs(position - stops[0].1)
+        for stop in stops.dropFirst() {
+            let d = abs(position - stop.1)
+            if d < bestDist {
+                best = stop
+                bestDist = d
+            }
+        }
+        return best.0
     }
 
     private func setScrubEdge(_ kind: ScrubEdgeKind?, active: Bool, value: String) {
@@ -443,6 +485,8 @@ struct ContentView: View {
         GeometryReader { geo in
             finderCanvas(geo: geo)
         }
+        .preferredColorScheme(.dark)
+        .background(Color(red: 0x13 / 255, green: 0x13 / 255, blue: 0x13 / 255).ignoresSafeArea())
         .statusBarHidden(false)
         // Require a second deliberate swipe for the home gesture so drags on
         // the bottom control rows don't accidentally minimize the app
@@ -713,10 +757,12 @@ struct ContentView: View {
                                 guard !isLocked else { return }
                                 camera.setManualFocus(val)
                                 isManualFocusEnabled = true
+                                setScrubEdge(.focus, active: true, value: focusDistanceLabel(val))
                             },
                             onExposureChanged: { val in
                                 guard !isLocked, !camera.isManualExposure else { return }
                                 camera.setExposure(val)
+                                setScrubEdge(.ev, active: true, value: String(format: "%+.1f", val))
                             },
                             onShutterSpeedChanged: { idx in
                                 guard !isLocked else { return }
@@ -724,8 +770,21 @@ struct ContentView: View {
                                 shutterSpeedIndex = idx
                                 camera.setShutterSpeed(index: idx, iso: Float(isoValue))
                             },
-                            // Arch peel is reserved for the viewfinder sun-drag (Build 81) —
-                            // the scrubbers have their own inline readouts.
+                            // Top FOCUS / EV scrubs peel the same dial as sun-drag (Build 94).
+                            onFocusScrubActive: { active in
+                                setScrubEdge(
+                                    .focus,
+                                    active: active,
+                                    value: focusDistanceLabel(focusPosition)
+                                )
+                            },
+                            onEVScrubActive: { active in
+                                setScrubEdge(
+                                    .ev,
+                                    active: active,
+                                    value: String(format: "%+.1f", exposureValue)
+                                )
+                            },
                             onTimerTap: {
                                 Haptics.click()
                                 if timerSeconds == 0 { timerSeconds = 3 }
@@ -1777,6 +1836,7 @@ struct ContentView: View {
                         value: edge.value,
                         subtitle: edge.subtitle,
                         progress: edge.progress,
+                        needle: edge.needle,
                         serifValue: edge.serif
                     )
                     .padding(.vertical, 36)
@@ -1785,6 +1845,7 @@ struct ContentView: View {
                     .zIndex(6)
                     .transition(.opacity)
                     .animation(ShutterMotion.scrub, value: edge.value)
+                    .animation(ShutterMotion.scrub, value: edge.needle)
                     .animation(ShutterMotion.deck, value: edge.progress)
                 }
 
