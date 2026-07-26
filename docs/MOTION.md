@@ -10,6 +10,7 @@ Camera chrome uses **timing curves**, not bouncy springs. Cull/Darkroom keeps it
 3. Film / FX / recipe menus toggle with `disablesAnimations`; entrance motion is local (`PickerEntrance` opacity/offset only).
 4. Deck expand/collapse commits via `withAnimation(ShutterMotion.deck)` on chrome state only.
 5. Shutter press travel / busy rings / timer digits are SwiftUI-only — Metal `metallicSurface` args stay constant.
+6. Shutter face **never** uses `scaleEffect` for press — constant diameter, offset + bevel only (Build 78).
 
 ## Curves
 | Token | Use |
@@ -21,4 +22,4 @@ Camera chrome uses **timing curves**, not bouncy springs. Cull/Darkroom keeps it
 | `tick` | Timer digits |
 | `picker` | Local dock entrance |
 | `scrub` | Ticker / dial settle |
-| `press` | Button press |
+| `press` | 3D shutter button press (offset/bevel) |

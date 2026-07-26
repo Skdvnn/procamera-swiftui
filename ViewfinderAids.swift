@@ -195,12 +195,16 @@ struct HistogramHorizonOverlay: View {
 
 /// Nikon-style horizon instrument under the top EV meter.
 /// Full size deliberately matches the 120×36 EV scale above it.
+/// Ticks animate + light under the bubble so the scale is readable while tilting.
 struct InfoBarMetalLevel: View {
     @StateObject private var motion = HorizonMotion()
     var compact: Bool = false
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
     private let degreeMarks = ["−15", "−5", "0", "+5", "+15"]
+    /// Degrees per tick — 13 marks over ±15° (same 1/3 rhythm as EV).
+    private let degreesPerTick: Float = 2.5
+    private let tickPitch: CGFloat = 8.5
 
     var body: some View {
         let roll = motion.rollDegrees
@@ -214,7 +218,10 @@ struct InfoBarMetalLevel: View {
             RoundedRectangle(cornerRadius: 5, style: .continuous)
                 .fill(Color(hex: "0a0a0a"))
             RoundedRectangle(cornerRadius: 5, style: .continuous)
-                .stroke(Color(hex: "2a2a2a"), lineWidth: 0.5)
+                .stroke(
+                    level ? accent.opacity(0.55) : Color(hex: "2a2a2a"),
+                    lineWidth: level ? 0.8 : 0.5
+                )
 
             if compact {
                 compactLevel(roll: visualRoll, isLevel: level)
@@ -224,23 +231,52 @@ struct InfoBarMetalLevel: View {
         }
         .frame(width: w, height: h)
         .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+        .shadow(color: level ? accent.opacity(0.28) : .clear, radius: level ? 4 : 0)
+        .animation(.easeOut(duration: 0.12), value: level)
         .allowsHitTesting(false)
         .onAppear { motion.start() }
         .onDisappear { motion.stop() }
+        .onChange(of: level) { _, nowLevel in
+            if nowLevel {
+                UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.85)
+            }
+        }
+    }
+
+    /// How close a tick (degrees) is to the live roll — 1 = dead on, 0 = far.
+    private func tickHeat(markDegrees: Float, roll: Float) -> Double {
+        let d = abs(Double(markDegrees - roll))
+        return max(0, 1.0 - d / 4.0)
     }
 
     @ViewBuilder
     private func fullLevel(roll: Float, visualRoll: Float, isLevel: Bool) -> some View {
+        // Bubble slides under the tick scale (EV-style), so marks are useful.
+        let bubbleX = CGFloat(visualRoll / 15.0) * (tickPitch * 6.0)
+
         VStack(spacing: 0) {
-            // 13 marks mirrors the EV meter's 1/3-stop rhythm.
+            // 13 marks — height/opacity chase the bubble; majors carry degree labels.
             HStack(spacing: 0) {
                 ForEach(0..<13, id: \.self) { i in
                     let major = i % 3 == 0
                     let markIndex = i / 3
+                    let markDeg = Float(i - 6) * degreesPerTick
+                    let heat = tickHeat(markDegrees: markDeg, roll: visualRoll)
+                    let lit = isLevel && i == 6
                     VStack(spacing: 1) {
                         Rectangle()
-                            .fill(Color.white.opacity(major ? 0.72 : 0.30))
-                            .frame(width: major ? 1.5 : 1, height: major ? 7 : 4)
+                            .fill(
+                                lit
+                                    ? accent
+                                    : Color.white.opacity(
+                                        (major ? 0.40 : 0.18) + heat * (major ? 0.55 : 0.50)
+                                    )
+                            )
+                            .frame(
+                                width: major ? 1.5 : 1,
+                                height: (major ? 5.5 : 3.2) + CGFloat(heat) * (major ? 3.5 : 2.8)
+                            )
+                            .shadow(color: lit ? accent.opacity(0.7) : .clear, radius: lit ? 2 : 0)
                         if major {
                             Text(degreeMarks[markIndex])
                                 .font(.system(
@@ -248,10 +284,17 @@ struct InfoBarMetalLevel: View {
                                     weight: markIndex == 2 ? .bold : .medium,
                                     design: .monospaced
                                 ))
-                                .foregroundStyle(Color.white.opacity(markIndex == 2 ? 0.82 : 0.52))
+                                .foregroundStyle(
+                                    lit
+                                        ? accent
+                                        : Color.white.opacity(
+                                            (markIndex == 2 ? 0.55 : 0.38) + heat * 0.40
+                                        )
+                                )
                         }
                     }
-                    .frame(width: 8.5)
+                    .frame(width: tickPitch)
+                    .animation(.easeOut(duration: 0.10), value: heat)
                 }
             }
             .frame(height: 16)
@@ -260,27 +303,20 @@ struct InfoBarMetalLevel: View {
                 // Fixed center datum: split rails leave a precision gate.
                 HStack(spacing: 9) {
                     Capsule()
-                        .fill(Color.white.opacity(0.25))
+                        .fill(Color.white.opacity(0.22))
                         .frame(width: 38, height: 1)
                     Capsule()
-                        .fill(Color.white.opacity(0.25))
+                        .fill(Color.white.opacity(0.22))
                         .frame(width: 38, height: 1)
                 }
 
-                // Moving horizon beam. It settles into the center datum at level.
-                HStack(spacing: 3) {
-                    Capsule()
-                        .fill(isLevel ? accent : Color.white.opacity(0.78))
-                        .frame(width: 39, height: isLevel ? 2 : 1.5)
-                    Circle()
-                        .fill(isLevel ? accent : Color.white.opacity(0.86))
-                        .frame(width: isLevel ? 5 : 4, height: isLevel ? 5 : 4)
-                    Capsule()
-                        .fill(isLevel ? accent : Color.white.opacity(0.78))
-                        .frame(width: 39, height: isLevel ? 2 : 1.5)
-                }
-                .rotationEffect(.degrees(Double(visualRoll)))
-                .shadow(color: isLevel ? accent.opacity(0.45) : .clear, radius: 2)
+                // Sliding bubble tracks degrees under the tick scale (useful, not decorative).
+                Circle()
+                    .fill(isLevel ? accent : Color.white.opacity(0.90))
+                    .frame(width: isLevel ? 6 : 5, height: isLevel ? 6 : 5)
+                    .shadow(color: isLevel ? accent.opacity(0.55) : Color.black.opacity(0.35), radius: isLevel ? 3 : 1)
+                    .offset(x: bubbleX)
+                    .animation(.interactiveSpring(response: 0.14, dampingFraction: 0.86), value: bubbleX)
 
                 // Mechanical center pointer matches the EV triangle.
                 Triangle()
@@ -294,6 +330,7 @@ struct InfoBarMetalLevel: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
                     .padding(.trailing, 5)
                     .padding(.bottom, 1)
+                    .contentTransition(.numericText())
             }
             .frame(height: 18)
         }
@@ -302,18 +339,35 @@ struct InfoBarMetalLevel: View {
 
     @ViewBuilder
     private func compactLevel(roll: Float, isLevel: Bool) -> some View {
+        let bubbleX = CGFloat(roll / 15.0) * 16
         ZStack {
-            HStack(spacing: 5) {
-                Rectangle().fill(Color.white.opacity(0.25)).frame(width: 14, height: 1)
-                Rectangle().fill(Color.white.opacity(0.25)).frame(width: 14, height: 1)
+            HStack(spacing: 0) {
+                ForEach(0..<7, id: \.self) { i in
+                    let markDeg = Float(i - 3) * 5
+                    let heat = tickHeat(markDegrees: markDeg, roll: roll)
+                    let major = i == 3
+                    Rectangle()
+                        .fill(
+                            isLevel && major
+                                ? accent
+                                : Color.white.opacity(0.18 + heat * 0.55)
+                        )
+                        .frame(width: major ? 1.4 : 1, height: 3 + CGFloat(heat) * 4)
+                        .frame(maxWidth: .infinity)
+                }
             }
-            Capsule()
-                .fill(isLevel ? accent : Color.white.opacity(0.78))
-                .frame(width: 34, height: isLevel ? 2 : 1.4)
-                .rotationEffect(.degrees(Double(roll)))
+            .padding(.horizontal, 4)
+            .offset(y: -4)
+
+            HStack(spacing: 5) {
+                Rectangle().fill(Color.white.opacity(0.22)).frame(width: 14, height: 1)
+                Rectangle().fill(Color.white.opacity(0.22)).frame(width: 14, height: 1)
+            }
             Circle()
-                .fill(isLevel ? accent : Color.white.opacity(0.75))
-                .frame(width: 4, height: 4)
+                .fill(isLevel ? accent : Color.white.opacity(0.88))
+                .frame(width: isLevel ? 5 : 4, height: isLevel ? 5 : 4)
+                .offset(x: bubbleX)
+                .animation(.interactiveSpring(response: 0.14, dampingFraction: 0.86), value: bubbleX)
             Text(isLevel ? "LVL" : String(format: "%+.0f°", roll))
                 .font(.system(size: 6.5, weight: .bold, design: .monospaced))
                 .foregroundStyle(isLevel ? accent : .white.opacity(0.6))
@@ -330,12 +384,13 @@ final class HorizonMotion: ObservableObject {
 
     func start() {
         guard manager.isDeviceMotionAvailable else { return }
-        // 10Hz + deadband — 30Hz publish was thrashing SwiftUI with the camera.
-        manager.deviceMotionUpdateInterval = 1.0 / 10.0
+        // 20Hz — tick highlight needs smoother chase than the old 10Hz deadband.
+        manager.deviceMotionUpdateInterval = 1.0 / 20.0
         manager.startDeviceMotionUpdates(to: .main) { [weak self] motion, _ in
             guard let self, let attitude = motion?.attitude else { return }
             let roll = max(-45, min(45, Float(attitude.roll * 180.0 / .pi)))
-            guard abs(roll - self.rollDegrees) >= 0.4 else { return }
+            // Finer deadband so ticks animate while still calm for SwiftUI.
+            guard abs(roll - self.rollDegrees) >= 0.2 else { return }
             self.rollDegrees = roll
         }
     }

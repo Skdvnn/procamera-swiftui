@@ -53,7 +53,7 @@ enum ShutterMotion {
     static let picker = Animation.timingCurve(0.2, 0.8, 0.22, 1.0, duration: 0.2)
     /// Scrubber / ticker settle — no bounce
     static let scrub = Animation.easeOut(duration: 0.18)
-    /// Mechanical shutter face travel — snappy, no bounce.
+    /// Mechanical shutter 3D press-in (offset + bevel, never scale) — snappy.
     static let press = Animation.easeOut(duration: 0.08)
 }
 
@@ -3471,7 +3471,7 @@ private struct ShutterButtonChrome: View {
     @Environment(\.shutterPressed) private var isPressed
 
     private var outer: CGFloat { compact ? 64 : 76 }
-    /// Face sits proud of the well when idle; sinks flush on press.
+    /// Face diameter — constant. Idle sits proud; press sinks via offset only.
     private var face: CGFloat { compact ? 50 : 60 }
     private var well: CGFloat { compact ? 56 : 66 }
     private var hitPad: CGFloat { compact ? 8 : 10 }
@@ -3549,7 +3549,8 @@ private struct ShutterButtonChrome: View {
                         .stroke(Color.black.opacity(0.95), lineWidth: 2.2)
                 }
 
-            // Inner face — the ONLY moving part. Proud idle → sunk pressed.
+            // Inner face — constant diameter 3D press. Proud idle → sunk into the well.
+            // NO scaleEffect shrink — travel is offset + bevel only (Build 78).
             ZStack {
                 Circle()
                     .fill(faceFill)
@@ -3565,14 +3566,30 @@ private struct ShutterButtonChrome: View {
                         )
                 }
 
-                // Dark bevel rim — thickness, not a highlight.
+                // Dark bevel rim — thickens on press for inset depth.
                 Circle()
-                    .stroke(Color.black.opacity(0.45), lineWidth: 1.2)
+                    .stroke(Color.black.opacity(isPressed ? 0.70 : 0.45), lineWidth: isPressed ? 2.0 : 1.2)
                     .frame(width: face - 1, height: face - 1)
+
+                // Top lip inset shadow — sells the 3D button recess when pressed.
+                Circle()
+                    .stroke(
+                        LinearGradient(
+                            colors: [
+                                Color.black.opacity(isPressed ? 0.55 : 0.12),
+                                Color.black.opacity(0)
+                            ],
+                            startPoint: .top,
+                            endPoint: .center
+                        ),
+                        lineWidth: isPressed ? 5 : 2
+                    )
+                    .frame(width: face - 2, height: face - 2)
+                    .blur(radius: isPressed ? 0.6 : 0)
 
                 // Press dim — black overlay only (opacity animates; colors stay put).
                 Circle()
-                    .fill(Color.black.opacity(isPressed ? 0.38 : 0))
+                    .fill(Color.black.opacity(isPressed ? 0.32 : 0))
                     .frame(width: face, height: face)
 
                 if isBusy && !isTimerArmed {
@@ -3597,21 +3614,15 @@ private struct ShutterButtonChrome: View {
                         .animation(ShutterMotion.tick, value: burstCount)
                 }
             }
-            // Real push-in: shrink + drop into the well. Idle sits slightly proud.
-            // Outer collar never moves. No white halo. No brightness shift on fills.
-            .scaleEffect(isPressed ? 0.78 : 1.0)
-            .offset(y: isPressed ? (compact ? 5.0 : 6.0) : (compact ? -1.2 : -1.5))
+            // 3D press-in: face keeps size, drops into the well, clip eats the proud lip.
+            // Outer collar never moves. No shrink. No white halo. No brightness shift on fills.
+            .offset(y: isPressed ? (compact ? 4.0 : 5.0) : (compact ? -2.0 : -2.4))
             .shadow(
-                color: Color.black.opacity(isPressed ? 0.02 : 0.75),
-                radius: isPressed ? 0.5 : 6,
-                y: isPressed ? 0 : 4
+                color: Color.black.opacity(isPressed ? 0.05 : 0.80),
+                radius: isPressed ? 0.5 : 7,
+                y: isPressed ? 0 : 5
             )
-            .animation(
-                isPressed
-                    ? .easeOut(duration: 0.055)
-                    : .interpolatingSpring(stiffness: 420, damping: 32),
-                value: isPressed
-            )
+            .animation(ShutterMotion.press, value: isPressed)
             .frame(width: well, height: well)
             .clipShape(Circle())
 

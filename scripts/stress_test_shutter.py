@@ -276,14 +276,20 @@ def test_source_guards() -> None:
         and ".disabled(isBusy && !canCancel)" in content,
     )
     shutter_press = content[content.find("struct ShutterPressStyle"):content.find("struct ShutterButtonChrome")]
+    shutter_chrome = content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")]
     check(
         "shutter face-only push-in",
         "shutterPressed" in content
-        and "scaleEffect(isPressed ? 0.78" in content
         and "Collar stays solid" in shutter_press
         and "Shader roughness / size / lightPos args are CONSTANT" in content
         and "scaleEffect(configuration.isPressed" not in shutter_press
         and ".environment" in shutter_press and "shutterPressed" in shutter_press,
+    )
+    check(
+        "shutter 3d press no shrink",
+        "NO scaleEffect shrink" in shutter_chrome
+        and "scaleEffect(isPressed" not in shutter_chrome
+        and "3D press-in: face keeps size" in shutter_chrome,
     )
     check(
         "shutter LE ring on button",
@@ -669,15 +675,16 @@ def test_source_guards() -> None:
     check("EV drag seeds without tap", "park the sun reticle mid-finder" in content)
     check("pan waits for direction", "Wait for direction" in (ROOT / "FilteredCameraPreview.swift").read_text())
 
-    # Build 67/73 — real shutter push-in (inner face only; outer collar solid)
+    # Build 67/73/78 — real shutter 3D press-in (inner face only; outer collar solid; no shrink)
     check("shutter pressed env key", "ShutterPressedKey" in content)
     check("shutter press style sets env", ".environment(\\shutterPressed" in content or ".environment(\\.shutterPressed" in content)
     check("shutter fixed dark lip", "Fixed dark lip" in content)
     check("shutter well darkens on press", "isPressed ? 0.95 : 0.82" in content)
-    check("shutter face sink offset", "offset(y: isPressed ? (compact ? 5.0 : 6.0)" in content)
+    check("shutter face sink offset", "offset(y: isPressed ? (compact ? 4.0 : 5.0)" in content)
     check("shutter face clipped to well", ".clipShape(Circle())" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
     check("shutter constant face fill", "Face fill is CONSTANT" in content)
-    check("shutter press dim overlay", "isPressed ? 0.38 : 0" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
+    check("shutter press dim overlay", "isPressed ? 0.32 : 0" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
+    check("shutter top lip inset shadow", "Top lip inset shadow" in content)
 
     # Build 68 — Nikon LCD chrome + tighter deck + no white shutter flash
     check("shutter no white top glow", "Color.white.opacity(isPressed ? 0 : 0.06)" not in content)
@@ -780,13 +787,17 @@ def test_source_guards() -> None:
     check("widget recents sort by date", ".sorted { $0.date > $1.date }" in content)
     check("clean widget frame stays clean", 'meta.filmFilter == "None" ? "Clean"' in widgets)
 
-    # Build 77 — level is a coherent companion to the EV instrument.
+    # Build 77/78 — level is a coherent companion to the EV instrument; ticks animate + useful.
     check("full level matches EV width", "compact ? 52 : 120" in aids)
     check("full level matches EV height", "compact ? 28 : 36" in aids)
     check("level 13-mark dial rhythm", "ForEach(0..<13" in aids and "degreeMarks" in aids)
     check("level mechanical center pointer", "Mechanical center pointer matches the EV triangle" in aids)
     check("level precision readout", 'String(format: "%+.1f°", roll)' in aids)
     check("level Nikon yellow lock", 'Text(isLevel ? "LEVEL"' in aids)
+    check("level tick heat chase", "tickHeat" in aids and "degreesPerTick" in aids)
+    check("level sliding bubble", "bubbleX" in aids and "Sliding bubble tracks degrees" in aids)
+    check("level lock haptic", "UIImpactFeedbackGenerator(style: .rigid)" in aids)
+    check("level 20hz motion", "1.0 / 20.0" in aids)
 
 
 
