@@ -653,6 +653,8 @@ struct ContentView: View {
             Haptics.medium()
         }
         syncCaptureContextToSystem()
+        // Unsuspend AFTER look is on pipeline — resets preview clock so the
+        // first film frame lands immediately (avoids pink/blank stall).
         camera.setChromePickerPreviewSuspended(false)
     }
 

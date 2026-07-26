@@ -435,10 +435,11 @@ class FilteredPreviewView: UIView {
             mtkView.framebufferOnly = false
             mtkView.enableSetNeedsDisplay = true
             mtkView.isPaused = true
-            mtkView.backgroundColor = .black
-            mtkView.isOpaque = true
-            // Never flash Metal's default pink/magenta clear between frames.
-            mtkView.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+            // Transparent until a real frame presents — opaque Metal over AV
+            // was the solid pink/magenta frozen finder (Build 75).
+            mtkView.backgroundColor = .clear
+            mtkView.isOpaque = false
+            mtkView.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
             mtkView.isHidden = true  // Hidden when no filter
             // Gestures live on the parent; keep Metal view from eating touches
             mtkView.isUserInteractionEnabled = false
@@ -492,13 +493,15 @@ class FilteredPreviewView: UIView {
 
         if image != nil {
             let wasHidden = metalView?.isHidden ?? true
-            // Show Metal, but KEEP the AV preview visible until Metal paints —
-            // otherwise collapsed resize / failed drawable = permanent black.
+            // Always keep AV visible until Metal has painted a real frame.
+            // Opaque pink/black Metal covering AV was the frozen finder.
+            previewLayer?.isHidden = metalHasPresented
             metalView?.isHidden = false
-            if metalHasPresented {
-                previewLayer?.isHidden = true
-            } else {
-                previewLayer?.isHidden = false
+            if !metalHasPresented {
+                metalView?.isOpaque = false
+                metalView?.backgroundColor = .clear
+                metalView?.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
+                metalView?.alpha = 1 // draws transparent clear; AV shows through
             }
             if wasHidden {
                 setNeedsLayout()
@@ -510,15 +513,12 @@ class FilteredPreviewView: UIView {
                 metalView?.setNeedsDisplay()
             }
         } else {
-            metalHasPresented = false
-            metalView?.isHidden = true
-            previewLayer?.isHidden = false
-            currentCIImage = nil
+            restoreCleanPreview()
         }
     }
 
     /// Retries until MTKView has a non-zero drawable. On exhaustion, fall back
-    /// to AVCaptureVideoPreviewLayer so the finder never stays black.
+    /// to AVCaptureVideoPreviewLayer so the finder never stays pink/black.
     private func scheduleMetalDraw(attemptsLeft: Int) {
         if attemptsLeft <= 0 {
             restoreCleanPreview()
@@ -542,6 +542,10 @@ class FilteredPreviewView: UIView {
         consecutiveDrawFails = 0
         currentCIImage = nil
         metalView?.isHidden = true
+        metalView?.isOpaque = false
+        metalView?.alpha = 1
+        metalView?.backgroundColor = .clear
+        metalView?.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 0)
         previewLayer?.isHidden = false
     }
 
@@ -549,14 +553,17 @@ class FilteredPreviewView: UIView {
         guard !metalHasPresented else { return }
         metalHasPresented = true
         consecutiveDrawFails = 0
+        // Now safe to cover AV — drawable has real film/FX pixels.
+        metalView?.isOpaque = true
+        metalView?.backgroundColor = .black
+        metalView?.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
         previewLayer?.isHidden = true
     }
 
     private func noteDrawFailure() {
         consecutiveDrawFails += 1
-        // After resize / GPU blip, don't leave Metal visible over a hidden
-        // AV layer with nothing presenting — that's the black frozen finder.
-        if metalHasPresented || consecutiveDrawFails >= 8 {
+        // Never leave a non-presenting Metal layer covering the live feed.
+        if !metalHasPresented || consecutiveDrawFails >= 3 {
             restoreCleanPreview()
         }
     }
@@ -615,6 +622,13 @@ extension FilteredPreviewView: MTKViewDelegate {
             ciImage = ciImage.oriented(.right)
         }
 
+        // Orientation shifts origin off (0,0). Without this normalize the crop
+        // is empty → solid clear color (pink/magenta freeze). Mirror still bake.
+        ciImage = ciImage.transformed(by: CGAffineTransform(
+            translationX: -ciImage.extent.origin.x,
+            y: -ciImage.extent.origin.y
+        ))
+
         let extent = ciImage.extent
         let imageSize = extent.size
         guard !extent.isInfinite,
@@ -649,6 +663,10 @@ extension FilteredPreviewView: MTKViewDelegate {
         // Crop to drawable bounds
         let drawableRect = CGRect(origin: .zero, size: drawableSize)
         transformedImage = transformedImage.cropped(to: drawableRect)
+        guard transformedImage.extent.width > 1, transformedImage.extent.height > 1 else {
+            noteDrawFailure()
+            return
+        }
 
         // Preview-only CIContext (not ShutterRender.ciQueue) — never block main.
         let colorSpace = CGColorSpaceCreateDeviceRGB()
@@ -661,11 +679,9 @@ extension FilteredPreviewView: MTKViewDelegate {
         )
 
         consecutiveDrawFails = 0
-        commandBuffer.addCompletedHandler { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.markMetalPresented()
-            }
-        }
+        // Reveal Metal as soon as this drawable is queued — not after GPU
+        // completes (that window was the pink flash over live AV).
+        markMetalPresented()
         commandBuffer.present(drawable)
         commandBuffer.commit()
     }

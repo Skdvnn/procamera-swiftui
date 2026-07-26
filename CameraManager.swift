@@ -1789,7 +1789,21 @@ class CameraManager: NSObject, ObservableObject {
             outputImage = applyInstantFilmLook(to: outputImage, preview: true)
         }
 
-        // Live grain stays a Canvas overlay (cheap, stable). Still bake adds CI grain.
+        // Light live grain so the finder matches the still bake (Build 75).
+        // Canvas overlays were removed next to Metal — CI grain is cheap at preview size.
+        let inputExtent = ciImage.extent
+        if !inputExtent.isInfinite {
+            outputImage = outputImage.cropped(to: inputExtent)
+        }
+        outputImage = applyFilmGrain(to: outputImage, amount: 0.035)
+        // Keep origin at zero for Metal draw / createCGImage.
+        let e = outputImage.extent
+        if e.origin != .zero {
+            outputImage = outputImage.transformed(by: CGAffineTransform(
+                translationX: -e.origin.x,
+                y: -e.origin.y
+            ))
+        }
         return outputImage
     }
 
@@ -1970,13 +1984,15 @@ class CameraManager: NSObject, ObservableObject {
                 outputImage = result
             }
 
-            // Add halation-like bloom (subtle highlight glow)
+            // Add halation-like bloom (subtle highlight glow) — crop back so
+            // expanded bloom extent doesn't break createCGImage / Metal.
+            let bloomExtent = outputImage.extent
             let bloom = CIFilter.bloom()
             bloom.inputImage = outputImage
             bloom.radius = 5
             bloom.intensity = 0.3
             if let result = bloom.outputImage {
-                outputImage = result
+                outputImage = result.cropped(to: bloomExtent)
             }
 
         case .velvia50:
@@ -2786,13 +2802,21 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 // under GPU contention when toggling looks rapidly.
                 let processed: CIImage? = autoreleasepool {
                     var frame = downscaledForPreview(ciImage, heavyFX: heavy)
+                    // Normalize origin before CI filters — non-zero origins after
+                    // film/FX caused createCGImage misses → pink Metal clear.
+                    frame = frame.transformed(by: CGAffineTransform(
+                        translationX: -frame.extent.origin.x,
+                        y: -frame.extent.origin.y
+                    ))
                     let extent = frame.extent
                     guard !extent.isInfinite,
                           extent.width > 1,
                           extent.height > 1 else {
                         return nil
                     }
-                    frame = applyFilmFilter(to: frame, filter: filmFilter)
+                    if filmFilter != .none {
+                        frame = applyFilmFilter(to: frame, filter: filmFilter)
+                    }
                     if lensFX != .none {
                         // previewCheap skips bloom/twirl that stills still get.
                         frame = LensFXEngine.shared.apply(
@@ -2801,6 +2825,12 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                             time: now,
                             previewCheap: true
                         )
+                        // Lens FX can expand extent — pin back for Metal.
+                        frame = frame.cropped(to: extent)
+                        frame = frame.transformed(by: CGAffineTransform(
+                            translationX: -frame.extent.origin.x,
+                            y: -frame.extent.origin.y
+                        ))
                     }
                     if peaking {
                         frame = ViewfinderMonitor.applyFocusPeaking(to: frame)
@@ -2808,13 +2838,20 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                     if zebra {
                         frame = ViewfinderMonitor.applyZebra(to: frame)
                     }
-                    let out = frame.extent
+                    var out = frame.extent
                     guard !out.isInfinite, out.width > 1, out.height > 1 else {
                         return nil
                     }
+                    if out.origin != .zero {
+                        frame = frame.transformed(by: CGAffineTransform(
+                            translationX: -out.origin.x,
+                            y: -out.origin.y
+                        ))
+                        out = frame.extent
+                    }
                     // Materialize now — CVPixelBuffer is recycled when this callback returns.
                     guard let cg = ShutterRender.syncCI({
-                        ciContext.createCGImage(frame, from: out)
+                        self.ciContext.createCGImage(frame, from: out)
                     }) else {
                         return nil
                     }

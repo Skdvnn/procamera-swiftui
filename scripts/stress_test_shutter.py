@@ -546,7 +546,11 @@ def test_source_guards() -> None:
     preview = (ROOT / "FilteredCameraPreview.swift").read_text()
     vf = (ROOT / "ViewfinderOverlay.swift").read_text()
     cam = (ROOT / "CameraManager.swift").read_text()
-    check("preview keeps AV until Metal presents", "KEEP the AV preview visible until Metal paints" in preview)
+    check(
+        "preview keeps AV until Metal presents",
+        "Always keep AV visible until Metal has painted" in preview
+        or "KEEP the AV preview visible until Metal paints" in preview,
+    )
     check("preview own CIContext", "makePreviewCIContext" in preview)
     check("preview restore on draw fail", "noteDrawFailure" in preview)
     check("preview scheduleMetalDraw fallback", "restoreCleanPreview()" in preview and "scheduleMetalDraw" in preview)
@@ -745,7 +749,6 @@ def test_source_guards() -> None:
     check("EV pan dead zone 80%", "view.bounds.height * 0.80" in preview)
     check("EV cancels compare", "cancelCompareIfNeeded" in preview)
     check("long press no fight pan", "UILongPressGestureRecognizer" in preview and "return false" in preview)
-    check("MTKView black clearColor", "MTLClearColor(red: 0, green: 0, blue: 0" in preview)
     check("unsuspend resets preview clock", "lastPreviewFrameTime = 0" in cam)
     check("picker teardown safety net", "Safety net: if commit never lands" in content)
     check("widget recent meta sidecar", "struct WidgetRecentMeta" in deep)
@@ -754,6 +757,15 @@ def test_source_guards() -> None:
     check("widget shoot deep link", "ShutterDeepLink.capture.url" in widgets)
     check("widget unculled label", "UNCULLED" in widgets)
     check("widget exposure line", "exposureLine" in deep and "latestMeta" in widgets)
+
+    # Build 75 — film FX pink freeze: origin normalize + transparent Metal until present
+    check("Metal transparent until present", "isOpaque = false" in preview and "alpha: 0" in preview)
+    check("draw normalizes CI origin", "Orientation shifts origin off" in preview)
+    check("mark presented before GPU wait", "Reveal Metal as soon as this drawable" in preview)
+    check("draw fail restores early", "if !metalHasPresented || consecutiveDrawFails >= 3" in preview)
+    check("live film grain preview", "applyFilmGrain(to: outputImage, amount: 0.035)" in cam)
+    check("CineStill bloom cropped", "result.cropped(to: bloomExtent)" in cam)
+    check("preview normalize before CI", "Normalize origin before CI filters" in cam)
 
 
 
@@ -833,11 +845,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 74", m is not None and int(ver) >= 74, ver)
+    check("Info.plist build >= 75", m is not None and int(ver) >= 75, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 74+", any(v >= 74 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 75+", any(v >= 75 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)
