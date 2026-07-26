@@ -467,7 +467,22 @@ def test_source_guards() -> None:
         "captureDevicePointConverted" in preview
         and "devicePoint:" in content,
     )
-    check("STACK LE upright", "longExposureInterfaceOrientation" in cam and "oriented(.right)" in cam)
+    check(
+        "STACK LE upright",
+        "longExposureInterfaceOrientation" in cam
+        and "PreviewBufferRotation.from(" in cam
+        and "longExposureWasFront" in cam,
+    )
+    check(
+        "front upright mapping inverted",
+        "front: Bool = false" in (ROOT / "LensFXEngine.swift").read_text()
+        and "return .rotateLeft" in (ROOT / "LensFXEngine.swift").read_text(),
+    )
+    check(
+        "Metal preview passes front",
+        "front: front" in (ROOT / "FilteredCameraPreview.swift").read_text(),
+    )
+    check("flip refreshes buffer rotation", "syncPreviewBufferRotation" in content)
     check("flip reapplies lock/WB", "reapplyLockWhiteBalanceMacro" in cam)
     check("video mirroring front", "applyVideoMirroring" in cam)
     check("flash resolved to supported", "resolvedFlashMode" in cam)

@@ -640,27 +640,19 @@ extension FilteredPreviewView: MTKViewDelegate {
 
         // Video buffers are sensor-native (landscape). Map to the *interface*
         // orientation so portrait + landscape left/right all read upright.
+        // Front VDO is mirrored — that inverts the mapping (Build 87).
         let orient = Self.interfaceOrientation()
-        // Only push FX touch mapping when orientation changes — locking every
-        // Metal frame was freezing the UI under load.
-        let rotation = PreviewBufferRotation.from(interfaceOrientation: orient)
+        let front = (session?.inputs.contains(where: {
+            ($0 as? AVCaptureDeviceInput)?.device.position == .front
+        }) ?? false)
+        // Only push FX touch mapping when orientation / camera changes —
+        // locking every Metal frame was freezing the UI under load.
+        let rotation = PreviewBufferRotation.from(interfaceOrientation: orient, front: front)
         if lastPreviewRotation != rotation {
             lastPreviewRotation = rotation
             LensFXEngine.shared.setPreviewBufferRotation(rotation)
         }
-        switch orient {
-        case .portrait, .unknown:
-            ciImage = ciImage.oriented(.right)
-        case .portraitUpsideDown:
-            ciImage = ciImage.oriented(.left)
-        case .landscapeLeft:
-            // Home button / indicator on the right → buffer needs 180°
-            ciImage = ciImage.oriented(.down)
-        case .landscapeRight:
-            break // sensor-native
-        @unknown default:
-            ciImage = ciImage.oriented(.right)
-        }
+        ciImage = rotation.applied(to: ciImage)
 
         // Orientation shifts origin off (0,0). Without this normalize the crop
         // is empty → solid clear color (pink/magenta freeze). Mirror still bake.

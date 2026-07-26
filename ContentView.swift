@@ -935,18 +935,26 @@ struct ContentView: View {
                 if landscape {
                     bottomDeckDrag = 0
                 }
-                let orient = CameraManager.currentInterfaceOrientation()
-                LensFXEngine.shared.setPreviewBufferRotation(
-                    PreviewBufferRotation.from(interfaceOrientation: orient)
-                )
+                syncPreviewBufferRotation()
+            }
+            .onChange(of: camera.currentCamera) { _, _ in
+                // Front mirror inverts the upright mapping — refresh on flip.
+                syncPreviewBufferRotation()
             }
             .onAppear { finderIsLandscape = isLandscape }
             .onAppear {
-                let orient = CameraManager.currentInterfaceOrientation()
-                LensFXEngine.shared.setPreviewBufferRotation(
-                    PreviewBufferRotation.from(interfaceOrientation: orient)
-                )
+                syncPreviewBufferRotation()
             }
+    }
+
+    private func syncPreviewBufferRotation() {
+        let orient = CameraManager.currentInterfaceOrientation()
+        LensFXEngine.shared.setPreviewBufferRotation(
+            PreviewBufferRotation.from(
+                interfaceOrientation: orient,
+                front: camera.currentCamera == .front
+            )
+        )
     }
 
     private func handleAppear() {
