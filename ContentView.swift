@@ -3680,11 +3680,12 @@ private struct ShutterButtonChrome: View {
     /// Warm/neutral burst count — no cyan/blue glow (Build 65).
     private let burstAccent = Color(red: 0.92, green: 0.90, blue: 0.86)
 
-    /// Idle lift — same proud sit the button has always had. An extruded barrel
-    /// read as a pill behind a round button, so travel is offset + shading only.
-    private var proud: CGFloat { compact ? 1.2 : 1.5 }
-    /// How far the face drops into the well on press.
-    private var sink: CGFloat { compact ? 5.0 : 6.0 }
+    /// Idle lift — sits slightly proud of the collar.
+    private var proud: CGFloat { compact ? 1.0 : 1.2 }
+    /// Tiny recess on press — depth comes from scale-in, not a slide down.
+    private var sink: CGFloat { compact ? 1.2 : 1.5 }
+    /// Push into the well (toward the housing), not a downward translation.
+    private var pressScale: CGFloat { compact ? 0.88 : 0.86 }
 
     /// Face fill is CONSTANT — never animate gradient stops (that flashed white).
     private var faceFill: RadialGradient {
@@ -3776,8 +3777,8 @@ private struct ShutterButtonChrome: View {
                         .stroke(Color.black.opacity(0.85), lineWidth: 1.8)
                 }
 
-            // Inner face — the ONLY moving part. Proud idle → sunk pressed.
-            // NO scaleEffect shrink — travel is offset + shading only (Build 78).
+            // Inner face — the ONLY moving part. Scales into the well on press
+            // (Build 98) instead of sliding down the screen.
             ZStack {
                 Circle()
                     .fill(faceFill)
@@ -3842,9 +3843,9 @@ private struct ShutterButtonChrome: View {
                         .animation(ShutterMotion.tick, value: burstCount)
                 }
             }
-            // Press-in: face keeps size and drops; the well edge clips the sinking
-            // bottom, which is the housing occluding it. Collar never moves.
-            // No shrink. No white halo. No brightness shift on fills.
+            // Press-in: scale into the well + tiny recess. Collar never moves.
+            // No white halo. No brightness shift on fills.
+            .scaleEffect(isPressed ? pressScale : 1.0)
             .offset(y: isPressed ? sink : -proud)
             .shadow(
                 color: Color.black.opacity(isPressed ? 0.02 : 0.75),
@@ -3853,8 +3854,8 @@ private struct ShutterButtonChrome: View {
             )
             .animation(
                 isPressed
-                    ? .easeOut(duration: 0.055)
-                    : .interpolatingSpring(stiffness: 420, damping: 32),
+                    ? .easeOut(duration: 0.06)
+                    : .interpolatingSpring(stiffness: 480, damping: 34),
                 value: isPressed
             )
             .frame(width: well, height: well)

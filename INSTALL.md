@@ -8,14 +8,15 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 97 phone test pack (taller finder + top yellow center-only):**
+**Build 98 phone test pack (shutter pushes in, not down):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **97**.
-Top FOCUS / EV / level strip is 34pt and parked tighter so the viewfinder
-grows. Yellow ticks only light the focused/leading mark — no swept yellow
-run on unfocused ticks.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **98**.
+Shutter face scales into the well on press instead of sliding down the
+screen — collar stays put, travel reads as push-in depth.
+
+Build 97: taller finder + top yellow only on focused tick.
 
 Build 96: S left / ISO right + easier explore pull-down.
 

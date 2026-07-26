@@ -299,10 +299,10 @@ def test_source_guards() -> None:
         and ".environment" in shutter_press and "shutterPressed" in shutter_press,
     )
     check(
-        "shutter 3d press no shrink",
-        "NO scaleEffect shrink" in shutter_chrome
-        and "scaleEffect(isPressed" not in shutter_chrome
-        and "Press-in: face keeps size" in shutter_chrome,
+        "shutter press scales into well",
+        "scaleEffect(isPressed ? pressScale" in shutter_chrome
+        and "private var pressScale" in shutter_chrome
+        and "Scales into the well on press" in shutter_chrome,
     )
     check(
         "shutter LE ring on button",
@@ -728,7 +728,7 @@ def test_source_guards() -> None:
     check("EV drag seeds without tap", "park the sun reticle mid-finder" in content)
     check("pan waits for direction", "Wait for direction" in (ROOT / "FilteredCameraPreview.swift").read_text())
 
-    # Build 67/73/78 — real shutter 3D press-in (inner face only; outer collar solid; no shrink)
+    # Build 98 — shutter pushes in (scale) vs slides down; collar solid
     check("shutter pressed env key", "ShutterPressedKey" in content)
     check("shutter press style sets env", ".environment(\\shutterPressed" in content or ".environment(\\.shutterPressed" in content)
     check(
@@ -740,6 +740,7 @@ def test_source_guards() -> None:
         "isPressed ? 0.92 : 0.78" in content or "isPressed ? 0.95 : 0.82" in content,
     )
     check("shutter face sink offset", "offset(y: isPressed ? sink : -proud)" in content)
+    check("shutter tiny sink not slide", "private var sink: CGFloat { compact ? 1.2 : 1.5 }" in content)
     check("shutter face clipped to well", ".clipShape(Circle())" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
     check("shutter constant face fill", "Face fill is CONSTANT" in content)
     check("shutter press dim overlay", "isPressed ? 0.38 : 0" in content[content.find("struct ShutterButtonChrome"):content.find("struct ScaleButtonStyle")])
