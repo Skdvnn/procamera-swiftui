@@ -554,6 +554,9 @@ final class ChromePickerViewController: UIViewController, UITableViewDataSource,
             // Exclusive — film and Lens FX cannot both be on.
             session.filmFilter = filter
             if filter != .none { session.lensFX = .none }
+            // A direct stock choice leaves the previous scene. Otherwise the
+            // commit reapplies Night/Film and immediately overwrites this row.
+            session.shootMode = nil
             onFilmApplied()
             onDismiss()
         case .peaking:
@@ -693,35 +696,22 @@ struct UIKitChromeLookButtons: UIViewRepresentable {
         var onFX: () -> Void = {}
         var onFilmClear: () -> Void = {}
         var onFXClear: () -> Void = {}
-        /// Suppress tap after a successful long-press clear.
-        var suppressFilmTap = false
-        var suppressFXTap = false
 
         @objc func film() {
-            if suppressFilmTap {
-                suppressFilmTap = false
-                return
-            }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             onFilm()
         }
         @objc func fx() {
-            if suppressFXTap {
-                suppressFXTap = false
-                return
-            }
             UIImpactFeedbackGenerator(style: .light).impactOccurred()
             onFX()
         }
         @objc func filmLong(_ gr: UILongPressGestureRecognizer) {
             guard gr.state == .began else { return }
-            suppressFilmTap = true
             UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.85)
             onFilmClear()
         }
         @objc func fxLong(_ gr: UILongPressGestureRecognizer) {
             guard gr.state == .began else { return }
-            suppressFXTap = true
             UIImpactFeedbackGenerator(style: .rigid).impactOccurred(intensity: 0.85)
             onFXClear()
         }
@@ -764,6 +754,10 @@ struct UIKitChromeLookButtons: UIViewRepresentable {
             film.tintColor = filmActive
                 ? UIColor(red: 1, green: 0.85, blue: 0.35, alpha: 1)
                 : UIColor.white.withAlphaComponent(0.8)
+            film.accessibilityLabel = "Film"
+            film.accessibilityValue = filmActive ? "On" : "Off"
+            film.accessibilityHint = "Opens film menu. Long press clears film."
+            film.accessibilityTraits = filmActive ? [.button, .selected] : [.button]
         }
         if let fx = stack.viewWithTag(2) as? UIButton {
             if peakingOnly {
@@ -773,6 +767,10 @@ struct UIKitChromeLookButtons: UIViewRepresentable {
             } else {
                 fx.tintColor = UIColor.white.withAlphaComponent(0.8)
             }
+            fx.accessibilityLabel = "Effects"
+            fx.accessibilityValue = peakingOnly ? "Focus peaking" : (fxActive ? "On" : "Off")
+            fx.accessibilityHint = "Opens effects menu. Long press clears effects."
+            fx.accessibilityTraits = (fxActive || peakingOnly) ? [.button, .selected] : [.button]
         }
     }
 
@@ -797,6 +795,9 @@ struct UIKitChromeLookButtons: UIViewRepresentable {
         b.addTarget(coord, action: tap, for: .touchUpInside)
         let lp = UILongPressGestureRecognizer(target: coord, action: longPress)
         lp.minimumPressDuration = 0.38
+        // UIKit cancels touchUpInside after recognition, so no tap suppression
+        // flag is needed (and such a flag swallowed the next real tap).
+        lp.cancelsTouchesInView = true
         b.addGestureRecognizer(lp)
         return b
     }

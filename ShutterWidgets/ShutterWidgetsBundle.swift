@@ -125,8 +125,17 @@ struct ShutterLaunchProvider: TimelineProvider {
         let ctx = ShutterCaptureContext.loadFromAppGroup()
         let frames = ShutterAppGroup.loadRecentFrames()
         // Prefer film from latest unculled frame when present.
-        let film = frames.first?.meta?.filmFilter.nilIfNone ?? ctx.filmName
-        let fx = frames.first?.meta?.lensFX.nilIfNone ?? ctx.lensFXName
+        // Explicit "None" means that frame was clean; do not relabel it with
+        // whatever look happens to be selected now.
+        let film: String
+        let fx: String
+        if let meta = frames.first?.meta {
+            film = meta.filmFilter == "None" ? "Clean" : meta.filmFilter
+            fx = meta.lensFX == "None" ? "None" : meta.lensFX
+        } else {
+            film = ctx.filmName
+            fx = ctx.lensFXName
+        }
         return ShutterLaunchEntry(
             date: Date(),
             film: film,
@@ -338,14 +347,6 @@ struct ShutterLaunchView: View {
             }
         }
         .padding(16)
-    }
-}
-
-private extension String {
-    var nilIfNone: String? {
-        let t = trimmingCharacters(in: .whitespacesAndNewlines)
-        if t.isEmpty || t == "None" || t == "—" { return nil }
-        return t
     }
 }
 

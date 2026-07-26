@@ -464,7 +464,8 @@ struct ContentView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .shutterHardwareShutter)) { _ in
-            guard !showPhotoBook, !showSettings, !isBurstHolding else { return }
+            guard !showPhotoBook, !showSettings, !isBurstHolding,
+                  !ChromePickerGate.isPresented else { return }
             handleCapture()
         }
         .modifier(ContentViewLifecycle(
@@ -1001,7 +1002,8 @@ struct ContentView: View {
             filmFilter = film
         }
         volumeShutter.onShutter = {
-            guard !showPhotoBook, !showSettings else { return }
+            guard !showPhotoBook, !showSettings,
+                  !ChromePickerGate.isPresented else { return }
             handleCapture()
         }
         DispatchQueue.main.async {
@@ -1049,7 +1051,7 @@ struct ContentView: View {
     }
 
     // Bind a captured frame into the Field Book with the live shot settings
-    private func recordShot(_ img: UIImage) {
+    private func recordShot(_ img: UIImage, completion: (() -> Void)? = nil) {
         let metadata = ShotMetadata(
             id: UUID(),
             date: Date(),
@@ -1061,7 +1063,7 @@ struct ContentView: View {
             lensFX: lensFX.name,
             focalLength: focalLength
         )
-        gallery.add(image: img, metadata: metadata)
+        gallery.add(image: img, metadata: metadata, completion: completion)
         // Dual-write to Photos; stash localIdentifier so cull can delete both sides.
         camera.saveToPhotoLibrary(img) { assetID in
             if let assetID {
@@ -1476,9 +1478,12 @@ struct ContentView: View {
         let framed = img.croppedToAspectMode(aspectRatio)
         lastCapturedImage = framed
         photoCount += 1
-        recordShot(framed)
-        // Rebuild widget stack from unculled gallery (not just blind push).
-        refreshWidgetRecents()
+        // Gallery publishes only after JPEG + thumb exist. Refreshing before
+        // this completion made widget recents one capture behind.
+        recordShot(framed) {
+            photoCount = gallery.shots.count
+            refreshWidgetRecents()
+        }
     }
 
     /// Push the 2 newest unculled frames (+ meta) into the App Group widget stack.
@@ -1490,7 +1495,7 @@ struct ContentView: View {
     static func pushUnculledWidgetRecents(from gallery: GalleryStore, marks: FrameMarkStore? = nil) {
         let markStore = marks ?? FrameMarkStore()
         let unculled = gallery.shots
-            .reversed()
+            .sorted { $0.date > $1.date }
             .filter { markStore.state(for: $0.id) != .reject }
             .prefix(ShutterAppGroup.recentThumbnailSlots)
         var frames: [ShutterAppGroup.WidgetRecentFrame] = []

@@ -67,7 +67,11 @@ final class GalleryStore: ObservableObject {
 
     // MARK: Shots
 
-    func add(image: UIImage, metadata: ShotMetadata) {
+    func add(
+        image: UIImage,
+        metadata: ShotMetadata,
+        completion: (() -> Void)? = nil
+    ) {
         // Write JPEG/thumb first so Darkroom never opens a blank frame.
         // Only publish metadata if the JPEG write succeeded.
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -85,7 +89,11 @@ final class GalleryStore: ObservableObject {
             }
             DispatchQueue.main.async {
                 self.shots.append(metadata)
+                // Burst JPEG writes can finish out of order. Keep the master
+                // roll chronological so `.last` and widget recents are honest.
+                self.shots.sort { $0.date < $1.date }
                 self.saveIndex()
+                completion?()
             }
         }
     }

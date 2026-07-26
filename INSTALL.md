@@ -8,13 +8,13 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 75 phone test pack (film FX pink freeze fix):**
+**Build 76 phone test pack (bug-fix pass):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **75**.
-Pick Portra / Tri-X / Gold — finder should show the look (with light grain), never solid pink.
-Long-press film/FX to clear.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **76**.
+Direct film choices stay selected, the first tap after long-press clear opens normally,
+pinch no longer changes EV, and widget recents update on the current shot.
 
 **Note:** Cmd+R uses empty Debug entitlements — widgets / Lock Screen capture
 need a Release or TestFlight build with App Groups enabled in the developer

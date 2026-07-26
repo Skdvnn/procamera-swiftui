@@ -767,6 +767,19 @@ def test_source_guards() -> None:
     check("CineStill bloom cropped", "result.cropped(to: bloomExtent)" in cam)
     check("preview normalize before CI", "Normalize origin before CI filters" in cam)
 
+    # Build 76 — bug-fix pass
+    photo_book = (ROOT / "PhotoBook.swift").read_text()
+    check("direct film clears old scene", "session.shootMode = nil" in vf)
+    check("long clear does not swallow next tap", "suppressFilmTap" not in vf and "suppressFXTap" not in vf)
+    check("film FX accessibility state", 'accessibilityLabel = "Film"' in vf and 'accessibilityLabel = "Effects"' in vf)
+    check("pinch does not drive pan", "panGesture.maximumNumberOfTouches = 1" in preview)
+    check("picker blocks hardware shutter", content.count("!ChromePickerGate.isPresented") >= 2)
+    check("gallery add completion", "completion?()" in photo_book)
+    check("gallery keeps chronological order", "self.shots.sort { $0.date < $1.date }" in photo_book)
+    check("widget refresh waits for gallery publish", "recordShot(framed) {" in content)
+    check("widget recents sort by date", ".sorted { $0.date > $1.date }" in content)
+    check("clean widget frame stays clean", 'meta.filmFilter == "None" ? "Clean"' in widgets)
+
 
 
 # ── Landscape layout invariants ─────────────────────────────────────────────
@@ -845,11 +858,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 75", m is not None and int(ver) >= 75, ver)
+    check("Info.plist build >= 76", m is not None and int(ver) >= 76, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 75+", any(v >= 75 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 76+", any(v >= 76 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

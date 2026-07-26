@@ -100,7 +100,9 @@ struct FilteredCameraPreview: UIViewRepresentable {
 
         // Pan drives exposure scrub (after focus) or morph FX.
         let panGesture = UIPanGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handlePan(_:)))
-        panGesture.maximumNumberOfTouches = 2
+        // Pinch owns two fingers. A two-finger pan used to change EV/morph
+        // while zooming whenever the pinch centroid drifted.
+        panGesture.maximumNumberOfTouches = 1
         // Don't steal vertical deck swipes near the bottom chrome.
         panGesture.delegate = context.coordinator
         view.addGestureRecognizer(panGesture)
@@ -184,6 +186,11 @@ struct FilteredCameraPreview: UIViewRepresentable {
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
+            // Zoom and EV/morph are mutually exclusive.
+            if gestureRecognizer is UIPinchGestureRecognizer,
+               otherGestureRecognizer is UIPanGestureRecognizer { return false }
+            if gestureRecognizer is UIPanGestureRecognizer,
+               otherGestureRecognizer is UIPinchGestureRecognizer { return false }
             // Hold-to-compare must not fight EV scrub / morph pan (Build 74).
             if gestureRecognizer is UILongPressGestureRecognizer,
                otherGestureRecognizer is UIPanGestureRecognizer { return false }
