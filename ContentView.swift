@@ -1460,7 +1460,7 @@ struct ContentView: View {
         }
     }
 
-    /// Push the 2 newest unculled frames (+ meta) into the App Group widget stack.
+    /// Push the newest unculled frames (+ meta + stats) into the App Group.
     private func refreshWidgetRecents() {
         ContentView.pushUnculledWidgetRecents(from: gallery)
     }
@@ -1489,6 +1489,18 @@ struct ContentView: View {
             frames.append(.init(image: img, meta: meta))
         }
         ShutterAppGroup.rebuildRecentFrames(frames)
+        // Stats span the whole gallery, not just the frames on the sheet.
+        ShutterAppGroup.saveStats(
+            ShutterStats.compute(
+                gallery.shots.map {
+                    ShutterStats.Entry(
+                        date: $0.date,
+                        film: $0.filmFilter,
+                        mark: markStore.state(for: $0.id).rawValue
+                    )
+                }
+            )
+        )
         WidgetCenter.shared.reloadAllTimelines()
     }
 
