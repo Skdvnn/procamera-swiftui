@@ -974,10 +974,13 @@ def text_line(pt: float) -> float:
     return round(pt * 1.25)
 
 
-def parse_int(chunk: str, pattern: str, name: str, fallback: int = 0) -> int:
-    m = re.search(pattern, chunk)
-    check(f"widget parses {name}", m is not None, pattern)
-    return int(m.group(1)) if m else fallback
+def parse_int(chunk: str, pattern: str, name: str, fallback: int = 0, last: bool = False) -> int:
+    """`last` picks the outer container padding over inner chrome padding."""
+    found = re.findall(pattern, chunk)
+    check(f"widget parses {name}", bool(found), pattern)
+    if not found:
+        return fallback
+    return int(found[-1] if last else found[0])
 
 
 def test_widget_content() -> None:
@@ -1039,7 +1042,7 @@ def test_widget_content() -> None:
     _, med_h = WIDGET_BOX["medium"]
     _, large_h = WIDGET_BOX["large"]
 
-    pad = parse_int(medium, r"\.padding\((\d+)\)", "launch medium padding", 14)
+    pad = parse_int(medium, r"\.padding\((\d+)\)", "launch medium padding", 12, last=True)
     gap = parse_int(medium, r"VStack\(alignment: \.leading, spacing: (\d+)\)", "launch medium gap", 6)
     bars = parse_int(medium, r"barHeight: (\d+)", "launch medium bar height", 24)
     sheet = parse_int(medium, r"\.frame\(width: 122, height: (\d+)\)", "launch medium sheet", 96)
@@ -1056,7 +1059,7 @@ def test_widget_content() -> None:
     check("launch medium sheet fits", right <= budget, f"{right}pt in {budget}pt")
 
     looks = source_chunk(wsrc, "struct ShutterLooksView", "// MARK: - Lock Screen")
-    lpad = parse_int(looks, r"\.padding\((\d+)\)", "looks padding", 12)
+    lpad = parse_int(looks, r"\.padding\((\d+)\)", "looks padding", 12, last=True)
     lgap = parse_int(looks, r"spacing: family == \.systemLarge \? \d+ : (\d+)", "looks medium gap", 6)
     chip = parse_int(looks, r"minHeight: family == \.systemLarge \? \d+ : (\d+)", "looks chip", 30)
     strip = parse_int(looks, r"\.frame\(width: 132, height: (\d+)\)", "looks strip", 34)
@@ -1082,7 +1085,7 @@ def test_widget_content() -> None:
         f"{looks_large}pt in {large_h - lpad * 2}pt",
     )
 
-    lgpad = parse_int(large, r"\.padding\((\d+)\)", "launch large padding", 16)
+    lgpad = parse_int(large, r"\.padding\((\d+)\)", "launch large padding", 16, last=True)
     lggap = parse_int(large, r"VStack\(alignment: \.leading, spacing: (\d+)\)", "launch large gap", 9)
     lgbars = parse_int(large, r"barHeight: (\d+)", "launch large bars", 28)
     header = max(
@@ -1117,6 +1120,21 @@ def main() -> int:
     check("visual film dock case", "film dock clears shutter: yes" in viz_report)
     check("visual shutter z-order", "shutter z-order above histogram: yes" in viz_report)
     check("visual landscape expanded", "landscape expanded hist↔shutter gap:" in viz_report)
+    print("\n== Widget preview render ==")
+    w = subprocess.run([sys.executable, str(ROOT / "scripts/widget_layout_preview.py")], cwd=ROOT)
+    check("widget_layout_preview.py", w.returncode == 0, f"exit {w.returncode}")
+    widget_dir = ROOT / "docs" / "widget-preview"
+    for name in (
+        "launch-small.png",
+        "launch-medium.png",
+        "launch-large.png",
+        "looks-medium.png",
+        "looks-large.png",
+        "lock-accessories.png",
+        "widget-preview.png",
+    ):
+        check(f"widget artifact {name}", (widget_dir / name).is_file())
+
     viz_dir = ROOT / "docs" / "visual-regression"
     for name in (
         "expanded-layout.png",
