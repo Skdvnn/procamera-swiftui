@@ -10,6 +10,8 @@
 - [x] `ShutterCameraCaptureIntent` + `ShutterCaptureContext` (iOS 18 Camera Control / Lock Screen)
 - [x] Widget extension: Home small/medium/large launch, Looks grid, Lock Screen circular + rectangular + inline
 - [x] Widget content (build 83): six-frame contact sheet, seven-day frame histogram, keep/reject/unculled counts, top stock, 36-exposure roll gauge
+- [x] Widget live data (build 92): Photos **Shutter** album fallback when App Group is empty (Debug Cmd+R); every dual-write mirrors into that album
+- [x] Widget chrome (build 92): vulcanite body, LCD yellow, film-sprocket contact sheet, metal shutter control — matched to in-camera DSLR look
 - [x] `WidgetCenter.reloadAllTimelines()` after look/context sync
 - [x] Control Center control widget (iOS 18)
 - [x] Locked Camera Capture extension (iOS 18 Lock Screen / Action Button / Control)
@@ -22,7 +24,10 @@
    - `com.skylardann.filmcam` (main app)
    - `com.skylardann.filmcam.widgets` (widget extension)
    - `com.skylardann.filmcam.capture` (Locked Camera Capture extension)
-2. Archive a **Release** / TestFlight build (Debug entitlements are intentionally empty — Cmd+R will not exercise widgets or Lock capture).
+2. Archive a **Release** / TestFlight build for full App Group meta (exposure / film / cull marks).
+   **Cmd+R Debug** still works for widgets via the Photos Shutter album fallback
+   (grant Photos access; shoot a few frames; widget timelines refresh ~90s or on
+   next capture in Release).
 3. Settings → Control Center → add **Shutter Cam**; Action Button / Camera Control can target the control.
 4. Long-press Home Screen → Widgets → Shutter Cam / Shutter Looks.
    The app rewrites the App Group sheet + stats on every capture and cull, and

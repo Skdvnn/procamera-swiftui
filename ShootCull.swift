@@ -4,6 +4,7 @@ import SwiftUI
 import Photos
 import CoreLocation
 import Combine
+import WidgetKit
 
 // MARK: - Tunable session clustering
 
@@ -252,7 +253,9 @@ enum PhotosLibraryService {
         PHPhotoLibrary.requestAuthorization(for: .readWrite, handler: completion)
     }
 
-    /// Saves image to the camera roll and returns the new asset localIdentifier.
+    /// Saves image to the camera roll, mirrors it into the Shutter album (so
+    /// Home Screen widgets can find frames even when App Groups are off), and
+    /// returns the new asset localIdentifier.
     static func saveImage(_ image: UIImage, completion: @escaping (String?) -> Void) {
         requestReadWrite { status in
             guard status == .authorized || status == .limited else {
@@ -264,11 +267,37 @@ enum PhotosLibraryService {
                 let req = PHAssetCreationRequest.creationRequestForAsset(from: image)
                 placeholderID = req.placeholderForCreatedAsset?.localIdentifier
             }, completionHandler: { success, _ in
+                let id = success ? placeholderID : nil
+                if let id {
+                    // Second change block — album create uses performChangesAndWait
+                    // and cannot nest inside the save above.
+                    addAssetsToShutterAlbum(localIdentifiers: [id])
+                }
                 DispatchQueue.main.async {
-                    completion(success ? placeholderID : nil)
+                    completion(id)
                 }
             })
         }
+    }
+
+    /// Best-effort mirror into the shared Shutter album for widget Photos fallback.
+    static func addAssetsToShutterAlbum(localIdentifiers: [String]) {
+        guard !localIdentifiers.isEmpty else { return }
+        guard let album = fetchOrCreateAlbum(named: albumTitle) else { return }
+        let assets = PHAsset.fetchAssets(withLocalIdentifiers: localIdentifiers, options: nil)
+        guard assets.count > 0 else { return }
+        PHPhotoLibrary.shared().performChanges({
+            guard let add = PHAssetCollectionChangeRequest(for: album) else { return }
+            add.addAssets(assets)
+        }, completionHandler: { success, error in
+            if let error { print("Shutter album mirror failed: \(error)") }
+            // Debug builds have no App Group — nudge WidgetKit to re-read Photos.
+            if success {
+                DispatchQueue.main.async {
+                    WidgetCenter.shared.reloadAllTimelines()
+                }
+            }
+        })
     }
 
     static func setFavorite(assetLocalIdentifier: String?, favorite: Bool) {

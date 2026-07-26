@@ -23,5 +23,7 @@
 	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Shutter Cam uses the camera for Lock Screen and Control Center capture.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Shutter widgets read your recent Shutter frames from Photos when App Group sync is unavailable.</string>
 </dict>
 </plist>

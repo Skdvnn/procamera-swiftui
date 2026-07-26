@@ -8,31 +8,23 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 91 phone test pack (memory jetsam guards):**
+**Build 92 phone test pack (live widgets + memory guards):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **91**.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **92**.
+Widgets pull real frames from the Photos **Shutter** album when App Groups are
+off (Debug Cmd+R), and the faces use the same vulcanite / LCD yellow chrome as
+the camera. Shoot a few frames, grant Photos access if asked, then long-press
+the Home Screen widget to refresh.
+
+Build 92 lands the live-widget Photos fallback + camera-matched chrome on top
+of Build 91's memory jetsam guards (harder FX downsample, capped Metal
+drawable, STACK LE throttle, background / memory-warning purges).
 
 Build 91: live FX preview downscales harder, Metal drawable is capped,
 STACK LE is throttled, and background / memory-warning purges drop the
 filtered frames so Debug stops jetsamming under liquid FX.
-Bottom ISO/S scrubbers are back on the classic `#242424` face with yellow
-major ticks; top FOCUS / level / EV stay on the black instrument strip at
-38pt; shutter collar is muted dark steel again.
-
-Build 82 is 81 plus a fix found by the test sweep: the widget and Lock Screen
-capture extensions were still stamped build 77 while the app moved to 81, which
-iOS treats as a bad bundle at install time. Both now inherit
-`$(CURRENT_PROJECT_VERSION)`, so they can never drift again.
-
-Build 83 fills the widgets. The App Group keeps six frames instead of two and
-carries a stats blob, so the Home Screen shows a numbered contact sheet, a
-seven-day frame histogram, and keep / unculled counts; the Looks widget marks
-which look is armed; and the Lock Screen circular becomes a 36-exposure roll
-gauge with a new inline accessory for the count above the clock. Widgets need a
-**Release / TestFlight** build to read the App Group — Cmd+R Debug entitlements
-are empty, so widget content stays on placeholders there.
 
 Build 90: bottom ISO/S classic grey + yellow majors restored; top strip
 38pt (34 was stubby); shutter collar muted (mid-bright ring was too strong).
@@ -53,9 +45,15 @@ Build 84: settings is always a dark liquid glass sheet with machined wells
 black instrument face as the ISO scrubbers. Shutter collar is brushed mid
 steel again so the outer ring doesn't disappear into the deck.
 
-**Note:** Cmd+R uses empty Debug entitlements — widgets / Lock Screen capture
-need a Release or TestFlight build with App Groups enabled in the developer
-portal (`group.com.skylardann.filmcam` on app + widgets + capture). See
+Build 83 fills the widgets. The App Group keeps six frames instead of two and
+carries a stats blob, so the Home Screen shows a numbered contact sheet, a
+seven-day frame histogram, and keep / unculled counts; the Looks widget marks
+which look is armed; and the Lock Screen circular becomes a 36-exposure roll
+gauge with a new inline accessory for the count above the clock.
+
+**Note:** Release / TestFlight still uses the App Group
+(`group.com.skylardann.filmcam`) for the richest meta (exposure, film, cull
+marks). Debug relies on Photos for images + counts. See
 [`docs/IOS_INTEGRATION.md`](docs/IOS_INTEGRATION.md). Film looks bake in the
 full app only from Lock Screen (system camera path).
 

@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import UIKit
+import Photos
 
 // MARK: - Deep links (Shortcuts, widgets, quick actions)
 
@@ -226,10 +227,18 @@ enum ShutterAppGroup {
     }
 
     static func loadStats() -> ShutterStats {
-        guard let data = defaults.data(forKey: statsKey),
-              let stats = try? JSONDecoder().decode(ShutterStats.self, from: data)
-        else { return ShutterStats() }
-        return stats
+        if let data = defaults.data(forKey: statsKey),
+           let stats = try? JSONDecoder().decode(ShutterStats.self, from: data),
+           stats.hasHistory {
+            return stats
+        }
+        // App Group empty or Debug without entitlements — derive from Photos.
+        if let photos = loadPhotosFallbackStats() { return photos }
+        if let data = defaults.data(forKey: statsKey),
+           let stats = try? JSONDecoder().decode(ShutterStats.self, from: data) {
+            return stats
+        }
+        return ShutterStats()
     }
 
     /// Downsample + persist newest still for widget stacks (App Group).
@@ -294,7 +303,18 @@ enum ShutterAppGroup {
     }
 
     /// Newest first with sidecar metadata when present.
+    /// Prefers the App Group sheet written by the host app; when that container
+    /// is empty (Cmd+R Debug has no App Groups, or a fresh install), falls back
+    /// to the Photos "Shutter" album / recent camera-roll stills so the widget
+    /// still shows the user's real frames.
     static func loadRecentFrames(max: Int = recentThumbnailSlots) -> [WidgetRecentFrame] {
+        let local = loadAppGroupFrames(max: max)
+        if !local.isEmpty { return local }
+        return loadPhotosFallbackFrames(max: max)
+    }
+
+    /// App Group only — no Photos hop. Used by the stats reconciler.
+    static func loadAppGroupFrames(max: Int = recentThumbnailSlots) -> [WidgetRecentFrame] {
         guard let dir = recentsDirectoryURL else { return [] }
         var out: [WidgetRecentFrame] = []
         for i in 0..<max {
@@ -311,6 +331,151 @@ enum ShutterAppGroup {
             out.append(WidgetRecentFrame(image: img, meta: meta))
         }
         return out
+    }
+
+    /// Whether the App Group container is actually usable from this process.
+    /// Debug entitlements leave this false so widgets must use Photos.
+    static var appGroupAvailable: Bool {
+        containerURL != nil
+            && UserDefaults(suiteName: id) != nil
+    }
+
+    // MARK: Photos fallback (Debug / empty App Group)
+
+    /// Pull recent stills from the Photos "Shutter" album, or the camera roll
+    /// when that album hasn't been seeded yet. Synchronous — WidgetKit timeline
+    /// providers run off the main actor and need the images before returning.
+    static func loadPhotosFallbackFrames(max: Int = recentThumbnailSlots) -> [WidgetRecentFrame] {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status == .authorized || status == .limited else { return [] }
+
+        let assets = fetchShutterPhotoAssets(limit: max)
+        guard !assets.isEmpty else { return [] }
+
+        var out: [WidgetRecentFrame] = []
+        let manager = PHImageManager.default()
+        let opts = PHImageRequestOptions()
+        opts.deliveryMode = .fastFormat
+        opts.resizeMode = .fast
+        opts.isNetworkAccessAllowed = false
+        opts.isSynchronous = true
+
+        let target = CGSize(width: 360, height: 360)
+        for asset in assets {
+            var image: UIImage?
+            manager.requestImage(
+                for: asset,
+                targetSize: target,
+                contentMode: .aspectFill,
+                options: opts
+            ) { result, _ in
+                image = result
+            }
+            guard let image else { continue }
+            let captured = asset.creationDate ?? Date()
+            let meta = WidgetRecentMeta(
+                shotID: asset.localIdentifier,
+                capturedAt: captured.timeIntervalSince1970,
+                iso: 0,
+                shutter: "",
+                aperture: 0,
+                filmFilter: "None",
+                lensFX: "None",
+                focalLength: 0,
+                mark: asset.isFavorite ? "keep" : "unmarked"
+            )
+            out.append(WidgetRecentFrame(image: image, meta: meta))
+            if out.count >= max { break }
+        }
+        return out
+    }
+
+    /// Prefer the dedicated Shutter album; otherwise recent camera-roll stills.
+    static func fetchShutterPhotoAssets(limit: Int) -> [PHAsset] {
+        let opts = PHFetchOptions()
+        opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        opts.fetchLimit = limit
+
+        // Named album first — only contains frames this app dual-wrote.
+        let albums = PHAssetCollection.fetchAssetCollections(
+            with: .album, subtype: .any, options: nil
+        )
+        var shutterAlbum: PHAssetCollection?
+        albums.enumerateObjects { collection, _, stop in
+            if collection.localizedTitle == "Shutter" {
+                shutterAlbum = collection
+                stop.pointee = true
+            }
+        }
+        if let shutterAlbum {
+            let result = PHAsset.fetchAssets(in: shutterAlbum, options: opts)
+            if result.count > 0 {
+                var assets: [PHAsset] = []
+                result.enumerateObjects { asset, _, _ in
+                    if asset.mediaType == .image { assets.append(asset) }
+                }
+                if !assets.isEmpty { return assets }
+            }
+        }
+
+        // Camera roll fallback so a brand-new install still fills the sheet
+        // before the first cull export creates the album.
+        opts.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+        let recent = PHAsset.fetchAssets(with: .image, options: opts)
+        var assets: [PHAsset] = []
+        recent.enumerateObjects { asset, _, stop in
+            assets.append(asset)
+            if assets.count >= limit { stop.pointee = true }
+        }
+        return assets
+    }
+
+    /// Stats derived from Photos when the App Group blob is missing.
+    static func loadPhotosFallbackStats() -> ShutterStats? {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status == .authorized || status == .limited else { return nil }
+
+        // A wider window than the contact sheet so the week histogram is honest.
+        let opts = PHFetchOptions()
+        opts.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
+        opts.fetchLimit = 400
+        opts.predicate = NSPredicate(format: "mediaType == %d", PHAssetMediaType.image.rawValue)
+
+        var entries: [ShutterStats.Entry] = []
+        let albums = PHAssetCollection.fetchAssetCollections(
+            with: .album, subtype: .any, options: nil
+        )
+        var shutterAlbum: PHAssetCollection?
+        albums.enumerateObjects { collection, _, stop in
+            if collection.localizedTitle == "Shutter" {
+                shutterAlbum = collection
+                stop.pointee = true
+            }
+        }
+
+        let result: PHFetchResult<PHAsset>
+        if let shutterAlbum {
+            let albumOpts = PHFetchOptions()
+            albumOpts.sortDescriptors = opts.sortDescriptors
+            albumOpts.fetchLimit = 400
+            result = PHAsset.fetchAssets(in: shutterAlbum, options: albumOpts)
+        } else {
+            result = PHAsset.fetchAssets(with: .image, options: opts)
+        }
+
+        result.enumerateObjects { asset, _, stop in
+            guard let date = asset.creationDate else { return }
+            entries.append(
+                ShutterStats.Entry(
+                    date: date,
+                    film: "",
+                    mark: asset.isFavorite ? "keep" : "unmarked"
+                )
+            )
+            if entries.count >= 400 { stop.pointee = true }
+        }
+        guard !entries.isEmpty else { return nil }
+        return ShutterStats.compute(entries)
     }
 }
 
