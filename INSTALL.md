@@ -8,13 +8,16 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 98 phone test pack (shutter pushes in, not down):**
+**Build 99 phone test pack (settings sheet polish):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **98**.
-Shutter face scales into the well on press instead of sliding down the
-screen — collar stays put, travel reads as push-in depth.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **99**.
+Settings: pure black + blur (no fake top liquid glass), muted section
+headers, yellow only for state, consistent clipped wells, leading
+“Settings” title (not centered ALL CAPS), DS.mono throughout.
+
+Build 98: shutter presses in (scale) instead of sliding down.
 
 Build 97: taller finder + top yellow only on focused tick.
 
