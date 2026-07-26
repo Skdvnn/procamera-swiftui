@@ -106,11 +106,11 @@ enum ChromePickerMenu: String, Identifiable, CaseIterable {
 
 /// Snapshot of looks for the picker window — never a Binding into ContentView.
 @MainActor
-final class ChromePickerSession: ObservableObject {
+final class ChromePickerSession {
     let menu: ChromePickerMenu
-    @Published var filmFilter: FilmFilterMode
-    @Published var lensFX: LensFXMode
-    @Published var focusPeaking: Bool
+    var filmFilter: FilmFilterMode
+    var lensFX: LensFXMode
+    var focusPeaking: Bool
     var shootMode: ShootMode?
     var compactChrome: Bool
 
@@ -141,9 +141,10 @@ struct ChromePickerCommit {
     var saveLook: Bool
 }
 
-/// Presents film/FX/looks in a **separate UIWindow**.
-/// Modal-on-camera-window and SwiftUI fullScreenCover both still walked the
-/// Metal finder AttributeGraph (device EXC_BAD_ACCESS / MetadataCache).
+/// Presents film/FX/looks in a **separate UIWindow** with a **UIKit** table —
+/// no UIHostingController. SwiftUI hosting (even off-camera) still hit
+/// `swift::_getWitnessTable` / MetadataCache on device when opened from the
+/// Metal finder chrome.
 @MainActor
 enum ChromePickerGate {
     private static var overlayWindow: UIWindow?
@@ -153,6 +154,8 @@ enum ChromePickerGate {
     /// Called when the overlay window is gone. `willCommit` is true when a
     /// commit block will run on the next turn — keep Metal parked until then.
     private static var onTeardown: ((Bool) -> Void)?
+    /// Park live Metal *after* the touch ends, just before the window appears.
+    private static var onWillPresent: (() -> Void)?
     private static var filmAppliedDirectly = false
     private static var pendingSaveLook = false
     /// Invalidates a deferred present if dismiss raced ahead of it.
@@ -176,12 +179,11 @@ enum ChromePickerGate {
         currentMenu = nil
         onCommit = nil
         onTeardown = nil
+        onWillPresent = nil
         filmAppliedDirectly = false
         pendingSaveLook = false
 
         let willCommit = commit && sess != nil && commitHandler != nil
-        // Film AND Lens FX / looks: never resume live Metal in the same turn as
-        // window teardown — applying Liquid/VHS/etc. mid-invalidation crashed.
         teardown?(willCommit)
 
         guard willCommit, let sess, let commitHandler else { return }
@@ -206,25 +208,26 @@ enum ChromePickerGate {
         focusPeaking: Bool,
         shootMode: ShootMode?,
         compactChrome: Bool,
+        onWillPresent: (() -> Void)? = nil,
         onCommit: @escaping (ChromePickerCommit) -> Void,
         onTeardown: ((Bool) -> Void)? = nil
     ) {
-        // Same path for .film, .fx, and .looks — effects are not special-cased.
-        if currentMenu == menu, overlayWindow != nil {
-            dismiss(commit: true)
-            return
-        }
-        if overlayWindow != nil {
-            dismiss(commit: true)
-        }
+        // EVERYTHING deferred — sync dismiss/present on the Metal-chrome button
+        // turn was freezing the finder (FPS collapse → EXC_BAD_ACCESS witness table).
         let token = UUID()
         presentationToken = token
-        // Defer off the button's touch transaction — presenting mid-touch
-        // next to Metal was still crashing on device (film AND FX buttons).
-        DispatchQueue.main.async {
+        self.onWillPresent = onWillPresent
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
             guard presentationToken == token else {
                 onTeardown?(false)
                 return
+            }
+            if currentMenu == menu, overlayWindow != nil {
+                dismiss(commit: true)
+                return
+            }
+            if overlayWindow != nil {
+                dismiss(commit: true)
             }
             present(
                 menu,
@@ -254,6 +257,10 @@ enum ChromePickerGate {
             return
         }
 
+        // Park Metal only now — never from the SwiftUI button action.
+        onWillPresent?()
+        onWillPresent = nil
+
         let sess = ChromePickerSession(
             menu: menu,
             filmFilter: filmFilter,
@@ -269,27 +276,21 @@ enum ChromePickerGate {
         filmAppliedDirectly = false
         pendingSaveLook = false
 
-        let cover = ChromePickerCover(
+        let vc = ChromePickerViewController(
             session: sess,
             onFilmApplied: { filmAppliedDirectly = true },
             onSaveLook: { pendingSaveLook = true },
             onApplyShootMode: { mode in
                 sess.shootMode = mode
-                // Scene presets also imply dials — commit closes so ContentView can apply.
-                // Do NOT also flip isPresented — that double-dismissed.
                 dismiss(commit: true)
             },
             onDismiss: { dismiss(commit: true) }
         )
 
-        let host = UIHostingController(rootView: cover)
-        host.view.backgroundColor = .clear
-        host.view.isOpaque = false
-
         let window = UIWindow(windowScene: scene)
         window.windowLevel = .alert + 1
         window.backgroundColor = .clear
-        window.rootViewController = host
+        window.rootViewController = vc
         window.isHidden = false
         window.makeKeyAndVisible()
         overlayWindow = window
@@ -297,8 +298,208 @@ enum ChromePickerGate {
 
     private static func activeWindowScene() -> UIWindowScene? {
         let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
-        // Foreground-active only — never attach an orphan picker to a background scene.
         return scenes.first(where: { $0.activationState == .foregroundActive })
+    }
+}
+
+// MARK: - Pure UIKit chrome picker (no SwiftUI / no witness tables)
+@MainActor
+final class ChromePickerViewController: UIViewController, UITableViewDataSource, UITableViewDelegate {
+    private enum Row {
+        case section(String)
+        case scene(ShootMode)
+        case film(FilmFilterMode)
+        case peaking
+        case fx(LensFXMode)
+        case recipe(LookRecipe)
+        case emptyLooks
+        case save
+    }
+
+    private let session: ChromePickerSession
+    private let onFilmApplied: () -> Void
+    private let onSaveLook: () -> Void
+    private let onApplyShootMode: (ShootMode) -> Void
+    private let onDismiss: () -> Void
+    private var rows: [Row] = []
+    private let table = UITableView(frame: .zero, style: .plain)
+    private let panel = UIView()
+
+    init(
+        session: ChromePickerSession,
+        onFilmApplied: @escaping () -> Void,
+        onSaveLook: @escaping () -> Void,
+        onApplyShootMode: @escaping (ShootMode) -> Void,
+        onDismiss: @escaping () -> Void
+    ) {
+        self.session = session
+        self.onFilmApplied = onFilmApplied
+        self.onSaveLook = onSaveLook
+        self.onApplyShootMode = onApplyShootMode
+        self.onDismiss = onDismiss
+        super.init(nibName: nil, bundle: nil)
+        rebuildRows()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = UIColor.black.withAlphaComponent(0.35)
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(dimTapped(_:)))
+        tap.cancelsTouchesInView = false
+        view.addGestureRecognizer(tap)
+
+        panel.backgroundColor = UIColor(red: 0.08, green: 0.08, blue: 0.08, alpha: 0.96)
+        panel.layer.cornerRadius = 10
+        panel.layer.borderWidth = 1
+        panel.layer.borderColor = UIColor(white: 0.22, alpha: 1).cgColor
+        panel.clipsToBounds = true
+        view.addSubview(panel)
+
+        table.backgroundColor = .clear
+        table.separatorStyle = .none
+        table.dataSource = self
+        table.delegate = self
+        table.rowHeight = UITableView.automaticDimension
+        table.estimatedRowHeight = 40
+        table.showsVerticalScrollIndicator = false
+        table.register(UITableViewCell.self, forCellReuseIdentifier: "cell")
+        panel.addSubview(table)
+
+        layoutPanel()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        layoutPanel()
+    }
+
+    private func layoutPanel() {
+        let compact = session.compactChrome
+        let width: CGFloat = session.menu == .looks ? 210 : (session.menu == .film ? 200 : 188)
+        let maxH: CGFloat = compact ? 280 : 340
+        let top: CGFloat = {
+            switch session.menu {
+            case .film: return compact ? 48 : 100
+            case .fx: return compact ? 72 : 140
+            case .looks: return compact ? 96 : 180
+            }
+        }()
+        let trailing: CGFloat = compact ? 10 : 16
+        let x = view.bounds.width - trailing - width
+        let h = min(maxH, view.bounds.height - top - 24)
+        panel.frame = CGRect(x: x, y: top, width: width, height: h)
+        table.frame = panel.bounds.insetBy(dx: 0, dy: 4)
+    }
+
+    private func rebuildRows() {
+        switch session.menu {
+        case .film:
+            rows = [.section("SCENE")]
+            rows += ShootMode.allCases.map { .scene($0) }
+            rows.append(.section("FILM"))
+            rows += FilmFilterMode.allCases.map { .film($0) }
+            rows.append(.save)
+        case .fx:
+            rows = [.section("AIDS"), .peaking, .section("WARP")]
+            rows += LensFXMode.pickerCases.filter { $0 == .none || $0.pickerSection == .warp }.map { .fx($0) }
+            rows.append(.section("LOOK"))
+            rows += LensFXMode.pickerCases.filter { $0 != .none && $0.pickerSection == .look }.map { .fx($0) }
+        case .looks:
+            rows = [.save]
+            let recipes = LookRecipeStore.shared.recipes
+            if recipes.isEmpty {
+                rows.append(.emptyLooks)
+            } else {
+                rows += recipes.map { .recipe($0) }
+            }
+        }
+    }
+
+    @objc private func dimTapped(_ gr: UITapGestureRecognizer) {
+        let p = gr.location(in: view)
+        if !panel.frame.contains(p) { onDismiss() }
+    }
+
+    func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int { rows.count }
+
+    func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
+        cell.backgroundColor = .clear
+        cell.selectionStyle = .none
+        cell.textLabel?.numberOfLines = 2
+        cell.textLabel?.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        cell.textLabel?.textColor = UIColor.white.withAlphaComponent(0.7)
+        cell.accessoryType = .none
+
+        switch rows[indexPath.row] {
+        case .section(let title):
+            cell.textLabel?.text = title
+            cell.textLabel?.font = .monospacedSystemFont(ofSize: 8, weight: .semibold)
+            cell.textLabel?.textColor = UIColor.white.withAlphaComponent(0.35)
+        case .scene(let mode):
+            let on = session.shootMode == mode
+            cell.textLabel?.text = (on ? "> " : "  ") + mode.title.uppercased() + "\n  " + mode.blurb.uppercased()
+            cell.textLabel?.textColor = on ? .white : UIColor.white.withAlphaComponent(0.65)
+            cell.textLabel?.font = .monospacedSystemFont(ofSize: 11, weight: on ? .semibold : .regular)
+        case .film(let filter):
+            let on = session.filmFilter == filter
+            cell.textLabel?.text = (on ? "> " : "  ") + filter.name.uppercased()
+            cell.textLabel?.textColor = on ? .white : UIColor.white.withAlphaComponent(0.65)
+            cell.textLabel?.font = .monospacedSystemFont(ofSize: 11, weight: on ? .semibold : .regular)
+        case .peaking:
+            let on = session.focusPeaking
+            cell.textLabel?.text = (on ? "> " : "  ") + "PEAKING  " + (on ? "ON" : "OFF")
+            cell.textLabel?.textColor = on ? UIColor(red: 0.35, green: 0.95, blue: 0.45, alpha: 1) : UIColor.white.withAlphaComponent(0.65)
+        case .fx(let fx):
+            let on = session.lensFX == fx
+            let badge = fx == .none ? "" : "  \(fx.badge)"
+            cell.textLabel?.text = (on ? "> " : "  ") + fx.name.uppercased() + badge
+            cell.textLabel?.textColor = on ? .white : UIColor.white.withAlphaComponent(0.65)
+            cell.textLabel?.font = .monospacedSystemFont(ofSize: 11, weight: on ? .semibold : .regular)
+        case .recipe(let recipe):
+            cell.textLabel?.text = recipe.name.uppercased() + "\n" + recipe.subtitle.uppercased()
+            cell.textLabel?.textColor = .white
+        case .emptyLooks:
+            cell.textLabel?.text = "Save film + FX combos\nfor one-tap recall."
+            cell.textLabel?.textColor = UIColor.white.withAlphaComponent(0.4)
+            cell.textLabel?.textAlignment = .center
+        case .save:
+            cell.textLabel?.text = session.menu == .looks ? "  SAVE" : "  SAVE LOOK"
+            cell.textLabel?.textColor = UIColor(red: 1, green: 0.75, blue: 0.45, alpha: 1)
+            cell.textLabel?.font = .monospacedSystemFont(ofSize: 10, weight: .semibold)
+        }
+        return cell
+    }
+
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        switch rows[indexPath.row] {
+        case .section, .emptyLooks:
+            return
+        case .scene(let mode):
+            onApplyShootMode(mode)
+        case .film(let filter):
+            session.filmFilter = filter
+            onFilmApplied()
+            onDismiss()
+        case .peaking:
+            session.focusPeaking.toggle()
+            tableView.reloadRows(at: [indexPath], with: .none)
+        case .fx(let fx):
+            session.lensFX = fx
+            onDismiss()
+        case .recipe(let recipe):
+            session.filmFilter = recipe.film
+            session.lensFX = recipe.lensFX
+            onDismiss()
+        case .save:
+            onSaveLook()
+            onDismiss()
+        }
     }
 }
 
@@ -316,18 +517,13 @@ struct ViewfinderOverlay: View {
     var onTogglePicker: ((ChromePickerMenu) -> Void)? = nil
 
     var body: some View {
-        // Chrome ONLY — pickers are UIKit-presented (ChromePickerGate).
-        // Never insert picker views next to FilteredCameraPreview / MTKView.
-        // Never @ObservedObject LookRecipeStore here — that invalidated the
-        // Metal-adjacent tree when recipes changed.
+        // Chrome ONLY — pickers are pure UIKit (ChromePickerGate).
+        // No SwiftUI film/FX buttons here: UIButton avoids AttributeGraph
+        // walking the Metal preview on press (_getWitnessTable crash).
+        // No grain/scanline SwiftUI overlays next to MTKView — CI owns looks.
         ZStack(alignment: .topTrailing) {
             GeometryReader { geo in
                 ZStack {
-                    // Keep overlays mounted — insert/remove next to MTKView was risky.
-                    FilmGrainOverlay()
-                        .opacity(filmFilter != .none ? 0.32 : 0)
-                    ScanlineShaderOverlay()
-                        .opacity(lensFX == .vhs ? 1 : 0)
                     CenterFocusBrackets()
                         .position(x: geo.size.width / 2, y: geo.size.height / 2)
                     if showGrid {
@@ -363,39 +559,15 @@ struct ViewfinderOverlay: View {
 
                     Spacer().allowsHitTesting(false)
 
-                    VStack(spacing: 8) {
-                        chromeButton {
-                            onTogglePicker?(.film)
-                        } label: {
-                            Image(systemName: "film")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(filmFilter != .none
-                                                 ? Color(red: 1.0, green: 0.85, blue: 0.35)
-                                                 : .white.opacity(0.8))
-                        }
-
-                        chromeButton {
-                            onTogglePicker?(.fx)
-                        } label: {
-                            Image(systemName: "water.waves")
-                                .font(.system(size: 13, weight: .medium))
-                                .foregroundColor(lensFX != .none || focusPeaking
-                                                 ? (focusPeaking && lensFX == .none
-                                                    ? Color(red: 0.35, green: 0.95, blue: 0.45)
-                                                    : Color(red: 0.55, green: 0.88, blue: 0.95))
-                                                 : .white.opacity(0.8))
-                        }
-
-                        chromeButton {
-                            onTogglePicker?(.looks)
-                        } label: {
-                            Image(systemName: "bookmark.fill")
-                                .font(.system(size: 12, weight: .medium))
-                                // No LookRecipeStore read here — shared store access from
-                                // the Metal-adjacent tree correlated with device crashes.
-                                .foregroundColor(.white.opacity(0.8))
-                        }
-                    }
+                    UIKitChromeLookButtons(
+                        filmActive: filmFilter != .none,
+                        fxActive: lensFX != .none,
+                        peakingOnly: focusPeaking && lensFX == .none,
+                        onFilm: { onTogglePicker?(.film) },
+                        onFX: { onTogglePicker?(.fx) },
+                        onLooks: { onTogglePicker?(.looks) }
+                    )
+                    .frame(width: 32, height: 32 * 3 + 8 * 2)
                     .padding(compactChrome ? 10 : 16)
                 }
                 Spacer().allowsHitTesting(false)
@@ -420,6 +592,90 @@ struct ViewfinderOverlay: View {
             }
         }
         .buttonStyle(.plain)
+    }
+}
+
+/// UIKit film / FX / looks toggles — never SwiftUI `Button` next to MTKView.
+struct UIKitChromeLookButtons: UIViewRepresentable {
+    var filmActive: Bool
+    var fxActive: Bool
+    var peakingOnly: Bool
+    var onFilm: () -> Void
+    var onFX: () -> Void
+    var onLooks: () -> Void
+
+    final class Coordinator {
+        var onFilm: () -> Void = {}
+        var onFX: () -> Void = {}
+        var onLooks: () -> Void = {}
+        @objc func film() {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            onFilm()
+        }
+        @objc func fx() {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            onFX()
+        }
+        @objc func looks() {
+            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+            onLooks()
+        }
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIStackView {
+        let stack = UIStackView()
+        stack.axis = .vertical
+        stack.spacing = 8
+        stack.alignment = .center
+        stack.distribution = .equalSpacing
+
+        let film = makeCircleButton(systemName: "film", action: #selector(Coordinator.film), coord: context.coordinator)
+        let fx = makeCircleButton(systemName: "water.waves", action: #selector(Coordinator.fx), coord: context.coordinator)
+        let looks = makeCircleButton(systemName: "bookmark.fill", action: #selector(Coordinator.looks), coord: context.coordinator)
+        film.tag = 1
+        fx.tag = 2
+        looks.tag = 3
+        stack.addArrangedSubview(film)
+        stack.addArrangedSubview(fx)
+        stack.addArrangedSubview(looks)
+        return stack
+    }
+
+    func updateUIView(_ stack: UIStackView, context: Context) {
+        context.coordinator.onFilm = onFilm
+        context.coordinator.onFX = onFX
+        context.coordinator.onLooks = onLooks
+        if let film = stack.viewWithTag(1) as? UIButton {
+            film.tintColor = filmActive
+                ? UIColor(red: 1, green: 0.85, blue: 0.35, alpha: 1)
+                : UIColor.white.withAlphaComponent(0.8)
+        }
+        if let fx = stack.viewWithTag(2) as? UIButton {
+            if peakingOnly {
+                fx.tintColor = UIColor(red: 0.35, green: 0.95, blue: 0.45, alpha: 1)
+            } else if fxActive {
+                fx.tintColor = UIColor(red: 0.55, green: 0.88, blue: 0.95, alpha: 1)
+            } else {
+                fx.tintColor = UIColor.white.withAlphaComponent(0.8)
+            }
+        }
+    }
+
+    private func makeCircleButton(systemName: String, action: Selector, coord: Coordinator) -> UIButton {
+        let b = UIButton(type: .system)
+        b.setImage(UIImage(systemName: systemName), for: .normal)
+        b.backgroundColor = UIColor.black.withAlphaComponent(0.4)
+        b.tintColor = UIColor.white.withAlphaComponent(0.8)
+        b.layer.cornerRadius = 16
+        b.clipsToBounds = true
+        NSLayoutConstraint.activate([
+            b.widthAnchor.constraint(equalToConstant: 32),
+            b.heightAnchor.constraint(equalToConstant: 32)
+        ])
+        b.addTarget(coord, action: action, for: .touchUpInside)
+        return b
     }
 }
 
@@ -476,37 +732,33 @@ struct AspectRatioMask: View {
     let size: CGSize
 
     var body: some View {
-        // First layout can report 0×0 — never divide by zero next to Metal.
-        guard size.width > 1, size.height > 1 else {
-            return AnyView(EmptyView())
-        }
-        let targetRatio: CGFloat = mode.framedAspect(fitting: size) ?? (size.width / size.height)
-        let currentRatio = size.width / size.height
-
-        return AnyView(
-            GeometryReader { _ in
-                if targetRatio > currentRatio {
-                    // Letterbox (bars top/bottom)
-                    let newHeight = size.width / targetRatio
-                    let barHeight = (size.height - newHeight) / 2
-                    VStack(spacing: 0) {
-                        Rectangle().fill(Color.black.opacity(0.7)).frame(height: barHeight)
-                        Spacer()
-                        Rectangle().fill(Color.black.opacity(0.7)).frame(height: barHeight)
-                    }
-                } else {
-                    // Pillarbox (bars left/right)
-                    let newWidth = size.height * targetRatio
-                    let barWidth = (size.width - newWidth) / 2
-                    HStack(spacing: 0) {
-                        Rectangle().fill(Color.black.opacity(0.7)).frame(width: barWidth)
-                        Spacer()
-                        Rectangle().fill(Color.black.opacity(0.7)).frame(width: barWidth)
+        // No AnyView — type erasure next to Metal correlated with witness-table crashes.
+        Group {
+            if size.width > 1, size.height > 1 {
+                let targetRatio: CGFloat = mode.framedAspect(fitting: size) ?? (size.width / size.height)
+                let currentRatio = size.width / size.height
+                GeometryReader { _ in
+                    if targetRatio > currentRatio {
+                        let newHeight = size.width / targetRatio
+                        let barHeight = (size.height - newHeight) / 2
+                        VStack(spacing: 0) {
+                            Rectangle().fill(Color.black.opacity(0.7)).frame(height: barHeight)
+                            Spacer()
+                            Rectangle().fill(Color.black.opacity(0.7)).frame(height: barHeight)
+                        }
+                    } else {
+                        let newWidth = size.height * targetRatio
+                        let barWidth = (size.width - newWidth) / 2
+                        HStack(spacing: 0) {
+                            Rectangle().fill(Color.black.opacity(0.7)).frame(width: barWidth)
+                            Spacer()
+                            Rectangle().fill(Color.black.opacity(0.7)).frame(width: barWidth)
+                        }
                     }
                 }
             }
-            .allowsHitTesting(false)
-        )
+        }
+        .allowsHitTesting(false)
     }
 }
 
@@ -1185,89 +1437,8 @@ struct LookRecipePicker: View {
     }
 }
 
-// MARK: - Out-of-tree chrome picker host (separate UIWindow)
-/// Lives only inside ChromePickerGate's overlay window — never the camera tree.
-struct ChromePickerCover: View {
-    @ObservedObject var session: ChromePickerSession
-    var onFilmApplied: (() -> Void)? = nil
-    var onSaveLook: (() -> Void)? = nil
-    var onApplyShootMode: ((ShootMode) -> Void)? = nil
-    var onDismiss: () -> Void
-
-    var body: some View {
-        ZStack(alignment: .topTrailing) {
-            Color.black.opacity(0.35)
-                .ignoresSafeArea()
-                .contentShape(Rectangle())
-                .onTapGesture { onDismiss() }
-
-            Group {
-                switch session.menu {
-                case .film:
-                    LeicaFilmPicker(
-                        selectedFilter: $session.filmFilter,
-                        onDismiss: onDismiss,
-                        shootMode: session.shootMode,
-                        onApplyShootMode: onApplyShootMode,
-                        onSaveLook: {
-                            onSaveLook?()
-                            onDismiss()
-                        },
-                        onFilmApplied: onFilmApplied
-                    )
-                    .padding(.trailing, session.compactChrome ? 10 : 16)
-                    .padding(.top, session.compactChrome ? 48 : 100)
-                case .fx:
-                    // Same UIWindow + snapshot + deferred dismiss as film.
-                    LensFXPicker(
-                        selectedFX: $session.lensFX,
-                        focusPeaking: $session.focusPeaking,
-                        onDismiss: onDismiss
-                    )
-                    .padding(.trailing, session.compactChrome ? 10 : 16)
-                    .padding(.top, session.compactChrome ? 72 : 140)
-                case .looks:
-                    // Observe the store ONLY while looks is open — not for film/FX.
-                    LookRecipePickerHost(
-                        filmFilter: $session.filmFilter,
-                        lensFX: $session.lensFX,
-                        onDismiss: onDismiss,
-                        onSaveCurrent: {
-                            onSaveLook?()
-                            onDismiss()
-                        }
-                    )
-                    .padding(.trailing, session.compactChrome ? 10 : 16)
-                    .padding(.top, session.compactChrome ? 96 : 180)
-                }
-            }
-        }
-        .transaction { $0.animation = nil }
-    }
-}
-
-/// Isolates LookRecipeStore observation to the looks menu only.
-private struct LookRecipePickerHost: View {
-    @ObservedObject private var lookStore = LookRecipeStore.shared
-    @Binding var filmFilter: FilmFilterMode
-    @Binding var lensFX: LensFXMode
-    var onDismiss: () -> Void
-    var onSaveCurrent: (() -> Void)?
-
-    var body: some View {
-        LookRecipePicker(
-            store: lookStore,
-            filmFilter: $filmFilter,
-            lensFX: $lensFX,
-            onDismiss: onDismiss,
-            onSaveCurrent: onSaveCurrent
-        )
-    }
-}
-
-// MARK: - Scanline Overlay (VHS mode)
-// Drawn in SwiftUI rather than ShaderLibrary — avoids a hard crash on devices
-// where the Metal stitchable library fails to resolve at first FX toggle.
+// MARK: - Scanline Overlay (VHS mode) — kept for non-camera surfaces if needed.
+// Not mounted beside MTKView (Build 64) — that Canvas + opacity walk crashed.
 struct ScanlineShaderOverlay: View {
     var body: some View {
         Canvas { context, size in

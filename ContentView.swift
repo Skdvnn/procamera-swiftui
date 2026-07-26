@@ -442,11 +442,11 @@ struct ContentView: View {
         }
     }
 
-    /// Separate UIWindow + snapshot session — no Bindings into this view.
+    /// Separate UIWindow + UIKit table — never touch Metal on the button turn.
     /// Film, Lens FX, and looks all share this path.
     private func toggleChromePicker(_ menu: ChromePickerMenu) {
-        // Freeze live Metal for film AND effects while the picker window is up.
-        camera.setChromePickerPreviewSuspended(true)
+        // Capture values only. Suspending Metal / presenting happens AFTER the
+        // touch ends (gate defer) — sync MTKView teardown here froze the finder.
         ChromePickerGate.toggle(
             menu,
             filmFilter: filmFilter,
@@ -454,12 +454,13 @@ struct ContentView: View {
             focusPeaking: focusPeaking,
             shootMode: ShootMode(rawValue: shootModeRaw),
             compactChrome: finderIsLandscape,
+            onWillPresent: {
+                camera.setChromePickerPreviewSuspended(true)
+            },
             onCommit: { commit in
                 applyChromePickerCommit(commit)
             },
             onTeardown: { willCommit in
-                // Keep Metal parked across dismiss→commit so Liquid/VHS/etc.
-                // are not applied mid-window teardown. Abort resumes now.
                 if !willCommit {
                     camera.setChromePickerPreviewSuspended(false)
                 }

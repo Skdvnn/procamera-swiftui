@@ -539,13 +539,26 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     /// Suspend live film/FX Metal while the chrome picker window is up.
+    /// Never hides MTKView synchronously — that froze the finder when called
+    /// from chrome button actions (`_getWitnessTable` / MetadataCache).
     func setChromePickerPreviewSuspended(_ suspended: Bool) {
         pipelineLock.lock()
+        let was = pipelineChromeSuspended
         pipelineChromeSuspended = suspended
-        livePreviewActive = false
-        livePreviewFailStreak = 0
+        if suspended {
+            livePreviewActive = false
+            livePreviewFailStreak = 0
+        }
         pipelineLock.unlock()
-        livePreview.push(nil)
+        guard suspended, !was else { return }
+        // Drain filtered preview on the next turn only.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.pipelineLock.lock()
+            let still = self.pipelineChromeSuspended
+            self.pipelineLock.unlock()
+            if still { self.livePreview.push(nil) }
+        }
     }
 
     /// Clear Metal filtered preview before session graph surgery (flip / lens).

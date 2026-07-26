@@ -564,14 +564,15 @@ def test_source_guards() -> None:
     check("CloudBooks no vulcanite Metal", "LeicaVulcaniteTexture" not in (ROOT / "CloudBooks.swift").read_text())
     check("didFinish clears pending RAW", "pendingRawData = nil" in cam[cam.find("didFinishCaptureFor"):cam.find("didFinishCaptureFor")+800])
 
-    # Build 58–61 — pickers NEVER in Metal tree
-    chrome_pre = vf.split("struct ChromePickerCover")[0]
+    # Build 58–64 — pickers NEVER in Metal / SwiftUI camera tree
+    overlay_chrome = vf.split("struct ViewfinderOverlay")[1].split("struct UIKitChromeLookButtons")[0]
     check("ChromePickerMenu enum", "enum ChromePickerMenu" in vf)
-    check("ChromePickerGate UIKit", "enum ChromePickerGate" in vf and "UIHostingController" in vf)
-    check("ChromePickerCover host", "struct ChromePickerCover" in vf)
-    check("overlay chrome no local pickers", "LeicaFilmPicker(" not in chrome_pre)
-    check("overlay chrome no FX picker", "LensFXPicker(" not in chrome_pre)
-    check("overlay chrome no looks picker", "LookRecipePicker(" not in chrome_pre)
+    check("ChromePickerGate UIKit", "enum ChromePickerGate" in vf and "ChromePickerViewController" in vf)
+    check("pure UIKit picker VC", "final class ChromePickerViewController" in vf)
+    check("no UIHostingController picker", "UIHostingController(rootView" not in vf and "UIHostingController(" not in vf)
+    check("overlay chrome no local pickers", "LeicaFilmPicker(" not in overlay_chrome)
+    check("overlay chrome no FX picker", "LensFXPicker(" not in overlay_chrome)
+    check("overlay chrome no looks picker", "LookRecipePicker(" not in overlay_chrome)
     check("no ContentView chromePicker state", "chromePicker" not in content)
     check("no fullScreenCover chromePicker", "fullScreenCover(item: $chromePicker)" not in content)
     check("toggle uses ChromePickerGate", "ChromePickerGate.toggle(" in content)
@@ -579,9 +580,9 @@ def test_source_guards() -> None:
     check("onTogglePicker film", "onTogglePicker?(.film)" in vf)
     check("onTogglePicker fx", "onTogglePicker?(.fx)" in vf)
     check("onTogglePicker looks", "onTogglePicker?(.looks)" in vf)
-    check("no LookRecipeStore observe on chrome", "@ObservedObject private var lookStore" not in chrome_pre)
-    check("no activePicker on overlay", "activePicker" not in chrome_pre)
-    check("no LookRecipeStore read on looks icon", "LookRecipeStore.shared.recipes" not in chrome_pre)
+    check("UIKit look buttons", "struct UIKitChromeLookButtons" in vf and "UIButton" in vf)
+    check("no LookRecipeStore on overlay chrome", "LookRecipeStore" not in overlay_chrome)
+    check("no activePicker on overlay", "activePicker" not in overlay_chrome)
 
     # Build 60 — WYSIWYG still bake must not ship clean looks
     check("bakeLooks returns optional", "-> UIImage?" in cam[cam.find("private func bakeLooksForCapture"):cam.find("private func bakeLooksForCapture")+250])
@@ -591,25 +592,28 @@ def test_source_guards() -> None:
     check("timer freezes film", "frozenFilmFilter" in content and "frozenLensFX" in content)
     check("film bake prefers CGImage", "Prefer CGImage → CIImage" in cam)
 
-    # Build 61 — separate UIWindow + snapshot session (no live Bindings)
+    # Build 61+ — separate UIWindow + snapshot session (no live Bindings)
     check("picker overlay UIWindow", "UIWindow(windowScene:" in vf and "windowLevel = .alert" in vf)
     check("ChromePickerSession snapshot", "final class ChromePickerSession" in vf)
     check("commit after window teardown", "Apply AFTER the overlay window is gone" in vf)
-    check("deferred present off touch", "Defer off the button's touch transaction" in vf)
+    check("everything deferred off touch", "EVERYTHING deferred" in vf)
     check("toggle passes values not Bindings", "filmFilter: filmFilter," in content and "onCommit:" in content)
     check("applyChromePickerCommit", "func applyChromePickerCommit" in content)
 
-    # Build 62 — chrome suspend + present races + overlay/Metal hygiene
+    # Build 62–63 — chrome suspend + commit-after-apply
     check("pipelineChromeSuspended", "pipelineChromeSuspended" in cam)
     check("setChromePickerPreviewSuspended", "func setChromePickerPreviewSuspended" in cam)
     check("clearLivePreviewForReconfiguration", "func clearLivePreviewForReconfiguration" in cam)
     check("video skips when chrome suspended", "!chromeSuspended" in cam)
-    check("toggle suspends preview", "setChromePickerPreviewSuspended(true)" in content)
+    check("suspend on willPresent", "onWillPresent:" in content and "setChromePickerPreviewSuspended(true)" in content)
+    check("no sync suspend on toggle", "setChromePickerPreviewSuspended(true)" not in content[content.find("func toggleChromePicker"):content.find("ChromePickerGate.toggle")])
     check("teardown unsuspends preview", "onTeardown:" in content and "setChromePickerPreviewSuspended(false)" in content)
     check("presentationToken race cancel", "presentationToken" in vf)
-    check("foregroundActive scene only", "never attach an orphan picker" in vf)
-    check("grain overlays stay mounted", "Keep overlays mounted" in vf)
-    check("AspectRatioMask zero guard", "never divide by zero next to Metal" in vf)
+    check("foregroundActive scene only", "foregroundActive" in vf)
+    check("no grain overlay on finder", "FilmGrainOverlay()" not in overlay_chrome)
+    check("no scanline on finder", "ScanlineShaderOverlay()" not in overlay_chrome)
+    _mask = vf[vf.find("struct AspectRatioMask"):vf.find("struct AspectRatioMask") + 900]
+    check("AspectRatioMask no AnyView", "return AnyView" not in _mask and "AnyView(" not in _mask)
     check("grain cache bounded", "maxEntries = 12" in vf)
     check("recipe ID dedupe", "Deduplicate IDs" in (ROOT / "LookRecipes.swift").read_text())
     check("LivePreviewBridge attach reset", "restoreCleanPreview()" in (ROOT / "FilteredCameraPreview.swift").read_text())
@@ -618,17 +622,15 @@ def test_source_guards() -> None:
         "commit disables animations",
         _commit_fn >= 0 and "disablesAnimations = true" in content[_commit_fn:_commit_fn + 500],
     )
-
-    # Build 63 — Lens FX / effects share film hard path; resume Metal only after commit
     check("teardown willCommit flag", "willCommit" in vf and "teardown?(willCommit)" in vf)
-    check("FX dismiss via onDismiss", "onDismiss: onDismiss" in vf[vf.find("case .fx:"):vf.find("case .looks:")])
-    check("FX picker no isPresented", "@Binding var isPresented" not in vf[vf.find("struct LensFXPicker"):vf.find("struct LookRecipePicker")])
-    check("film picker no isPresented", "@Binding var isPresented" not in vf[vf.find("struct LeicaFilmPicker"):vf.find("struct DSLRPickerChrome")])
-    check("looks store isolated host", "struct LookRecipePickerHost" in vf)
     check("abort unsuspends only", "if !willCommit" in content and "setChromePickerPreviewSuspended(false)" in content)
     check("unsuspend after FX commit", content.find("camera.selectedLensFX = commit.lensFX") < content.find("setChromePickerPreviewSuspended(false)", content.find("func applyChromePickerCommit")))
     check("peaking committed with FX", "camera.focusPeakingEnabled = commit.focusPeaking" in content)
-    check("same path comment film+fx", "Film, Lens FX, and looks all share" in content or "film AND effects" in content)
+    check("deferred MTKView drain", "Drain filtered preview on the next turn" in cam)
+
+    # Build 64 — pure UIKit picker + UIButton chrome (witness-table freeze)
+    check("asyncAfter present delay", "asyncAfter(deadline: .now() + 0.05)" in vf)
+    check("UITableView picker", "UITableView" in vf and "UITableViewDataSource" in vf)
 
 
 
@@ -708,11 +710,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 63", m is not None and int(ver) >= 63, ver)
+    check("Info.plist build >= 64", m is not None and int(ver) >= 64, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 63+", any(v >= 63 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 64+", any(v >= 64 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)
