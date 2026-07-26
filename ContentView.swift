@@ -673,7 +673,8 @@ struct ContentView: View {
             let effectiveBottomCollapsed = bottomCollapsed
 
             // Layout measurements — top collapse keeps FOCUS/EV strip as the hero
-            let topPanelHeight: CGFloat = effectiveTopCollapsed ? (isLandscape ? 44 : 52) : 110
+            // Compact strip is 34pt — panel just clears it (Build 88).
+            let topPanelHeight: CGFloat = effectiveTopCollapsed ? (isLandscape ? 40 : 46) : 110
             let gaugeToViewfinderSpacing: CGFloat = effectiveTopCollapsed ? 3 : 4
             let viewfinderToControlsSpacing: CGFloat = max(2, CollapsedChrome.viewfinderToDeckGap - 2)
 

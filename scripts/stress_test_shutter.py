@@ -704,7 +704,8 @@ def test_source_guards() -> None:
     check("no cyan burstAccent", "0.55, green: 0.82, blue: 1.0" not in content)
     check(
         "compact scrubbers no outer box",
-        "Same 40pt instrument height as the ISO" in (ROOT / "AnalogGaugeView.swift").read_text()
+        "Compact strip — shorter than the 40pt ISO" in (ROOT / "AnalogGaugeView.swift").read_text()
+        or "Same 40pt instrument height as the ISO" in (ROOT / "AnalogGaugeView.swift").read_text()
         or "Scrubbers only — no extra outer container" in (ROOT / "AnalogGaugeView.swift").read_text(),
     )
     check("deck swipe verticalBias", "verticalBias:" in content)
@@ -830,9 +831,10 @@ def test_source_guards() -> None:
     check("settings forced dark scheme", "preferredColorScheme(.dark)" in settings_src)
     check("settings well detailing", "struct SettingsDSLRWell" in settings_src)
     check("settings corner screws", "Slot mark" in settings_src)
-    # Compact FOCUS/EV share the ISO scrubber height + black instrument face
-    check("compact scrubbers 40pt", ".frame(height: 40)" in (ROOT / "AnalogGaugeView.swift").read_text())
-    check("compact level matches scrubber height", "compact ? 40 : 36" in aids)
+    # Compact FOCUS/EV — shorter than the 40pt ISO row, same black instrument face
+    check("compact scrubbers 34pt", ".frame(height: 34)" in (ROOT / "AnalogGaugeView.swift").read_text())
+    check("compact level matches scrubber height", "compact ? 34 : 36" in aids)
+    check("compact top panel clears strip", "isLandscape ? 40 : 46" in content)
     check("snap scrubber instrument face", 'Color(hex: "0a0a0a")' in content[content.find("struct NativeSnapScrubber"):content.find("struct ISOScrubberHorizontal")])
     # Shutter collar lifted out of the deck (Build 84)
     check(
@@ -895,7 +897,7 @@ def test_source_guards() -> None:
 
     # Build 77/78 — level is a coherent companion to the EV instrument; ticks animate + useful.
     check("full level matches EV width", "compact ? 52 : 120" in aids)
-    check("full level matches EV height", "compact ? 40 : 36" in aids)
+    check("full level matches EV height", "compact ? 34 : 36" in aids)
     check("level 13-mark dial rhythm", "tickScale(count: 13" in aids and "degreeMarks" in aids)
     check("level mechanical center pointer", "Mechanical center pointer matches the EV triangle" in aids)
     check("level precision readout", 'String(format: "%+.1f°", roll)' in aids)
@@ -944,7 +946,7 @@ def test_landscape_layout() -> None:
     # iPhone landscape roughly 844×390
     W, H = 844.0, 390.0
     safe_top, safe_bottom = 0.0, 21.0
-    top_panel = 44.0
+    top_panel = 40.0
     deck_h = 80.0  # landscapeDeckHeight
     fade_h = 48.0
     info_h = 48.0

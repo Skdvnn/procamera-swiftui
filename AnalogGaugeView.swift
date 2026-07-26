@@ -596,9 +596,9 @@ struct AnalogDisplayPanel: View {
     var body: some View {
         Group {
             if compact {
-                // Same 40pt instrument height as the ISO / shutter scrubbers
-                // (Build 84) — FOCUS / level / EV used to stretch the full 52
-                // panel and read as grey pills next to the black level dial.
+                // Compact strip — shorter than the 40pt ISO/S scrubbers so the
+                // top chrome stays light (Build 88). Still the black instrument
+                // face from Build 84, just less tall.
                 HStack(alignment: .center, spacing: 4) {
                     CompactFocusScrubber(
                         focusPosition: $focusPosition,
@@ -607,7 +607,7 @@ struct AnalogDisplayPanel: View {
                         onActiveChanged: onFocusScrubActive
                     )
                     .frame(maxWidth: .infinity)
-                    .frame(height: 40)
+                    .frame(height: 34)
 
                     if showLevel {
                         InfoBarMetalLevel(compact: true)
@@ -619,7 +619,7 @@ struct AnalogDisplayPanel: View {
                         onActiveChanged: onEVScrubActive
                     )
                     .frame(maxWidth: .infinity)
-                    .frame(height: 40)
+                    .frame(height: 34)
                 }
             } else {
                 ZStack {

@@ -213,9 +213,9 @@ struct InfoBarMetalLevel: View {
         let roll = motion.rollDegrees
         let level = abs(roll) < levelTolerance
         let visualRoll = max(-15, min(15, roll))
-        // Compact matches the ISO / FOCUS / EV scrubber height (Build 84).
+        // Compact matches the top FOCUS / EV strip (Build 88 — 34pt).
         let w: CGFloat = compact ? 52 : 120
-        let h: CGFloat = compact ? 40 : 36
+        let h: CGFloat = compact ? 34 : 36
 
         ZStack {
             // Same instrument face and border language as the EV meter.
@@ -384,11 +384,11 @@ struct InfoBarMetalLevel: View {
 
     @ViewBuilder
     private func compactLevel(roll: Float, isLevel: Bool) -> some View {
-        // Fills the 40pt scrubber slot — ticks on top, horizon + readout below.
-        VStack(spacing: 1) {
+        // Fills the 34pt scrubber slot — ticks on top, horizon + readout below.
+        VStack(spacing: 0) {
             tickScale(count: 7, roll: roll, isLevel: isLevel, step: 5, labels: false)
-                .frame(height: 14)
-                .padding(.top, 3)
+                .frame(height: 11)
+                .padding(.top, 2)
 
             ZStack {
                 HStack(spacing: 5) {
@@ -401,10 +401,10 @@ struct InfoBarMetalLevel: View {
                     .rotationEffect(.degrees(Double(roll)))
                     .animation(.interactiveSpring(response: 0.16, dampingFraction: 0.85), value: roll)
                 Text(isLevel ? "LVL" : String(format: "%+.0f°", roll))
-                    .font(.system(size: 7, weight: .bold, design: .monospaced))
+                    .font(.system(size: 6.5, weight: .bold, design: .monospaced))
                     .foregroundStyle(isLevel ? accent : .white.opacity(0.6))
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    .padding(.bottom, 3)
+                    .padding(.bottom, 2)
             }
             .frame(maxHeight: .infinity)
         }
