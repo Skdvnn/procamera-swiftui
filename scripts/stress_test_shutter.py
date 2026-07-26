@@ -811,14 +811,17 @@ def test_source_guards() -> None:
     gauge = (ROOT / "AnalogGaugeView.swift").read_text()
     check("curved param edge readout", "struct CurvedParamEdgeReadout" in aids)
     check("edge param curve shape", "struct EdgeParamCurve" in aids)
-    # Numbers clear the bulge; single accent rail + traveling needle (Build 94).
+    # Numbers clear the bulge; single steel rail + traveling needle (Build 94/103).
     check("arch detail canvas", "struct EdgeParamArcDetail" in aids)
     check("arch shared geometry", "struct EdgeParamArcGeometry" in aids)
     check("arch half-stop ticks", "Half-stop ticks" in aids and "tickCount = 17" in aids)
     check("arch end caps", "End caps" in aids)
-    check("arch single rail", "One accent rail" in aids)
+    check("arch single steel rail", "One steel rail" in aids)
+    check("arch no yellow rail", "One accent rail" not in aids)
+    check("arch yellow only focused tick", "Yellow only on the focused tick" in aids)
     check("arch no double line", "Outer hairline" not in aids and "Inner bright filament" not in aids)
     check("arch traveling needle", "Traveling needle pip" in aids and "needle:" in aids)
+    check("arch active value yellow", "yellow is for the live value only" in aids)
     check("arch numbers clear the curve", "valueClearance" in aids and "arcColumn" in aids)
     check(
         "arch value sits left of column",
