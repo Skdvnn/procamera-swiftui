@@ -548,6 +548,11 @@ class CameraManager: NSObject, ObservableObject {
         if suspended {
             livePreviewActive = false
             livePreviewFailStreak = 0
+        } else if was {
+            // Force the next video frame through immediately after unsuspend —
+            // otherwise previewInterval can leave Metal parked (pink/blank).
+            lastPreviewFrameTime = 0
+            livePreviewFailStreak = 0
         }
         pipelineLock.unlock()
         guard suspended, !was else { return }

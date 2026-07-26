@@ -107,7 +107,12 @@ struct WidgetRecentStack: View {
 
 struct ShutterLaunchProvider: TimelineProvider {
     func placeholder(in context: Context) -> ShutterLaunchEntry {
-        ShutterLaunchEntry(date: Date(), film: "Portra 400", fx: "None", recents: [])
+        ShutterLaunchEntry(
+            date: Date(),
+            film: "Portra 400",
+            fx: "None",
+            frames: []
+        )
     }
     func getSnapshot(in context: Context, completion: @escaping (ShutterLaunchEntry) -> Void) {
         completion(currentEntry())
@@ -118,11 +123,15 @@ struct ShutterLaunchProvider: TimelineProvider {
     }
     private func currentEntry() -> ShutterLaunchEntry {
         let ctx = ShutterCaptureContext.loadFromAppGroup()
+        let frames = ShutterAppGroup.loadRecentFrames()
+        // Prefer film from latest unculled frame when present.
+        let film = frames.first?.meta?.filmFilter.nilIfNone ?? ctx.filmName
+        let fx = frames.first?.meta?.lensFX.nilIfNone ?? ctx.lensFXName
         return ShutterLaunchEntry(
             date: Date(),
-            film: ctx.filmName,
-            fx: ctx.lensFXName,
-            recents: ShutterAppGroup.loadRecentThumbnails()
+            film: film,
+            fx: fx,
+            frames: frames
         )
     }
 }
@@ -131,7 +140,10 @@ struct ShutterLaunchEntry: TimelineEntry {
     let date: Date
     let film: String
     let fx: String
-    let recents: [UIImage]
+    let frames: [ShutterAppGroup.WidgetRecentFrame]
+
+    var recents: [UIImage] { frames.map(\.image) }
+    var latestMeta: ShutterAppGroup.WidgetRecentMeta? { frames.first?.meta }
 }
 
 struct ShutterLaunchWidget: Widget {
@@ -151,7 +163,7 @@ struct ShutterLaunchWidget: Widget {
                 }
         }
         .configurationDisplayName("Shutter Cam")
-        .description("Jump straight into the viewfinder — with recent frames.")
+        .description("Two latest frames + tap to shoot.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
@@ -163,83 +175,116 @@ struct ShutterLaunchView: View {
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
 
     var body: some View {
-        Link(destination: ShutterDeepLink.openCamera.url) {
-            switch family {
-            case .systemLarge:
-                largeBody
-            case .systemMedium:
-                mediumBody
-            default:
-                smallBody
-            }
+        switch family {
+        case .systemLarge:
+            largeBody
+        case .systemMedium:
+            mediumBody
+        default:
+            smallBody
         }
     }
 
     private var smallBody: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Image(systemName: "camera.fill")
-                    .font(.system(size: 14, weight: .semibold))
-                Spacer()
-                Text("SHUTTER")
-                    .font(.system(size: 9, weight: .bold, design: .monospaced))
-                    .tracking(1)
+        Link(destination: ShutterDeepLink.capture.url) {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text("SHUTTER")
+                        .font(.system(size: 9, weight: .bold, design: .monospaced))
+                        .tracking(1)
+                    Spacer()
+                    Image(systemName: "circle.fill")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(accent)
+                }
+                .foregroundStyle(.white)
+
+                WidgetRecentStack(images: entry.recents, large: false)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                if let meta = entry.latestMeta {
+                    Text(meta.exposureLine.uppercased())
+                        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(accent)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.7)
+                    Text("\(meta.relativeTime) · TAP TO SHOOT")
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.45))
+                } else {
+                    Text(entry.film.uppercased())
+                        .font(.system(size: 11, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(accent)
+                        .lineLimit(1)
+                    Text("TAP TO SHOOT")
+                        .font(.system(size: 8, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
             }
-            .foregroundStyle(.white)
-
-            WidgetRecentStack(images: entry.recents, large: false)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-            Text(entry.film.uppercased())
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(accent)
-                .lineLimit(1)
-            Text("TAP TO SHOOT")
-                .font(.system(size: 8, weight: .medium, design: .monospaced))
-                .foregroundStyle(.white.opacity(0.4))
+            .padding(12)
         }
-        .padding(12)
     }
 
     private var mediumBody: some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Image(systemName: "camera.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                    Text("SHUTTER")
-                        .font(.system(size: 10, weight: .bold, design: .monospaced))
-                        .tracking(1)
-                }
-                .foregroundStyle(.white)
+                Text("SHUTTER")
+                    .font(.system(size: 10, weight: .bold, design: .monospaced))
+                    .tracking(1)
+                    .foregroundStyle(.white)
 
                 Spacer(minLength: 0)
 
                 Text(entry.film.uppercased())
-                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                    .font(.system(size: 13, weight: .semibold, design: .monospaced))
                     .foregroundStyle(accent)
                     .lineLimit(1)
-                if entry.fx != "None" {
+                if let meta = entry.latestMeta {
+                    Text(meta.exposureLine.uppercased())
+                        .font(.system(size: 10, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.75))
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    Text("\(meta.relativeTime) AGO")
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.4))
+                } else if entry.fx != "None" {
                     Text(entry.fx.uppercased())
                         .font(.system(size: 10, weight: .medium, design: .monospaced))
                         .foregroundStyle(Color(red: 0.55, green: 0.88, blue: 0.95))
-                        .lineLimit(1)
                 }
-                Text(entry.recents.isEmpty ? "TAP TO SHOOT" : "RECENTS · TAP TO SHOOT")
-                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.45))
+
+                Link(destination: ShutterDeepLink.capture.url) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "circle.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                        Text("SHOOT")
+                            .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    }
+                    .foregroundStyle(.black)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(Capsule().fill(accent))
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            WidgetRecentStack(images: entry.recents, large: false)
-                .frame(width: 120, height: 100)
+            Link(destination: ShutterDeepLink.darkroom.url) {
+                VStack(spacing: 4) {
+                    WidgetRecentStack(images: entry.recents, large: false)
+                        .frame(width: 118, height: 92)
+                    Text(entry.recents.isEmpty ? "NO FRAMES" : "\(entry.recents.count) UNCULLED")
+                        .font(.system(size: 8, weight: .bold, design: .monospaced))
+                        .foregroundStyle(.white.opacity(0.4))
+                }
+            }
         }
         .padding(14)
     }
 
     private var largeBody: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("SHUTTER")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
@@ -249,34 +294,58 @@ struct ShutterLaunchView: View {
                         .font(.system(size: 20, weight: .semibold, design: .monospaced))
                         .foregroundStyle(accent)
                         .lineLimit(1)
-                    if entry.fx != "None" {
+                    if let meta = entry.latestMeta {
+                        Text(meta.exposureLine.uppercased())
+                            .font(.system(size: 12, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.8))
+                        Text("\(meta.relativeTime) AGO · \(meta.focalLength)mm")
+                            .font(.system(size: 10, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.4))
+                    } else if entry.fx != "None" {
                         Text(entry.fx.uppercased())
                             .font(.system(size: 12, weight: .medium, design: .monospaced))
                             .foregroundStyle(Color(red: 0.55, green: 0.88, blue: 0.95))
                     }
                 }
                 Spacer()
-                Image(systemName: "camera.fill")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.85))
-                    .padding(12)
+                Link(destination: ShutterDeepLink.capture.url) {
+                    VStack(spacing: 4) {
+                        Image(systemName: "circle.fill")
+                            .font(.system(size: 28, weight: .semibold))
+                            .foregroundStyle(accent)
+                        Text("SHOOT")
+                            .font(.system(size: 9, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.7))
+                    }
+                    .padding(10)
                     .background(Circle().fill(Color.white.opacity(0.08)))
+                }
             }
 
-            WidgetRecentStack(images: entry.recents, large: true)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            Link(destination: ShutterDeepLink.darkroom.url) {
+                WidgetRecentStack(images: entry.recents, large: true)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
 
             HStack {
-                Text(entry.recents.isEmpty ? "NO RECENTS YET" : "\(entry.recents.count) RECENT")
+                Text(entry.recents.isEmpty ? "NO UNCULLED YET" : "\(entry.recents.count) UNCULLED")
                     .font(.system(size: 10, weight: .bold, design: .monospaced))
                     .foregroundStyle(accent.opacity(0.8))
                 Spacer()
-                Text("TAP TO SHOOT")
-                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(.white.opacity(0.5))
+                Text("TAP FRAMES · DARKROOM")
+                    .font(.system(size: 9, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(.white.opacity(0.4))
             }
         }
         .padding(16)
+    }
+}
+
+private extension String {
+    var nilIfNone: String? {
+        let t = trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty || t == "None" || t == "—" { return nil }
+        return t
     }
 }
 
@@ -455,10 +524,10 @@ struct ShutterLockCircularWidget: Widget {
                 Image(systemName: "camera.fill")
                     .font(.system(size: 18, weight: .semibold))
             }
-            .widgetURL(ShutterDeepLink.openCamera.url)
+            .widgetURL(ShutterDeepLink.capture.url)
         }
         .configurationDisplayName("Shutter")
-        .description("Open Shutter Cam from Lock Screen.")
+        .description("Tap to shoot from Lock Screen.")
         .supportedFamilies([.accessoryCircular])
     }
 }
@@ -471,15 +540,22 @@ struct ShutterLockRectangularWidget: Widget {
                 VStack(alignment: .leading, spacing: 1) {
                     Text("SHUTTER")
                         .font(.system(size: 12, weight: .bold, design: .monospaced))
-                    Text(entry.film)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(.secondary)
+                    if let meta = entry.latestMeta {
+                        Text(meta.exposureLine)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    } else {
+                        Text(entry.film)
+                            .font(.system(size: 11, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
-            .widgetURL(ShutterDeepLink.openCamera.url)
+            .widgetURL(ShutterDeepLink.capture.url)
         }
         .configurationDisplayName("Shutter Look")
-        .description("Current film look on Lock Screen.")
+        .description("Latest exposure + tap to shoot.")
         .supportedFamilies([.accessoryRectangular])
     }
 }

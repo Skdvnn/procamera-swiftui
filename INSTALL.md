@@ -8,13 +8,13 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 73 phone test pack (level under EV + shutter push-in + film/FX long-press clear):**
+**Build 74 phone test pack (EV scrub + FX freeze + richer widget):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **73**.
-Horizon level sits under the top EV meter (Settings → Horizon level). Shutter face
-pushes into the well — no white flash. Film/FX: tap opens menu, long-press clears.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **74**.
+Drag up/down on the viewfinder for brightness (AUTO). Film/FX should not pink-freeze.
+Widget shows 2 unculled recents + exposure meta; tap SHOOT to capture.
 
 **Note:** Cmd+R uses empty Debug entitlements — widgets / Lock Screen capture
 need a Release or TestFlight build with App Groups enabled in the developer

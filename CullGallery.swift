@@ -1779,6 +1779,8 @@ struct CullSessionView: View {
             assetLocalIdentifier: shot.photosAssetLocalIdentifier,
             favorite: state == .keep
         )
+        // Drop rejects from Home Screen widget stack (Build 74).
+        ContentView.pushUnculledWidgetRecents(from: store, marks: marks)
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
 
         // Dismiss coach after first real mark
@@ -1814,6 +1816,7 @@ struct CullSessionView: View {
             assetLocalIdentifier: shot.photosAssetLocalIdentifier,
             favorite: action.previous == .keep
         )
+        ContentView.pushUnculledWidgetRecents(from: store, marks: marks)
         if let i = shots.firstIndex(where: { $0.id == action.shotID }) {
             advance(to: i)
         }
@@ -1910,6 +1913,8 @@ struct CullSessionView: View {
                 if deleteRejects {
                     marks.clear(shotIDs: rejects.map(\.id) + keepers.map(\.id))
                 }
+                // Refresh widget — rejects gone / keepers stay (Build 74).
+                ContentView.pushUnculledWidgetRecents(from: store, marks: marks)
                 doneKeeperShots = keepers
                 doneBookID = createdBookID
                 doneAlbumName = albumName

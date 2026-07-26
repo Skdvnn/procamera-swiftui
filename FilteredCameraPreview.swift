@@ -106,13 +106,15 @@ struct FilteredCameraPreview: UIViewRepresentable {
         view.addGestureRecognizer(panGesture)
 
         let longPress = UILongPressGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.handleLongPress(_:)))
-        longPress.minimumPressDuration = 0.45
-        longPress.allowableMovement = 12
+        // Tight movement so EV scrub cancels compare before it arms (Build 74).
+        longPress.minimumPressDuration = 0.55
+        longPress.allowableMovement = 4
         longPress.delegate = context.coordinator
         view.addGestureRecognizer(longPress)
 
         context.coordinator.tapGesture = tapGesture
         context.coordinator.panGesture = panGesture
+        context.coordinator.longPressGesture = longPress
 
         return view
     }
@@ -149,6 +151,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
         var lastScale: CGFloat = 1.0
         weak var tapGesture: UITapGestureRecognizer?
         weak var panGesture: UIPanGestureRecognizer?
+        weak var longPressGesture: UILongPressGestureRecognizer?
         private var lastPanTime: CFAbsoluteTime = 0
         private var lastPanPoint: CGPoint = .zero
         /// Once a pan chooses exposure vs morph, stick with it until lift.
@@ -181,7 +184,12 @@ struct FilteredCameraPreview: UIViewRepresentable {
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
-            true
+            // Hold-to-compare must not fight EV scrub / morph pan (Build 74).
+            if gestureRecognizer is UILongPressGestureRecognizer,
+               otherGestureRecognizer is UIPanGestureRecognizer { return false }
+            if gestureRecognizer is UIPanGestureRecognizer,
+               otherGestureRecognizer is UILongPressGestureRecognizer { return false }
+            return true
         }
 
         func gestureRecognizer(
@@ -194,9 +202,18 @@ struct FilteredCameraPreview: UIViewRepresentable {
                   let view = gestureRecognizer.view else {
                 return true
             }
-            // Bottom ~32% belongs to SwiftUI chrome (histogram / shutter / swipe).
+            // Bottom ~20% belongs to SwiftUI chrome (histogram / shutter / swipe).
+            // Was 32% — too much dead zone for sun-drag brightness (Build 74).
             let y = touch.location(in: view).y
-            return y < view.bounds.height * 0.68
+            return y < view.bounds.height * 0.80
+        }
+
+        private func cancelCompareIfNeeded() {
+            guard compareActive else { return }
+            compareActive = false
+            onCompareHold?(false)
+            longPressGesture?.isEnabled = false
+            longPressGesture?.isEnabled = true
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
@@ -219,6 +236,12 @@ struct FilteredCameraPreview: UIViewRepresentable {
         }
 
         @objc func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+            // Never arm compare while EV scrub owns the finger.
+            if panMode == .exposure {
+                gesture.isEnabled = false
+                gesture.isEnabled = true
+                return
+            }
             switch gesture.state {
             case .began:
                 compareActive = true
@@ -267,10 +290,14 @@ struct FilteredCameraPreview: UIViewRepresentable {
 
             case .changed:
                 if panMode == .undecided {
-                    let enough = abs(translation.x) > 6 || abs(translation.y) > 6
-                    guard enough else { break }
-                    if exposureDragEnabled && abs(translation.y) >= abs(translation.x) {
+                    // Prefer vertical EV sooner (4pt) so brightness feels instant.
+                    let verticalEnough = exposureDragEnabled && abs(translation.y) > 4
+                    let horizontalEnough = abs(translation.x) > 6
+                    guard verticalEnough || horizontalEnough else { break }
+                    if exposureDragEnabled
+                        && abs(translation.y) >= abs(translation.x) * 0.85 {
                         panMode = .exposure
+                        cancelCompareIfNeeded()
                         onExposureDrag?(translation.y, false)
                     } else {
                         panMode = .morph
@@ -279,6 +306,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
                 }
 
                 if panMode == .exposure {
+                    cancelCompareIfNeeded()
                     onExposureDrag?(translation.y, false)
                 } else if panMode == .morph {
                     let dt = max(1.0 / 120.0, now - lastPanTime)
@@ -407,8 +435,10 @@ class FilteredPreviewView: UIView {
             mtkView.framebufferOnly = false
             mtkView.enableSetNeedsDisplay = true
             mtkView.isPaused = true
-            mtkView.backgroundColor = .clear
-            mtkView.isOpaque = false
+            mtkView.backgroundColor = .black
+            mtkView.isOpaque = true
+            // Never flash Metal's default pink/magenta clear between frames.
+            mtkView.clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
             mtkView.isHidden = true  // Hidden when no filter
             // Gestures live on the parent; keep Metal view from eating touches
             mtkView.isUserInteractionEnabled = false

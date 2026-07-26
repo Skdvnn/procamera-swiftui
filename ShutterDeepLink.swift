@@ -182,32 +182,117 @@ enum ShutterAppGroup {
         return (film, cleanFX)
     }
 
+    /// Metadata sidecar next to each widget thumb (Build 74).
+    struct WidgetRecentMeta: Codable, Equatable {
+        var shotID: String
+        var capturedAt: TimeInterval
+        var iso: Int
+        var shutter: String
+        var aperture: Float
+        var filmFilter: String
+        var lensFX: String
+        var focalLength: Int
+        /// "unmarked" | "keep" | "reject"
+        var mark: String
+
+        var exposureLine: String {
+            var parts: [String] = []
+            if !shutter.isEmpty { parts.append(shutter) }
+            if iso > 0 { parts.append("ISO \(iso)") }
+            if aperture > 0.5 { parts.append(String(format: "ƒ%.1f", aperture)) }
+            return parts.joined(separator: " · ")
+        }
+
+        var relativeTime: String {
+            let date = Date(timeIntervalSince1970: capturedAt)
+            let secs = Int(Date().timeIntervalSince(date))
+            if secs < 60 { return "NOW" }
+            if secs < 3600 { return "\(secs / 60)m" }
+            if secs < 86_400 { return "\(secs / 3600)h" }
+            return "\(secs / 86_400)d"
+        }
+    }
+
+    struct WidgetRecentFrame {
+        let image: UIImage
+        let meta: WidgetRecentMeta?
+    }
+
     /// Downsample + persist newest still for widget stacks (App Group).
-    static func pushRecentThumbnail(_ image: UIImage) {
+    static func pushRecentThumbnail(_ image: UIImage, meta: WidgetRecentMeta? = nil) {
         guard let dir = recentsDirectoryURL else { return }
         let fm = FileManager.default
-        // Shift older slot: recent-0 → recent-1
+        // Shift older slot: recent-0 → recent-1 (+ sidecars)
         let newest = dir.appendingPathComponent("recent-0.jpg")
         let older = dir.appendingPathComponent("recent-1.jpg")
+        let newestJSON = dir.appendingPathComponent("recent-0.json")
+        let olderJSON = dir.appendingPathComponent("recent-1.json")
         try? fm.removeItem(at: older)
+        try? fm.removeItem(at: olderJSON)
         if fm.fileExists(atPath: newest.path) {
             try? fm.moveItem(at: newest, to: older)
+        }
+        if fm.fileExists(atPath: newestJSON.path) {
+            try? fm.moveItem(at: newestJSON, to: olderJSON)
         }
         let thumb = image.shutterWidgetThumbnail(maxSide: 360)
         guard let data = thumb.jpegData(compressionQuality: 0.78) else { return }
         try? data.write(to: newest, options: .atomic)
+        if let meta, let encoded = try? JSONEncoder().encode(meta) {
+            try? encoded.write(to: newestJSON, options: .atomic)
+        } else {
+            try? fm.removeItem(at: newestJSON)
+        }
+        defaults.set(Date().timeIntervalSince1970, forKey: "widget.recentsUpdatedAt")
+    }
+
+    /// Replace both slots atomically (unculled rebuild after cull — Build 74).
+    static func rebuildRecentFrames(_ frames: [WidgetRecentFrame]) {
+        guard let dir = recentsDirectoryURL else { return }
+        let fm = FileManager.default
+        for i in 0..<recentThumbnailSlots {
+            try? fm.removeItem(at: dir.appendingPathComponent("recent-\(i).jpg"))
+            try? fm.removeItem(at: dir.appendingPathComponent("recent-\(i).json"))
+        }
+        // Write newest-first: frames[0] → recent-0
+        for (i, frame) in frames.prefix(recentThumbnailSlots).enumerated() {
+            let thumb = frame.image.shutterWidgetThumbnail(maxSide: 360)
+            guard let data = thumb.jpegData(compressionQuality: 0.78) else { continue }
+            try? data.write(
+                to: dir.appendingPathComponent("recent-\(i).jpg"),
+                options: .atomic
+            )
+            if let meta = frame.meta, let encoded = try? JSONEncoder().encode(meta) {
+                try? encoded.write(
+                    to: dir.appendingPathComponent("recent-\(i).json"),
+                    options: .atomic
+                )
+            }
+        }
         defaults.set(Date().timeIntervalSince1970, forKey: "widget.recentsUpdatedAt")
     }
 
     /// Newest first. Empty when the user hasn't shot yet (or App Group unavailable).
     static func loadRecentThumbnails(max: Int = recentThumbnailSlots) -> [UIImage] {
+        loadRecentFrames(max: max).map(\.image)
+    }
+
+    /// Newest first with sidecar metadata when present.
+    static func loadRecentFrames(max: Int = recentThumbnailSlots) -> [WidgetRecentFrame] {
         guard let dir = recentsDirectoryURL else { return [] }
-        var out: [UIImage] = []
+        var out: [WidgetRecentFrame] = []
         for i in 0..<max {
             let url = dir.appendingPathComponent("recent-\(i).jpg")
             guard let data = try? Data(contentsOf: url),
                   let img = UIImage(data: data) else { continue }
-            out.append(img)
+            var meta: WidgetRecentMeta?
+            let jsonURL = dir.appendingPathComponent("recent-\(i).json")
+            if let jdata = try? Data(contentsOf: jsonURL) {
+                meta = try? JSONDecoder().decode(WidgetRecentMeta.self, from: jdata)
+            }
+            // Skip rejects that somehow lingered in the App Group.
+            if let mark = meta?.mark, mark == "reject" { continue }
+            out.append(WidgetRecentFrame(image: img, meta: meta))
         }
         return out
     }

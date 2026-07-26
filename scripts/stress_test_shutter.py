@@ -697,7 +697,7 @@ def test_source_guards() -> None:
     check("widget push recent thumbs", "func pushRecentThumbnail" in deep)
     check("widget load recent thumbs", "func loadRecentThumbnails" in deep)
     check("widget recents dir", "widget-recents" in deep)
-    check("capture feeds widget recents", "pushRecentThumbnail(framed)" in content)
+    check("capture feeds widget recents", "refreshWidgetRecents()" in content or "pushRecentThumbnail(framed)" in content)
     check("seed widget recents", "seedWidgetRecentsIfNeeded" in content)
     check("widget recent stack view", "struct WidgetRecentStack" in widgets)
     check(
@@ -737,6 +737,23 @@ def test_source_guards() -> None:
     check("tap always opens picker", "Tap always opens the menu" in content)
     check("no retap-clear in toggle", "case .film where filmFilter != .none" not in content[content.find("func toggleChromePicker"):content.find("func toggleChromePicker")+900])
     check("clearChromeLook helper", "func clearChromeLook" in content)
+
+    # Build 74 — EV scrub restore, FX freeze harden, richer widget
+    preview = (ROOT / "FilteredCameraPreview.swift").read_text()
+    deep = (ROOT / "ShutterDeepLink.swift").read_text()
+    widgets = (ROOT / "ShutterWidgets" / "ShutterWidgetsBundle.swift").read_text()
+    check("EV pan dead zone 80%", "view.bounds.height * 0.80" in preview)
+    check("EV cancels compare", "cancelCompareIfNeeded" in preview)
+    check("long press no fight pan", "UILongPressGestureRecognizer" in preview and "return false" in preview)
+    check("MTKView black clearColor", "MTLClearColor(red: 0, green: 0, blue: 0" in preview)
+    check("unsuspend resets preview clock", "lastPreviewFrameTime = 0" in cam)
+    check("picker teardown safety net", "Safety net: if commit never lands" in content)
+    check("widget recent meta sidecar", "struct WidgetRecentMeta" in deep)
+    check("widget rebuild unculled", "func rebuildRecentFrames" in deep)
+    check("push unculled widget helper", "pushUnculledWidgetRecents" in content)
+    check("widget shoot deep link", "ShutterDeepLink.capture.url" in widgets)
+    check("widget unculled label", "UNCULLED" in widgets)
+    check("widget exposure line", "exposureLine" in deep and "latestMeta" in widgets)
 
 
 
@@ -816,11 +833,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 73", m is not None and int(ver) >= 73, ver)
+    check("Info.plist build >= 74", m is not None and int(ver) >= 74, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 73+", any(v >= 73 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 74+", any(v >= 74 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

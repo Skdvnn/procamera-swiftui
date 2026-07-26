@@ -560,6 +560,13 @@ struct ContentView: View {
             onTeardown: { willCommit in
                 if !willCommit {
                     camera.setChromePickerPreviewSuspended(false)
+                } else {
+                    // Safety net: if commit never lands, don't stay parked forever
+                    // (pink/blank frozen finder after FX — Build 74).
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.40) { [weak camera] in
+                        guard !ChromePickerGate.isPresented else { return }
+                        camera?.setChromePickerPreviewSuspended(false)
+                    }
                 }
             }
         )
@@ -1468,22 +1475,46 @@ struct ContentView: View {
         lastCapturedImage = framed
         photoCount += 1
         recordShot(framed)
-        // Feed Home Screen widgets overlapping recents (Release App Group).
-        ShutterAppGroup.pushRecentThumbnail(framed)
+        // Rebuild widget stack from unculled gallery (not just blind push).
+        refreshWidgetRecents()
+    }
+
+    /// Push the 2 newest unculled frames (+ meta) into the App Group widget stack.
+    private func refreshWidgetRecents() {
+        ContentView.pushUnculledWidgetRecents(from: gallery)
+    }
+
+    /// Shared with CullGallery so rejects drop off the Home Screen stack.
+    static func pushUnculledWidgetRecents(from gallery: GalleryStore, marks: FrameMarkStore? = nil) {
+        let markStore = marks ?? FrameMarkStore()
+        let unculled = gallery.shots
+            .reversed()
+            .filter { markStore.state(for: $0.id) != .reject }
+            .prefix(ShutterAppGroup.recentThumbnailSlots)
+        var frames: [ShutterAppGroup.WidgetRecentFrame] = []
+        for shot in unculled {
+            guard let img = gallery.thumbnail(for: shot) ?? gallery.image(for: shot) else { continue }
+            let meta = ShutterAppGroup.WidgetRecentMeta(
+                shotID: shot.id.uuidString,
+                capturedAt: shot.date.timeIntervalSince1970,
+                iso: shot.iso,
+                shutter: shot.shutter,
+                aperture: shot.aperture,
+                filmFilter: shot.filmFilter,
+                lensFX: shot.lensFX,
+                focalLength: shot.focalLength,
+                mark: markStore.state(for: shot.id).rawValue
+            )
+            frames.append(.init(image: img, meta: meta))
+        }
+        ShutterAppGroup.rebuildRecentFrames(frames)
         WidgetCenter.shared.reloadAllTimelines()
     }
 
     /// One-time backfill so widgets aren't blank before the next shutter press.
     private func seedWidgetRecentsIfNeeded() {
         guard ShutterAppGroup.loadRecentThumbnails().isEmpty else { return }
-        let recent = Array(gallery.shots.suffix(2))
-        guard !recent.isEmpty else { return }
-        for shot in recent {
-            if let img = gallery.thumbnail(for: shot) {
-                ShutterAppGroup.pushRecentThumbnail(img)
-            }
-        }
-        WidgetCenter.shared.reloadAllTimelines()
+        refreshWidgetRecents()
     }
 
     private func handleFocusTap(_ viewNorm: CGPoint, devicePoint: CGPoint, in size: CGSize) {
@@ -1619,7 +1650,8 @@ struct ContentView: View {
                             // Focus and zoom are independent — never write zoom into FOCUS.
                         },
                         onMorphTouch: handleMorphTouch,
-                        // iOS Camera sun-drag anytime in AUTO — not gated on a prior tap.
+                        // iOS Camera sun-drag anytime unlocked — not gated on a prior tap.
+                        // Manual ISO/S still blocks bias (device ignores it in .custom).
                         exposureDragEnabled: !isLocked && !camera.isManualExposure,
                         onExposureDrag: handleExposureDrag,
                         onCompareHold: { holding in
