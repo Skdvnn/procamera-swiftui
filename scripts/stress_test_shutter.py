@@ -766,6 +766,16 @@ def test_source_guards() -> None:
     gauge = (ROOT / "AnalogGaugeView.swift").read_text()
     check("curved param edge readout", "struct CurvedParamEdgeReadout" in aids)
     check("edge param curve shape", "struct EdgeParamCurve" in aids)
+    # Numbers clear the bulge; arc carries ticks / dual stroke / end caps (Build 84/85).
+    check("arch detail canvas", "struct EdgeParamArcDetail" in aids)
+    check("arch shared geometry", "struct EdgeParamArcGeometry" in aids)
+    check("arch half-stop ticks", "Half-stop ticks" in aids and "tickCount = 9" in aids)
+    check("arch end caps", "End caps" in aids)
+    check("arch numbers clear the curve", "valueClearance" in aids and "arcColumn" in aids)
+    check(
+        "arch value sits left of column",
+        "valueTrailing = inset + arcColumn + valueClearance" in aids,
+    )
     check("scrub edge kind enum", "enum ScrubEdgeKind" in content)
     check("scrubber moving tick phase", "tickPhase" in content and "Moving tick strip" in content)
     check("scrubber onActiveChanged", "onActiveChanged:" in content[content.find("struct NativeSnapScrubber"):content.find("struct ISOScrubberHorizontal")])

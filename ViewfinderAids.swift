@@ -457,33 +457,26 @@ struct CurvedParamEdgeReadout: View {
     var serifValue: Bool = false
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
+    /// Arc column width — must clear the max bulge + tick stems.
+    private let arcColumn: CGFloat = 44
+    /// Air between the value's trailing edge and the innermost tick tip.
+    private let valueClearance: CGFloat = 14
 
     var body: some View {
         GeometryReader { geo in
             let h = geo.size.height
             let w = geo.size.width
-            let inset = 10 + (1 - progress) * 28
-            let curve = EdgeParamCurve(progress: progress)
+            let inset = 8 + (1 - progress) * 26
+            // Numbers sit entirely left of the arc column — never on the stroke.
+            let valueTrailing = inset + arcColumn + valueClearance
 
             ZStack(alignment: .trailing) {
-                curve
-                    .stroke(
-                        LinearGradient(
-                            colors: [
-                                Color.white.opacity(0.05 + 0.35 * progress),
-                                accent.opacity(0.18 + 0.55 * progress),
-                                Color.white.opacity(0.08 + 0.25 * progress)
-                            ],
-                            startPoint: .top,
-                            endPoint: .bottom
-                        ),
-                        style: StrokeStyle(lineWidth: 1.6 + progress * 0.8, lineCap: .round)
-                    )
-                    .frame(width: 36)
+                EdgeParamArcDetail(progress: progress, accent: accent)
+                    .frame(width: arcColumn)
                     .padding(.trailing, inset)
                     .opacity(Double(min(1, progress * 1.4)))
 
-                VStack(spacing: 4) {
+                VStack(alignment: .trailing, spacing: 3) {
                     Text(title)
                         .font(.system(
                             size: serifValue ? 11 : 10,
@@ -505,6 +498,7 @@ struct CurvedParamEdgeReadout: View {
                         .monospacedDigit()
                         .contentTransition(.numericText())
                         .animation(ShutterMotion.scrub, value: value)
+                        .shadow(color: .black.opacity(0.55), radius: 2, y: 1)
                     if !subtitle.isEmpty {
                         Text(subtitle)
                             .font(.system(size: 8, weight: .bold, design: .monospaced))
@@ -512,8 +506,8 @@ struct CurvedParamEdgeReadout: View {
                             .foregroundStyle(Color.white.opacity(0.35 + 0.25 * progress))
                     }
                 }
-                .padding(.trailing, inset + 18)
-                .offset(y: (0.5 - progress) * 18)
+                .padding(.trailing, valueTrailing)
+                .offset(y: (0.5 - progress) * 14)
                 .opacity(Double(min(1, max(0, progress * 1.6 - 0.15))))
             }
             .frame(width: w, height: h, alignment: .trailing)
@@ -548,17 +542,150 @@ struct EdgeParamCurve: Shape {
 
     func path(in rect: CGRect) -> Path {
         var path = Path()
-        let top = rect.minY + 24
-        let bottom = rect.maxY - 24
-        let midY = rect.midY
-        let xRight = rect.maxX - 2
-        let bulge = 10 + progress * 22
-        path.move(to: CGPoint(x: xRight, y: top))
+        let geom = EdgeParamArcGeometry(rect: rect, progress: progress)
+        path.move(to: geom.top)
         path.addCurve(
-            to: CGPoint(x: xRight, y: bottom),
-            control1: CGPoint(x: xRight - bulge, y: midY - 40),
-            control2: CGPoint(x: xRight - bulge, y: midY + 40)
+            to: geom.bottom,
+            control1: geom.control1,
+            control2: geom.control2
         )
         return path
+    }
+}
+
+/// Shared geometry for the peel arc — curve, ticks, and end caps all sample it.
+private struct EdgeParamArcGeometry {
+    let top: CGPoint
+    let bottom: CGPoint
+    let control1: CGPoint
+    let control2: CGPoint
+    let xRight: CGFloat
+    let bulge: CGFloat
+    let midY: CGFloat
+
+    init(rect: CGRect, progress: CGFloat) {
+        let topY = rect.minY + 20
+        let bottomY = rect.maxY - 20
+        midY = rect.midY
+        xRight = rect.maxX - 4
+        bulge = 12 + progress * 20
+        top = CGPoint(x: xRight, y: topY)
+        bottom = CGPoint(x: xRight, y: bottomY)
+        control1 = CGPoint(x: xRight - bulge, y: midY - 44)
+        control2 = CGPoint(x: xRight - bulge, y: midY + 44)
+    }
+
+    /// Point on the cubic at t ∈ 0…1.
+    func point(at t: CGFloat) -> CGPoint {
+        let u = 1 - t
+        let x = u * u * u * top.x
+            + 3 * u * u * t * control1.x
+            + 3 * u * t * t * control2.x
+            + t * t * t * bottom.x
+        let y = u * u * u * top.y
+            + 3 * u * u * t * control1.y
+            + 3 * u * t * t * control2.y
+            + t * t * t * bottom.y
+        return CGPoint(x: x, y: y)
+    }
+
+    /// Unit tangent at t, used to aim tick stems inward (toward the numbers).
+    func tangent(at t: CGFloat) -> CGPoint {
+        let u = 1 - t
+        // dB/dt of the cubic
+        let dx = 3 * u * u * (control1.x - top.x)
+            + 6 * u * t * (control2.x - control1.x)
+            + 3 * t * t * (bottom.x - control2.x)
+        let dy = 3 * u * u * (control1.y - top.y)
+            + 6 * u * t * (control2.y - control1.y)
+            + 3 * t * t * (bottom.y - control2.y)
+        let len = max(0.001, hypot(dx, dy))
+        return CGPoint(x: dx / len, y: dy / len)
+    }
+}
+
+/// Detailed peel arc: dual stroke, half-stop ticks, end caps, mid pip (Build 84).
+struct EdgeParamArcDetail: View {
+    let progress: CGFloat
+    let accent: Color
+
+    var body: some View {
+        Canvas { ctx, size in
+            let rect = CGRect(origin: .zero, size: size)
+            let geom = EdgeParamArcGeometry(rect: rect, progress: progress)
+            let p = max(0, min(1, progress))
+
+            var curve = Path()
+            curve.move(to: geom.top)
+            curve.addCurve(to: geom.bottom, control1: geom.control1, control2: geom.control2)
+
+            // Soft under-glow so the stroke lifts off the finder.
+            ctx.stroke(
+                curve,
+                with: .color(accent.opacity(0.10 + 0.22 * p)),
+                style: StrokeStyle(lineWidth: 5.5 + p * 2.0, lineCap: .round)
+            )
+            // Outer hairline — cool steel edge outside the accent.
+            ctx.stroke(
+                curve,
+                with: .color(Color.white.opacity(0.08 + 0.20 * p)),
+                style: StrokeStyle(lineWidth: 2.6 + p * 0.6, lineCap: .round)
+            )
+            // Main accent rail
+            ctx.stroke(
+                curve,
+                with: .color(accent.opacity(0.35 + 0.55 * p)),
+                style: StrokeStyle(lineWidth: 1.35 + p * 0.55, lineCap: .round)
+            )
+            // Inner bright filament
+            ctx.stroke(
+                curve,
+                with: .color(Color.white.opacity(0.18 + 0.35 * p)),
+                style: StrokeStyle(lineWidth: 0.55, lineCap: .round)
+            )
+
+            // Half-stop ticks — stems aim left (inward), away from the screen edge.
+            let tickCount = 9
+            for i in 0..<tickCount {
+                let t = CGFloat(i) / CGFloat(tickCount - 1)
+                let pt = geom.point(at: t)
+                let tan = geom.tangent(at: t)
+                // Inward normal (left of travel direction top→bottom).
+                let nx = tan.y
+                let ny = -tan.x
+                let major = i % 2 == 0
+                let mid = i == tickCount / 2
+                let stem: CGFloat = mid ? 9 : (major ? 6.5 : 3.5)
+                var tick = Path()
+                tick.move(to: pt)
+                tick.addLine(to: CGPoint(x: pt.x + nx * stem, y: pt.y + ny * stem))
+                let tickColor: Color = mid
+                    ? accent.opacity(0.55 + 0.40 * p)
+                    : Color.white.opacity((major ? 0.28 : 0.14) + 0.25 * p)
+                ctx.stroke(
+                    tick,
+                    with: .color(tickColor),
+                    style: StrokeStyle(lineWidth: mid ? 1.4 : (major ? 1.0 : 0.7), lineCap: .round)
+                )
+            }
+
+            // End caps — small terminals so the arc reads as a machined rail.
+            for end in [geom.top, geom.bottom] {
+                let cap = Path(ellipseIn: CGRect(x: end.x - 2.2, y: end.y - 2.2, width: 4.4, height: 4.4))
+                ctx.fill(cap, with: .color(Color.black.opacity(0.55)))
+                ctx.stroke(cap, with: .color(accent.opacity(0.40 + 0.45 * p)), lineWidth: 1.0)
+                let pip = Path(ellipseIn: CGRect(x: end.x - 0.9, y: end.y - 0.9, width: 1.8, height: 1.8))
+                ctx.fill(pip, with: .color(accent.opacity(0.70 + 0.25 * p)))
+            }
+
+            // Mid pip on the rail — sits at the apex of the bulge.
+            let mid = geom.point(at: 0.5)
+            let midOuter = Path(ellipseIn: CGRect(x: mid.x - 3.0, y: mid.y - 3.0, width: 6, height: 6))
+            ctx.fill(midOuter, with: .color(Color.black.opacity(0.5)))
+            ctx.stroke(midOuter, with: .color(accent.opacity(0.55 + 0.35 * p)), lineWidth: 1.1)
+            let midInner = Path(ellipseIn: CGRect(x: mid.x - 1.3, y: mid.y - 1.3, width: 2.6, height: 2.6))
+            ctx.fill(midInner, with: .color(accent.opacity(0.85 + 0.15 * p)))
+        }
+        .animation(ShutterMotion.deck, value: progress)
     }
 }
