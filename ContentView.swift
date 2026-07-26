@@ -3789,20 +3789,6 @@ struct FlashButtonPill: View {
     }
 }
 
-// MARK: - Mode Icon (small icon above button - only icon turns yellow when active)
-struct ModeIcon: View {
-    let icon: String
-    let isActive: Bool
-
-    var body: some View {
-        Image(systemName: icon)
-            .font(.system(size: 13, weight: .regular))
-            .foregroundColor(isActive ? DS.accent : Color(hex: "5e5e5e"))
-            .frame(width: 16, height: 16)
-            .allowsHitTesting(false)
-    }
-}
-
 // MARK: - Mode control (round key — whole column is the hit target)
 struct ModeControl: View {
     let icon: String
