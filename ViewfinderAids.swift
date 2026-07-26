@@ -453,12 +453,14 @@ struct CurvedParamEdgeReadout: View {
     var subtitle: String = ""
     /// 0…1 peel intensity.
     let progress: CGFloat
+    /// 0…1 dial needle along the arch (top → bottom). Snaps to half-stop ticks.
+    var needle: CGFloat = 0.5
     /// Serif value (ƒ) vs mono LCD (ISO / S / EV / FOCUS).
     var serifValue: Bool = false
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
     /// Arc column width — must clear the max bulge + tick stems.
-    private let arcColumn: CGFloat = 44
+    private let arcColumn: CGFloat = 48
     /// Air between the value's trailing edge and the innermost tick tip.
     private let valueClearance: CGFloat = 14
 
@@ -469,9 +471,11 @@ struct CurvedParamEdgeReadout: View {
             let inset = 8 + (1 - progress) * 26
             // Numbers sit entirely left of the arc column — never on the stroke.
             let valueTrailing = inset + arcColumn + valueClearance
+            // Keep the LCD stacked near the moving needle so the dial feels linked.
+            let valueY = (needle - 0.5) * (h * 0.55)
 
             ZStack(alignment: .trailing) {
-                EdgeParamArcDetail(progress: progress, accent: accent)
+                EdgeParamArcDetail(progress: progress, needle: needle, accent: accent)
                     .frame(width: arcColumn)
                     .padding(.trailing, inset)
                     .opacity(Double(min(1, progress * 1.4)))
@@ -507,7 +511,7 @@ struct CurvedParamEdgeReadout: View {
                     }
                 }
                 .padding(.trailing, valueTrailing)
-                .offset(y: (0.5 - progress) * 14)
+                .offset(y: valueY)
                 .opacity(Double(min(1, max(0, progress * 1.6 - 0.15))))
             }
             .frame(width: w, height: h, alignment: .trailing)
@@ -604,88 +608,84 @@ private struct EdgeParamArcGeometry {
     }
 }
 
-/// Detailed peel arc: dual stroke, half-stop ticks, end caps, mid pip (Build 84).
+/// Single-rail peel arc with half-stop ticks + traveling needle (Build 94).
 struct EdgeParamArcDetail: View {
     let progress: CGFloat
+    /// 0…1 along the cubic (top → bottom). Snapped to the nearest tick.
+    var needle: CGFloat = 0.5
     let accent: Color
+
+    /// Half-stop count across the dial face (majors on even indices).
+    private let tickCount = 17
 
     var body: some View {
         Canvas { ctx, size in
             let rect = CGRect(origin: .zero, size: size)
             let geom = EdgeParamArcGeometry(rect: rect, progress: progress)
             let p = max(0, min(1, progress))
+            let last = CGFloat(tickCount - 1)
+            let needleT = (needle * last).rounded() / last
+            let needleTClamped = max(0, min(1, needleT))
 
             var curve = Path()
             curve.move(to: geom.top)
             curve.addCurve(to: geom.bottom, control1: geom.control1, control2: geom.control2)
 
-            // Soft under-glow so the stroke lifts off the finder.
+            // Soft under-glow only — no second white rail (that read as a double line).
             ctx.stroke(
                 curve,
-                with: .color(accent.opacity(0.10 + 0.22 * p)),
-                style: StrokeStyle(lineWidth: 5.5 + p * 2.0, lineCap: .round)
+                with: .color(accent.opacity(0.08 + 0.18 * p)),
+                style: StrokeStyle(lineWidth: 4.5 + p * 1.5, lineCap: .round)
             )
-            // Outer hairline — cool steel edge outside the accent.
+            // One accent rail — the dial track.
             ctx.stroke(
                 curve,
-                with: .color(Color.white.opacity(0.08 + 0.20 * p)),
-                style: StrokeStyle(lineWidth: 2.6 + p * 0.6, lineCap: .round)
-            )
-            // Main accent rail
-            ctx.stroke(
-                curve,
-                with: .color(accent.opacity(0.35 + 0.55 * p)),
-                style: StrokeStyle(lineWidth: 1.35 + p * 0.55, lineCap: .round)
-            )
-            // Inner bright filament
-            ctx.stroke(
-                curve,
-                with: .color(Color.white.opacity(0.18 + 0.35 * p)),
-                style: StrokeStyle(lineWidth: 0.55, lineCap: .round)
+                with: .color(accent.opacity(0.40 + 0.55 * p)),
+                style: StrokeStyle(lineWidth: 1.55 + p * 0.45, lineCap: .round)
             )
 
-            // Half-stop ticks — stems aim left (inward), away from the screen edge.
-            let tickCount = 9
+            // Half-stop ticks — stems aim left (inward), like a cut dial face.
             for i in 0..<tickCount {
-                let t = CGFloat(i) / CGFloat(tickCount - 1)
+                let t = CGFloat(i) / last
                 let pt = geom.point(at: t)
                 let tan = geom.tangent(at: t)
-                // Inward normal (left of travel direction top→bottom).
                 let nx = tan.y
                 let ny = -tan.x
                 let major = i % 2 == 0
-                let mid = i == tickCount / 2
-                let stem: CGFloat = mid ? 9 : (major ? 6.5 : 3.5)
+                let atNeedle = abs(t - needleTClamped) < 0.001
+                let stem: CGFloat = atNeedle ? 11 : (major ? 7.5 : 4.0)
                 var tick = Path()
                 tick.move(to: pt)
                 tick.addLine(to: CGPoint(x: pt.x + nx * stem, y: pt.y + ny * stem))
-                let tickColor: Color = mid
-                    ? accent.opacity(0.55 + 0.40 * p)
-                    : Color.white.opacity((major ? 0.28 : 0.14) + 0.25 * p)
+                let tickColor: Color = atNeedle
+                    ? accent.opacity(0.75 + 0.25 * p)
+                    : Color.white.opacity((major ? 0.38 : 0.18) + 0.22 * p)
                 ctx.stroke(
                     tick,
                     with: .color(tickColor),
-                    style: StrokeStyle(lineWidth: mid ? 1.4 : (major ? 1.0 : 0.7), lineCap: .round)
+                    style: StrokeStyle(
+                        lineWidth: atNeedle ? 1.55 : (major ? 1.1 : 0.7),
+                        lineCap: .round
+                    )
                 )
             }
 
-            // End caps — small terminals so the arc reads as a machined rail.
+            // End caps — machined terminals on the rail.
             for end in [geom.top, geom.bottom] {
-                let cap = Path(ellipseIn: CGRect(x: end.x - 2.2, y: end.y - 2.2, width: 4.4, height: 4.4))
+                let cap = Path(ellipseIn: CGRect(x: end.x - 2.0, y: end.y - 2.0, width: 4.0, height: 4.0))
                 ctx.fill(cap, with: .color(Color.black.opacity(0.55)))
-                ctx.stroke(cap, with: .color(accent.opacity(0.40 + 0.45 * p)), lineWidth: 1.0)
-                let pip = Path(ellipseIn: CGRect(x: end.x - 0.9, y: end.y - 0.9, width: 1.8, height: 1.8))
-                ctx.fill(pip, with: .color(accent.opacity(0.70 + 0.25 * p)))
+                ctx.stroke(cap, with: .color(accent.opacity(0.35 + 0.40 * p)), lineWidth: 0.9)
             }
 
-            // Mid pip on the rail — sits at the apex of the bulge.
-            let mid = geom.point(at: 0.5)
-            let midOuter = Path(ellipseIn: CGRect(x: mid.x - 3.0, y: mid.y - 3.0, width: 6, height: 6))
-            ctx.fill(midOuter, with: .color(Color.black.opacity(0.5)))
-            ctx.stroke(midOuter, with: .color(accent.opacity(0.55 + 0.35 * p)), lineWidth: 1.1)
-            let midInner = Path(ellipseIn: CGRect(x: mid.x - 1.3, y: mid.y - 1.3, width: 2.6, height: 2.6))
-            ctx.fill(midInner, with: .color(accent.opacity(0.85 + 0.15 * p)))
+            // Traveling needle pip — rides the rail with the live value.
+            let tip = geom.point(at: needleTClamped)
+            let outer = Path(ellipseIn: CGRect(x: tip.x - 3.4, y: tip.y - 3.4, width: 6.8, height: 6.8))
+            ctx.fill(outer, with: .color(Color.black.opacity(0.55)))
+            ctx.stroke(outer, with: .color(accent.opacity(0.70 + 0.25 * p)), lineWidth: 1.25)
+            let inner = Path(ellipseIn: CGRect(x: tip.x - 1.5, y: tip.y - 1.5, width: 3.0, height: 3.0))
+            ctx.fill(inner, with: .color(accent.opacity(0.92)))
         }
         .animation(ShutterMotion.deck, value: progress)
+        .animation(ShutterMotion.scrub, value: needle)
     }
 }

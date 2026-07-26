@@ -56,9 +56,14 @@ class FingerTipSceneDelegate: NSObject, UIWindowSceneDelegate {
 
     func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
+        // Vulcanite — never flash system white while SwiftUI / camera warm up.
+        let vulcanite = UIColor(red: 0x13 / 255, green: 0x13 / 255, blue: 0x13 / 255, alpha: 1)
         let fingerTipWindow = FingerTipWindow(windowScene: windowScene)
         fingerTipWindow.alwaysShowTouches = false
-        fingerTipWindow.rootViewController = UIHostingController(rootView: ContentView())
+        fingerTipWindow.backgroundColor = vulcanite
+        let host = UIHostingController(rootView: ContentView())
+        host.view.backgroundColor = vulcanite
+        fingerTipWindow.rootViewController = host
         fingerTipWindow.makeKeyAndVisible()
         self.window = fingerTipWindow
 
