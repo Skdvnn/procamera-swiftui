@@ -443,9 +443,9 @@ struct ContentView: View {
     }
 
     /// Separate UIWindow + snapshot session — no Bindings into this view.
-    /// Applying looks happens only after the overlay window is torn down.
+    /// Film, Lens FX, and looks all share this path.
     private func toggleChromePicker(_ menu: ChromePickerMenu) {
-        // Freeze live Metal processing for the whole time the picker is up.
+        // Freeze live Metal for film AND effects while the picker window is up.
         camera.setChromePickerPreviewSuspended(true)
         ChromePickerGate.toggle(
             menu,
@@ -457,14 +457,18 @@ struct ContentView: View {
             onCommit: { commit in
                 applyChromePickerCommit(commit)
             },
-            onTeardown: {
-                camera.setChromePickerPreviewSuspended(false)
+            onTeardown: { willCommit in
+                // Keep Metal parked across dismiss→commit so Liquid/VHS/etc.
+                // are not applied mid-window teardown. Abort resumes now.
+                if !willCommit {
+                    camera.setChromePickerPreviewSuspended(false)
+                }
             }
         )
     }
 
     private func applyChromePickerCommit(_ commit: ChromePickerCommit) {
-        camera.setChromePickerPreviewSuspended(false)
+        // Apply FX/film to the pipeline BEFORE unsuspending live Metal.
         var t = Transaction()
         t.disablesAnimations = true
         withTransaction(t) {
@@ -474,6 +478,7 @@ struct ContentView: View {
         }
         camera.selectedFilmFilter = commit.filmFilter
         camera.selectedLensFX = commit.lensFX
+        camera.focusPeakingEnabled = commit.focusPeaking
         if !commit.lensFX.isTouchReactive {
             LensFXEngine.shared.clearStickyTouch()
         }
@@ -488,6 +493,8 @@ struct ContentView: View {
             Haptics.medium()
         }
         syncCaptureContextToSystem()
+        // Resume live preview only after the new Lens FX / film is on the pipeline.
+        camera.setChromePickerPreviewSuspended(false)
     }
 
     /// Split out of `body` so the Swift type-checker can finish (CI archive).

@@ -150,7 +150,9 @@ enum ChromePickerGate {
     private static var currentMenu: ChromePickerMenu?
     private static var session: ChromePickerSession?
     private static var onCommit: ((ChromePickerCommit) -> Void)?
-    private static var onTeardown: (() -> Void)?
+    /// Called when the overlay window is gone. `willCommit` is true when a
+    /// commit block will run on the next turn — keep Metal parked until then.
+    private static var onTeardown: ((Bool) -> Void)?
     private static var filmAppliedDirectly = false
     private static var pendingSaveLook = false
     /// Invalidates a deferred present if dismiss raced ahead of it.
@@ -177,9 +179,12 @@ enum ChromePickerGate {
         filmAppliedDirectly = false
         pendingSaveLook = false
 
-        teardown?()
+        let willCommit = commit && sess != nil && commitHandler != nil
+        // Film AND Lens FX / looks: never resume live Metal in the same turn as
+        // window teardown — applying Liquid/VHS/etc. mid-invalidation crashed.
+        teardown?(willCommit)
 
-        guard commit, let sess, let commitHandler else { return }
+        guard willCommit, let sess, let commitHandler else { return }
         let result = ChromePickerCommit(
             filmFilter: sess.filmFilter,
             lensFX: sess.lensFX,
@@ -202,8 +207,9 @@ enum ChromePickerGate {
         shootMode: ShootMode?,
         compactChrome: Bool,
         onCommit: @escaping (ChromePickerCommit) -> Void,
-        onTeardown: (() -> Void)? = nil
+        onTeardown: ((Bool) -> Void)? = nil
     ) {
+        // Same path for .film, .fx, and .looks — effects are not special-cased.
         if currentMenu == menu, overlayWindow != nil {
             dismiss(commit: true)
             return
@@ -214,10 +220,10 @@ enum ChromePickerGate {
         let token = UUID()
         presentationToken = token
         // Defer off the button's touch transaction — presenting mid-touch
-        // next to Metal was still crashing on device.
+        // next to Metal was still crashing on device (film AND FX buttons).
         DispatchQueue.main.async {
             guard presentationToken == token else {
-                onTeardown?()
+                onTeardown?(false)
                 return
             }
             present(
@@ -241,10 +247,10 @@ enum ChromePickerGate {
         shootMode: ShootMode?,
         compactChrome: Bool,
         onCommit: @escaping (ChromePickerCommit) -> Void,
-        onTeardown: (() -> Void)?
+        onTeardown: ((Bool) -> Void)?
     ) {
         guard let scene = activeWindowScene() else {
-            onTeardown?()
+            onTeardown?(false)
             return
         }
 
@@ -749,7 +755,8 @@ struct InfoBar: View {
 // MARK: - Film Picker (DSLR-style inset menu)
 struct LeicaFilmPicker: View {
     @Binding var selectedFilter: FilmFilterMode
-    @Binding var isPresented: Bool
+    /// Gate dismiss — do not flip a local isPresented (double-dismiss crash).
+    var onDismiss: (() -> Void)? = nil
     /// Nil when exposure is AUTO (no scene owns the dials).
     var shootMode: ShootMode? = nil
     var onApplyShootMode: ((ShootMode) -> Void)? = nil
@@ -799,7 +806,7 @@ struct LeicaFilmPicker: View {
                         ForEach(ShootMode.allCases) { mode in
                             Button {
                                 VFHaptics.click()
-                                // Gate dismisses — do not also flip isPresented (double-dismiss).
+                                // Gate dismisses — do not also call onDismiss (double-dismiss).
                                 onApplyShootMode?(mode)
                             } label: {
                                 HStack(spacing: 8) {
@@ -842,16 +849,11 @@ struct LeicaFilmPicker: View {
                     ForEach(FilmFilterMode.allCases, id: \.self) { filter in
                         Button(action: {
                             VFHaptics.click()
-                            // Apply synchronously so volume/hardware shutter in the
-                            // same turn cannot miss the look the user just tapped.
+                            // Snapshot on the session, then gate-dismiss once.
                             selectedFilter = filter
                             // Clear SCENE highlight — user picked a film stock directly.
                             onFilmApplied?()
-                            var t = Transaction()
-                            t.disablesAnimations = true
-                            withTransaction(t) {
-                                isPresented = false
-                            }
+                            onDismiss?()
                         }) {
                             HStack(spacing: 8) {
                                 Text(selectedFilter == filter ? ">" : " ")
@@ -953,7 +955,8 @@ private extension View {
 struct LensFXPicker: View {
     @Binding var selectedFX: LensFXMode
     @Binding var focusPeaking: Bool
-    @Binding var isPresented: Bool
+    /// Gate dismiss — do not flip a local isPresented (double-dismiss crash).
+    var onDismiss: (() -> Void)? = nil
 
     private let accent = Color(red: 0.55, green: 0.88, blue: 0.95)
     private let peakAccent = Color(red: 0.35, green: 0.95, blue: 0.45)
@@ -1026,6 +1029,7 @@ struct LensFXPicker: View {
     private var peakingRow: some View {
         Button(action: {
             VFHaptics.click()
+            // Snapshot only — peaking hits the live pipeline on gate commit.
             focusPeaking.toggle()
         }) {
             HStack(spacing: 8) {
@@ -1054,13 +1058,10 @@ struct LensFXPicker: View {
     private func fxRow(_ fx: LensFXMode) -> some View {
         Button(action: {
             VFHaptics.click()
-            // Apply synchronously so shutter cannot miss the FX just tapped.
+            // Snapshot FX on the session, then gate-dismiss once.
+            // Live Metal stays parked until ContentView commits + unsuspends.
             selectedFX = fx
-            var t = Transaction()
-            t.disablesAnimations = true
-            withTransaction(t) {
-                isPresented = false
-            }
+            onDismiss?()
         }) {
             HStack(spacing: 8) {
                 Text(selectedFX == fx ? ">" : " ")
@@ -1093,7 +1094,8 @@ struct LookRecipePicker: View {
     @ObservedObject var store: LookRecipeStore
     @Binding var filmFilter: FilmFilterMode
     @Binding var lensFX: LensFXMode
-    @Binding var isPresented: Bool
+    /// Gate dismiss — same path as film / Lens FX rows.
+    var onDismiss: (() -> Void)? = nil
     var onSaveCurrent: (() -> Void)? = nil
 
     private let accent = Color(red: 1.0, green: 0.75, blue: 0.45)
@@ -1139,9 +1141,7 @@ struct LookRecipePicker: View {
                                     VFHaptics.click()
                                     filmFilter = recipe.film
                                     lensFX = recipe.lensFX
-                                    var t = Transaction()
-                                    t.disablesAnimations = true
-                                    withTransaction(t) { isPresented = false }
+                                    onDismiss?()
                                 } label: {
                                     VStack(alignment: .leading, spacing: 2) {
                                         Text(recipe.name.uppercased())
@@ -1194,15 +1194,6 @@ struct ChromePickerCover: View {
     var onApplyShootMode: ((ShootMode) -> Void)? = nil
     var onDismiss: () -> Void
 
-    @ObservedObject private var lookStore = LookRecipeStore.shared
-
-    private var presentedBinding: Binding<Bool> {
-        Binding(
-            get: { true },
-            set: { if !$0 { onDismiss() } }
-        )
-    }
-
     var body: some View {
         ZStack(alignment: .topTrailing) {
             Color.black.opacity(0.35)
@@ -1215,7 +1206,7 @@ struct ChromePickerCover: View {
                 case .film:
                     LeicaFilmPicker(
                         selectedFilter: $session.filmFilter,
-                        isPresented: presentedBinding,
+                        onDismiss: onDismiss,
                         shootMode: session.shootMode,
                         onApplyShootMode: onApplyShootMode,
                         onSaveLook: {
@@ -1227,19 +1218,20 @@ struct ChromePickerCover: View {
                     .padding(.trailing, session.compactChrome ? 10 : 16)
                     .padding(.top, session.compactChrome ? 48 : 100)
                 case .fx:
+                    // Same UIWindow + snapshot + deferred dismiss as film.
                     LensFXPicker(
                         selectedFX: $session.lensFX,
                         focusPeaking: $session.focusPeaking,
-                        isPresented: presentedBinding
+                        onDismiss: onDismiss
                     )
                     .padding(.trailing, session.compactChrome ? 10 : 16)
                     .padding(.top, session.compactChrome ? 72 : 140)
                 case .looks:
-                    LookRecipePicker(
-                        store: lookStore,
+                    // Observe the store ONLY while looks is open — not for film/FX.
+                    LookRecipePickerHost(
                         filmFilter: $session.filmFilter,
                         lensFX: $session.lensFX,
-                        isPresented: presentedBinding,
+                        onDismiss: onDismiss,
                         onSaveCurrent: {
                             onSaveLook?()
                             onDismiss()
@@ -1251,6 +1243,25 @@ struct ChromePickerCover: View {
             }
         }
         .transaction { $0.animation = nil }
+    }
+}
+
+/// Isolates LookRecipeStore observation to the looks menu only.
+private struct LookRecipePickerHost: View {
+    @ObservedObject private var lookStore = LookRecipeStore.shared
+    @Binding var filmFilter: FilmFilterMode
+    @Binding var lensFX: LensFXMode
+    var onDismiss: () -> Void
+    var onSaveCurrent: (() -> Void)?
+
+    var body: some View {
+        LookRecipePicker(
+            store: lookStore,
+            filmFilter: $filmFilter,
+            lensFX: $lensFX,
+            onDismiss: onDismiss,
+            onSaveCurrent: onSaveCurrent
+        )
     }
 }
 

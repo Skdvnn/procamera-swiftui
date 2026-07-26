@@ -577,6 +577,8 @@ def test_source_guards() -> None:
     check("toggle uses ChromePickerGate", "ChromePickerGate.toggle(" in content)
     check("dismiss on collapse", "ChromePickerGate.dismiss()" in content and "onChange(of: bottomCollapsed)" in content)
     check("onTogglePicker film", "onTogglePicker?(.film)" in vf)
+    check("onTogglePicker fx", "onTogglePicker?(.fx)" in vf)
+    check("onTogglePicker looks", "onTogglePicker?(.looks)" in vf)
     check("no LookRecipeStore observe on chrome", "@ObservedObject private var lookStore" not in chrome_pre)
     check("no activePicker on overlay", "activePicker" not in chrome_pre)
     check("no LookRecipeStore read on looks icon", "LookRecipeStore.shared.recipes" not in chrome_pre)
@@ -611,7 +613,22 @@ def test_source_guards() -> None:
     check("grain cache bounded", "maxEntries = 12" in vf)
     check("recipe ID dedupe", "Deduplicate IDs" in (ROOT / "LookRecipes.swift").read_text())
     check("LivePreviewBridge attach reset", "restoreCleanPreview()" in (ROOT / "FilteredCameraPreview.swift").read_text())
-    check("commit disables animations", "disablesAnimations = true" in content[content.find("applyChromePickerCommit"):content.find("applyChromePickerCommit")+400])
+    _commit_fn = content.find("func applyChromePickerCommit")
+    check(
+        "commit disables animations",
+        _commit_fn >= 0 and "disablesAnimations = true" in content[_commit_fn:_commit_fn + 500],
+    )
+
+    # Build 63 — Lens FX / effects share film hard path; resume Metal only after commit
+    check("teardown willCommit flag", "willCommit" in vf and "teardown?(willCommit)" in vf)
+    check("FX dismiss via onDismiss", "onDismiss: onDismiss" in vf[vf.find("case .fx:"):vf.find("case .looks:")])
+    check("FX picker no isPresented", "@Binding var isPresented" not in vf[vf.find("struct LensFXPicker"):vf.find("struct LookRecipePicker")])
+    check("film picker no isPresented", "@Binding var isPresented" not in vf[vf.find("struct LeicaFilmPicker"):vf.find("struct DSLRPickerChrome")])
+    check("looks store isolated host", "struct LookRecipePickerHost" in vf)
+    check("abort unsuspends only", "if !willCommit" in content and "setChromePickerPreviewSuspended(false)" in content)
+    check("unsuspend after FX commit", content.find("camera.selectedLensFX = commit.lensFX") < content.find("setChromePickerPreviewSuspended(false)", content.find("func applyChromePickerCommit")))
+    check("peaking committed with FX", "camera.focusPeakingEnabled = commit.focusPeaking" in content)
+    check("same path comment film+fx", "Film, Lens FX, and looks all share" in content or "film AND effects" in content)
 
 
 
@@ -691,11 +708,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 62", m is not None and int(ver) >= 62, ver)
+    check("Info.plist build >= 63", m is not None and int(ver) >= 63, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 62+", any(v >= 62 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 63+", any(v >= 63 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)
