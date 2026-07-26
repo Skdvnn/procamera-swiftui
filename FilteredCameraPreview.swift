@@ -262,20 +262,16 @@ struct FilteredCameraPreview: UIViewRepresentable {
             case .began:
                 lastPanTime = now
                 lastPanPoint = point
+                // Wait for direction — vertical = EV (iOS Camera), else morph FX.
                 panMode = .undecided
-                if exposureDragEnabled {
-                    panMode = .exposure
-                    onExposureDrag?(translation.y, false)
-                } else {
-                    panMode = .morph
-                    onMorphTouch?(point, .zero, true)
-                }
 
             case .changed:
                 if panMode == .undecided {
-                    // Prefer exposure when focus reticle is up; otherwise morph after a hint of movement
+                    let enough = abs(translation.x) > 6 || abs(translation.y) > 6
+                    guard enough else { break }
                     if exposureDragEnabled && abs(translation.y) >= abs(translation.x) {
                         panMode = .exposure
+                        onExposureDrag?(translation.y, false)
                     } else {
                         panMode = .morph
                         onMorphTouch?(point, .zero, true)
@@ -284,7 +280,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
 
                 if panMode == .exposure {
                     onExposureDrag?(translation.y, false)
-                } else {
+                } else if panMode == .morph {
                     let dt = max(1.0 / 120.0, now - lastPanTime)
                     velocity = CGPoint(
                         x: (point.x - lastPanPoint.x) / CGFloat(dt),
@@ -300,7 +296,7 @@ struct FilteredCameraPreview: UIViewRepresentable {
             case .ended, .cancelled, .failed:
                 if panMode == .exposure {
                     onExposureDrag?(translation.y, true)
-                } else {
+                } else if panMode == .morph {
                     let uiVel = gesture.velocity(in: view)
                     velocity = CGPoint(
                         x: min(8, max(-8, uiVel.x / view.bounds.width)),

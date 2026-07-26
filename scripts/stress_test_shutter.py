@@ -651,7 +651,16 @@ def test_source_guards() -> None:
     check("no cyan burstAccent", "0.55, green: 0.82, blue: 1.0" not in content)
     check("compact scrubbers no outer box", "Scrubbers only — no extra outer container" in (ROOT / "AnalogGaugeView.swift").read_text())
     check("deck swipe verticalBias", "verticalBias:" in content)
-    check("format on compact deck", "bottomCompactDeck" in content and "FormatTogglePill" in content[content.find("func bottomCompactDeck"):content.find("func bottomCompactDeck")+500])
+    check("no format on compact deck", "FormatTogglePill" not in content[content.find("func bottomCompactDeck"):content.find("func bottomCompactDeck")+700])
+    check("format on expanded deck", "FormatTogglePill" in content[content.find("ROW 3"):content.find("ROW 3")+2200])
+
+    # Build 66 — Night clean + EV drag anytime + hide format in fullscreen
+    check("night clears looks", "filmFilter = .none" in content[content.find("case .night:"):content.find("case .night:")+700])
+    check("night no peaking", "focusPeaking = false" in content[content.find("case .night:"):content.find("case .night:")+500])
+    check("night 1/15 not 1 inch", "shutterSpeedIndex = 6" in content[content.find("case .night:"):content.find("case .night:")+500])
+    check("EV drag anytime AUTO", "exposureDragEnabled: !isLocked && !camera.isManualExposure" in content)
+    check("EV drag seeds without tap", "park the sun reticle mid-finder" in content)
+    check("pan waits for direction", "Wait for direction" in (ROOT / "FilteredCameraPreview.swift").read_text())
 
 
 
@@ -731,11 +740,11 @@ def test_project_sanity() -> None:
 
     m = re.search(r"<key>CFBundleVersion</key>\s*<string>(\d+)</string>", plist)
     ver = m.group(1) if m else "?"
-    check("Info.plist build >= 65", m is not None and int(ver) >= 65, ver)
+    check("Info.plist build >= 66", m is not None and int(ver) >= 66, ver)
     import re as _re
 
     vers = [int(v) for v in _re.findall(r"CURRENT_PROJECT_VERSION = (\d+);", pbx)]
-    check("pbx CURRENT_PROJECT_VERSION 65+", any(v >= 65 for v in vers), f"versions={sorted(set(vers))}")
+    check("pbx CURRENT_PROJECT_VERSION 66+", any(v >= 66 for v in vers), f"versions={sorted(set(vers))}")
     check("ShutterRender in pbx", "ShutterRender.swift in Sources" in pbx)
     check("CI builds cursor/**", '"cursor/**"' in wf or "cursor/**" in wf)
     check("widgets compile ShutterDeepLink", "ShutterDeepLink.swift in Sources" in pbx)

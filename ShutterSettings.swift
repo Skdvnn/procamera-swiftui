@@ -20,7 +20,7 @@ enum ShootMode: String, CaseIterable, Identifiable {
     var blurb: String {
         switch self {
         case .street: return "Fast shutter · grid on"
-        case .night: return "Slow shutter · peaking"
+        case .night: return "1/15 · ISO 1600 · clean"
         case .studio: return "Manual lock · peaking"
         case .film: return "Stock-first · soft defaults"
         }

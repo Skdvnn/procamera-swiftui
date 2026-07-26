@@ -273,6 +273,8 @@ struct ContentView: View {
     @State private var showFocusPoint = false
     @State private var frozenMorphTouch: MorphTouchState? = nil
     @State private var focusPoint: CGPoint = .zero
+    /// Latest viewfinder size — used to center the EV sun when dragging without a prior tap.
+    @State private var viewfinderSize: CGSize = .zero
     /// EV captured when the focus reticle appeared — vertical drag offsets from this.
     @State private var focusStartEV: Float = 0
     @State private var isDraggingExposure = false
@@ -1025,7 +1027,7 @@ struct ContentView: View {
         nightAssistVisible = false
         nightAssistDismissedUntil = Date().addingTimeInterval(180)
         applyShootMode(.night)
-        showStatusToast("Night · 1″ · ISO 1600")
+        showStatusToast("Night · 1/15 · ISO 1600")
     }
 
     private func isLowLightAUTO(iso: Float, shutterLabel: String) -> Bool {
@@ -1198,14 +1200,20 @@ struct ContentView: View {
             isLocked = false
             camera.setAEAFLocked(false)
         case .night:
+            // Clean low-light preset — no peaking/zebra/film pink cast, no 1″ LE stack.
             showGrid = false
-            focusPeaking = true
-            zebraEnabled = true
-            shutterSpeedIndex = 2 // 1"
+            focusPeaking = false
+            zebraEnabled = false
+            filmFilter = .none
+            lensFX = .none
+            camera.selectedFilmFilter = .none
+            camera.selectedLensFX = .none
+            camera.focusPeakingEnabled = false
+            LensFXEngine.shared.clearStickyTouch()
+            shutterSpeedIndex = 6 // 1/15 — handheld-ish, not LE
             isoValue = 1600
-            camera.setShutterSpeed(index: 2)
+            camera.setShutterSpeed(index: 6)
             camera.setISO(1600)
-            // Always clear Studio lock when entering Night.
             isLocked = false
             camera.setAEAFLocked(false)
         case .studio:
@@ -1378,9 +1386,18 @@ struct ContentView: View {
     }
 
     /// iOS Camera-style sun drag: finger up brightens, down darkens.
+    /// Works anytime in AUTO (not only after a focus tap).
     private func handleExposureDrag(_ translationY: CGFloat, ended: Bool) {
         guard !isLocked, !camera.isManualExposure else { return }
         if !ended {
+            if !isDraggingExposure {
+                focusStartEV = exposureValue
+                lastExposureHapticStep = Int((exposureValue * 10).rounded())
+                // No prior tap — park the sun reticle mid-finder.
+                if !showFocusPoint, viewfinderSize.width > 1, viewfinderSize.height > 1 {
+                    focusPoint = CGPoint(x: viewfinderSize.width / 2, y: viewfinderSize.height / 2)
+                }
+            }
             isDraggingExposure = true
             showFocusPoint = true
             // ~140pt per EV stop; clamp to device bias range
@@ -1478,7 +1495,8 @@ struct ContentView: View {
                             // Focus and zoom are independent — never write zoom into FOCUS.
                         },
                         onMorphTouch: handleMorphTouch,
-                        exposureDragEnabled: showFocusPoint || isDraggingExposure,
+                        // iOS Camera sun-drag anytime in AUTO — not gated on a prior tap.
+                        exposureDragEnabled: !isLocked && !camera.isManualExposure,
                         onExposureDrag: handleExposureDrag,
                         onCompareHold: { holding in
                             showingCleanCompare = holding
@@ -1489,6 +1507,8 @@ struct ContentView: View {
                     .frame(width: vfGeo.size.width, height: vfGeo.size.height)
                     // Hard-stop inherited animations — Metal shutter args must stay constant.
                     .transaction { $0.animation = nil }
+                    .onAppear { viewfinderSize = vfGeo.size }
+                    .onChange(of: vfGeo.size) { _, size in viewfinderSize = size }
 
                     if showFocusPoint || isDraggingExposure {
                         FocusExposureReticle(exposureBias: exposureValue)
@@ -1731,57 +1751,46 @@ struct ContentView: View {
     }
 
     private func bottomCompactDeck(compact: Bool = false) -> some View {
-        VStack(spacing: compact ? 2 : 4) {
-            // Format centered above shutter (same optical center as expanded).
-            FormatTogglePill(format: $captureFormat) { newFormat in
-                captureFormatRaw = newFormat.rawValue
-                switch newFormat {
-                case .heic: camera.captureFormat = .heic
-                case .jpeg: camera.captureFormat = .jpeg
-                case .raw: camera.captureFormat = .raw
-                }
+        // Fullscreen / collapsed — no HEIC/JPEG/RAW chip (expanded deck only).
+        HStack(alignment: .center, spacing: 0) {
+            ThumbnailPill(image: lastCapturedImage) {
+                Haptics.click()
+                showPhotoBook = true
             }
 
-            HStack(alignment: .center, spacing: 0) {
-                ThumbnailPill(image: lastCapturedImage) {
-                    Haptics.click()
-                    showPhotoBook = true
+            Spacer(minLength: 8)
+
+            ShutterButton(
+                isBusy: isCapturing && !isBurstHolding && !burstConsumedTap,
+                timerCountdown: timerCountdown,
+                longExposureProgress: camera.isLongExposureCapturing
+                    ? camera.longExposureProgress
+                    : nil,
+                allowCancelWhileBusy: camera.isLongExposureCapturing,
+                compact: compact,
+                burstCount: isBurstHolding ? max(burstCaptured, 1) : 0,
+                onBurstStart: holdBurstEnabled ? { beginBurstHold() } : nil,
+                onBurstEnd: holdBurstEnabled ? { endBurstHold() } : nil
+            ) {
+                if burstConsumedTap {
+                    burstConsumedTap = false
+                    return
                 }
-
-                Spacer(minLength: 8)
-
-                ShutterButton(
-                    isBusy: isCapturing && !isBurstHolding && !burstConsumedTap,
-                    timerCountdown: timerCountdown,
-                    longExposureProgress: camera.isLongExposureCapturing
-                        ? camera.longExposureProgress
-                        : nil,
-                    allowCancelWhileBusy: camera.isLongExposureCapturing,
-                    compact: compact,
-                    burstCount: isBurstHolding ? max(burstCaptured, 1) : 0,
-                    onBurstStart: holdBurstEnabled ? { beginBurstHold() } : nil,
-                    onBurstEnd: holdBurstEnabled ? { endBurstHold() } : nil
-                ) {
-                    if burstConsumedTap {
-                        burstConsumedTap = false
-                        return
-                    }
-                    handleCapture()
-                }
-                .zIndex(2)
-
-                Spacer(minLength: 8)
-
-                WBPill(
-                    whiteBalanceIndex: $whiteBalanceIndex,
-                    onChanged: { mode in
-                        camera.setWhiteBalance(mode: mode)
-                    }
-                )
+                handleCapture()
             }
+            .zIndex(2)
+
+            Spacer(minLength: 8)
+
+            WBPill(
+                whiteBalanceIndex: $whiteBalanceIndex,
+                onChanged: { mode in
+                    camera.setWhiteBalance(mode: mode)
+                }
+            )
         }
         .padding(.horizontal, DS.pageMargin)
-        .padding(.vertical, compact ? 2 : 4)
+        .padding(.vertical, compact ? 4 : 6)
     }
 
     private var bottomExpandedDeck: some View {
