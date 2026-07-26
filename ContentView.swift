@@ -465,11 +465,11 @@ struct ContentView: View {
         /// Approximate RefractiveGlassInfoBar height (pad + hist + readouts).
         static let infoBarHeight: CGFloat = 56
         /// Gap between histogram bottom and shutter deck top when collapsed.
-        static let histDeckGap: CGFloat = 8
+        static let histDeckGap: CGFloat = 4
         /// Expanded: keep histogram inside the viewfinder, clear of the deck below.
-        static let expandedHistogramBottomPad: CGFloat = 14
+        static let expandedHistogramBottomPad: CGFloat = 10
         /// Gap between viewfinder bottom and expanded shutter deck.
-        static let viewfinderToDeckGap: CGFloat = 5
+        static let viewfinderToDeckGap: CGFloat = 2
 
         static func bottomPad(safeBottom: CGFloat) -> CGFloat {
             max(safeBottom * 0.55, 8)
@@ -716,11 +716,11 @@ struct ContentView: View {
             let effectiveTopCollapsed = topCollapsed || isLandscape
             let effectiveBottomCollapsed = bottomCollapsed
 
-            // Layout measurements — top collapse keeps FOCUS/EV strip as the hero
-            // Compact strip is 38pt — panel just clears it (Build 90; 34 was stubby).
-            let topPanelHeight: CGFloat = effectiveTopCollapsed ? (isLandscape ? 44 : 50) : 110
-            let gaugeToViewfinderSpacing: CGFloat = effectiveTopCollapsed ? 3 : 4
-            let viewfinderToControlsSpacing: CGFloat = max(2, CollapsedChrome.viewfinderToDeckGap - 2)
+            // Layout — minimize top scrubber chrome so the finder eats the rest
+            // (Build 97: 34pt strip, tight gaps).
+            let topPanelHeight: CGFloat = effectiveTopCollapsed ? (isLandscape ? 36 : 40) : 110
+            let gaugeToViewfinderSpacing: CGFloat = effectiveTopCollapsed ? 1 : 2
+            let viewfinderToControlsSpacing: CGFloat = max(1, CollapsedChrome.viewfinderToDeckGap - 1)
 
             ZStack(alignment: .top) {
                 // Non-Metal grip texture — stitchable vulcaniteTexture in this tree
@@ -937,7 +937,7 @@ struct ContentView: View {
                                 .gesture(bottomDeckSwipe)
                         }
                         .frame(maxWidth: .infinity)
-                        .padding(.top, 4)
+                        .padding(.top, 2)
                         .background { ControlsGrain() }
                         .transition(
                             .asymmetric(

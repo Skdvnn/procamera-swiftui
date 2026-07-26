@@ -443,14 +443,12 @@ struct HorizontalExposureMeter: View {
 
                 // Scale with ticks
                 VStack(spacing: 0) {
-                    // Tick marks row — marks between 0 EV and the needle burn yellow,
-                    // so the lit run reads as how far off the meter you are (Build 79).
+                    // Tick marks — yellow only on the focused/leading mark (Build 97).
                     HStack(spacing: 0) {
                         ForEach(0..<13, id: \.self) { i in
                             let isMajor = i % 3 == 0
                             let stopIndex = i / 3
                             let markEV = Float(i - 6) / 3.0
-                            let swept = markEV <= max(0, value) && markEV >= min(0, value)
                             let leading = abs(markEV - value) <= 1.0 / 6.0
                             let edgeFade: Double = {
                                 if stopIndex == 0 || stopIndex == 4 { return 0.5 }
@@ -463,13 +461,11 @@ struct HorizontalExposureMeter: View {
                                     .fill(
                                         leading
                                             ? DS.accent
-                                            : swept
-                                                ? DS.accent.opacity(0.60)
-                                                : Color.white.opacity((isMajor ? 0.8 : 0.35) * edgeFade)
+                                            : Color.white.opacity((isMajor ? 0.8 : 0.35) * edgeFade)
                                     )
                                     .frame(
                                         width: isMajor ? 1.5 : 1,
-                                        height: (isMajor ? 10 : 5) + (leading ? 3 : swept ? 1.5 : 0)
+                                        height: (isMajor ? 10 : 5) + (leading ? 3 : 0)
                                     )
                                     // Fixed slot, bottom-aligned: ticks grow off a shared
                                     // baseline so the degree labels never jitter.
@@ -479,14 +475,13 @@ struct HorizontalExposureMeter: View {
                                     Text(majorMarks[stopIndex])
                                         .font(.system(size: 7, weight: stopIndex == 2 ? .bold : .medium, design: .monospaced))
                                         .foregroundColor(
-                                            swept || leading
+                                            leading
                                                 ? DS.accent.opacity(0.85)
                                                 : .white.opacity(0.7 * edgeFade)
                                         )
                                 }
                             }
                             .frame(width: 8.5)
-                            .animation(.easeOut(duration: 0.12), value: swept)
                             .animation(.easeOut(duration: 0.12), value: leading)
                         }
                     }
@@ -596,10 +591,9 @@ struct AnalogDisplayPanel: View {
     var body: some View {
         Group {
             if compact {
-                // Compact strip — a hair under the 40pt ISO/S row so top chrome
-                // stays light, but 34pt read stubby (Build 90 → 38pt). Still the
-                // black instrument face from Build 84.
-                HStack(alignment: .center, spacing: 4) {
+                // Compact strip — minimized to 34pt and parked tight to the top
+                // so the viewfinder gets the reclaimed chrome (Build 97).
+                HStack(alignment: .center, spacing: 3) {
                     CompactFocusScrubber(
                         focusPosition: $focusPosition,
                         isAutoFocus: isAutoFocus,
@@ -607,7 +601,7 @@ struct AnalogDisplayPanel: View {
                         onActiveChanged: onFocusScrubActive
                     )
                     .frame(maxWidth: .infinity)
-                    .frame(height: 38)
+                    .frame(height: 34)
 
                     if showLevel {
                         InfoBarMetalLevel(compact: true)
@@ -619,7 +613,7 @@ struct AnalogDisplayPanel: View {
                         onActiveChanged: onEVScrubActive
                     )
                     .frame(maxWidth: .infinity)
-                    .frame(height: 38)
+                    .frame(height: 34)
                 }
             } else {
                 ZStack {

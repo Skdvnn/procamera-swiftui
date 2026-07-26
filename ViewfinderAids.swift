@@ -213,9 +213,9 @@ struct InfoBarMetalLevel: View {
         let roll = motion.rollDegrees
         let level = abs(roll) < levelTolerance
         let visualRoll = max(-15, min(15, roll))
-        // Compact matches the top FOCUS / EV strip (Build 90 — 38pt).
-        let w: CGFloat = compact ? 52 : 120
-        let h: CGFloat = compact ? 38 : 36
+        // Compact matches the top FOCUS / EV strip (Build 97 — 34pt, max finder).
+        let w: CGFloat = compact ? 48 : 120
+        let h: CGFloat = compact ? 34 : 36
 
         ZStack {
             // Same instrument face and border language as the EV meter.
@@ -264,8 +264,8 @@ struct InfoBarMetalLevel: View {
         }
     }
 
-    /// Live tick scale. Marks between 0° and the current roll burn yellow, so the
-    /// lit run *is* how far off level you are; the leading mark breathes.
+    /// Live tick scale. Yellow only on the focused/leading mark (and solid
+    /// center when level) — no swept yellow run on unfocused ticks (Build 97).
     private func tickScale(
         count: Int,
         roll: Float,
@@ -287,22 +287,18 @@ struct InfoBarMetalLevel: View {
                     let major = labels ? (i % 3 == 0) : (i == count / 2)
                     let x = pitch * (CGFloat(i) + 0.5)
 
-                    // Swept = lies between level and where you're tilted.
-                    let swept = deg <= max(0, roll) && deg >= min(0, roll)
                     let leading = abs(deg - roll) <= step * 0.75
+                    let atCenter = i == count / 2
 
                     let color: Color
                     var height: CGFloat = major ? 6.0 : 3.5
 
-                    if isLevel {
-                        color = accent.opacity(i == count / 2 ? 1.0 : 0.42 + 0.18 * pulse)
-                        if i == count / 2 { height += 3.5 }
-                    } else if leading {
+                    if isLevel && atCenter {
+                        color = accent.opacity(0.92 + 0.08 * pulse)
+                        height += 3.5
+                    } else if !isLevel && leading {
                         color = accent.opacity(0.85 + 0.15 * pulse)
                         height += 3.5 + 1.0 * CGFloat(pulse)
-                    } else if swept {
-                        color = accent.opacity(0.55)
-                        height += 1.5
                     } else {
                         color = Color.white.opacity(major ? 0.34 : 0.16)
                     }
@@ -317,10 +313,10 @@ struct InfoBarMetalLevel: View {
                     let i = markIndex * 3
                     let deg = (Float(i) - mid) * step
                     let x = pitch * (CGFloat(i) + 0.5)
-                    let swept = deg <= max(0, roll) && deg >= min(0, roll)
+                    let leading = abs(deg - roll) <= step * 0.75
                     let tint: Color = isLevel
-                        ? accent.opacity(markIndex == 2 ? 1.0 : 0.55)
-                        : swept ? accent.opacity(0.75) : Color.white.opacity(markIndex == 2 ? 0.55 : 0.38)
+                        ? (markIndex == 2 ? accent : Color.white.opacity(0.38))
+                        : leading ? accent.opacity(0.85) : Color.white.opacity(markIndex == 2 ? 0.55 : 0.38)
                     let text = Text(degreeMarks[markIndex])
                         .font(.system(size: 6, weight: markIndex == 2 ? .bold : .medium, design: .monospaced))
                         .foregroundStyle(tint)
@@ -384,11 +380,11 @@ struct InfoBarMetalLevel: View {
 
     @ViewBuilder
     private func compactLevel(roll: Float, isLevel: Bool) -> some View {
-        // Fills the 38pt scrubber slot — ticks on top, horizon + readout below.
+        // Fills the 34pt scrubber slot — ticks on top, horizon + readout below.
         VStack(spacing: 0) {
             tickScale(count: 7, roll: roll, isLevel: isLevel, step: 5, labels: false)
-                .frame(height: 11)
-                .padding(.top, 2)
+                .frame(height: 10)
+                .padding(.top, 1)
 
             ZStack {
                 HStack(spacing: 5) {

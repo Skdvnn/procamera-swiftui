@@ -8,14 +8,16 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 96 phone test pack (S left / ISO right + easier deck pull-down):**
+**Build 97 phone test pack (taller finder + top yellow center-only):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **96**.
-Expanded deck: shutter scrubber on the left, ISO on the right. Vertical
-pull-down to leave explore now shares the gesture with the scrubber row
-(looser bias when expanded) so ISO scrubbing doesn't trap you in the deck.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **97**.
+Top FOCUS / EV / level strip is 34pt and parked tighter so the viewfinder
+grows. Yellow ticks only light the focused/leading mark — no swept yellow
+run on unfocused ticks.
+
+Build 96: S left / ISO right + easier explore pull-down.
 
 Build 95: white scrubber majors + no deck outer board (flash/WB language).
 
