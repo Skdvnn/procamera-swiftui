@@ -292,9 +292,10 @@ enum PhotosLibraryService {
         }, completionHandler: { success, error in
             if let error { print("Shutter album mirror failed: \(error)") }
             // Debug builds have no App Group — nudge WidgetKit to re-read Photos.
+            // Skip if capture already force-reloaded timelines this window (Build 108).
             if success {
                 DispatchQueue.main.async {
-                    WidgetCenter.shared.reloadAllTimelines()
+                    WidgetReloadGate.reload(minInterval: 1.5)
                 }
             }
         })

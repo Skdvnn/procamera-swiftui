@@ -16,13 +16,18 @@ class CameraManager: NSObject, ObservableObject {
     @Published var flashMode: AVCaptureDevice.FlashMode = .off
     /// Not @Published — ContentView owns EV UI via @State (Build 106).
     var exposureValue: Float = 0.0
-    @Published var isoValue: Float = 100
-    @Published var shutterSpeed: CMTime = CMTime(value: 1, timescale: 125)
-    @Published var focusPoint: CGPoint = CGPoint(x: 0.5, y: 0.5)
+    /// Not @Published — ContentView owns ISO dial via @State (Build 108).
+    var isoValue: Float = 100
+    /// Not @Published — ContentView owns shutter dial via @State.
+    var shutterSpeed: CMTime = CMTime(value: 1, timescale: 125)
+    /// Not @Published — reticle uses ContentView @State focus point.
+    var focusPoint: CGPoint = CGPoint(x: 0.5, y: 0.5)
     @Published var isManualFocus: Bool = false
-    @Published var lensPosition: Float = 0.5
+    /// Not @Published — ContentView owns focus scrubber via @State.
+    var lensPosition: Float = 0.5
     @Published var whiteBalance: AVCaptureDevice.WhiteBalanceGains?
-    @Published var zoomFactor: CGFloat = 1.0
+    /// Not @Published — ContentView owns zoom via @State; pinch was thrashing Metal.
+    var zoomFactor: CGFloat = 1.0
     @Published var isManualExposure: Bool = false
     @Published var isAEAFLocked: Bool = false
     /// Live sensor ISO while AUTO (0 when unknown / manual owns the dial).
@@ -56,21 +61,35 @@ class CameraManager: NSObject, ObservableObject {
             refreshLivePreviewState()
         }
     }
-    @Published var isLongExposureCapturing: Bool = false
-    @Published var longExposureProgress: Float = 0.0
-    /// Throttle STACK progress publishes so ContentView isn't rebuilt every frame.
+    @Published var isLongExposureCapturing: Bool = false {
+        didSet {
+            // Keep leaf LE chrome in sync without progress thrashing ContentView.
+            LongExposureProgressBus.shared.publish(
+                progress: longExposureProgress,
+                pathLabel: longExposurePathLabel,
+                capturing: isLongExposureCapturing
+            )
+        }
+    }
+    /// Not @Published — progress rides LongExposureProgressBus (Build 108).
+    var longExposureProgress: Float = 0.0
+    /// Throttle STACK progress publishes so LE leaf chrome isn't rebuilt every frame.
     private var lastLEProgressPublish: CFAbsoluteTime = 0
     private var lastLEProgressValue: Float = -1
     /// "HW" single-shot hardware duration vs "STACK" computational average.
-    @Published var longExposurePathLabel: String = ""
+    /// Not @Published — leaf overlay reads LongExposureProgressBus.
+    var longExposurePathLabel: String = ""
     /// One-shot toast when film/FX bake falls back to a clean still.
     @Published var captureNote: String?
-    /// Hold-to-compare: temporarily show clean preview (no film/FX bake).
-    @Published var previewLooksBypassed: Bool = false {
-        didSet {
-            syncPipelineSelection()
-            refreshLivePreviewState()
-        }
+    /// Hold-to-compare clean preview — Not @Published; ContentView owns compare chrome.
+    private(set) var previewLooksBypassed: Bool = false
+
+    /// Flip clean-compare without invalidating the Metal finder tree (Build 108).
+    func setPreviewLooksBypassed(_ bypassed: Bool) {
+        guard previewLooksBypassed != bypassed else { return }
+        previewLooksBypassed = bypassed
+        syncPipelineSelection()
+        refreshLivePreviewState()
     }
     @Published var captureFormat: CaptureFormatType = .heic
     /// Minimal Apple computational photography — prefer speed + Bayer RAW.
@@ -538,8 +557,7 @@ class CameraManager: NSObject, ObservableObject {
             self.setBakingStill(false)
             DispatchQueue.main.async {
                 self.isLongExposureCapturing = false
-                self.longExposureProgress = 0
-                self.longExposurePathLabel = ""
+                self.clearLEProgressUI()
                 done?(nil)
             }
         }
@@ -587,8 +605,7 @@ class CameraManager: NSObject, ObservableObject {
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
             self.isLongExposureCapturing = false
-            self.longExposureProgress = 0
-            self.longExposurePathLabel = ""
+            self.clearLEProgressUI()
             done?(image)
         }
     }
@@ -610,6 +627,22 @@ class CameraManager: NSObject, ObservableObject {
             pipelineChromeSuspended,
             pipelineBakingStill
         )
+    }
+
+    /// Push LE progress to the leaf bus without invalidating ContentView (Build 108).
+    private func publishLEProgress(_ progress: Float) {
+        longExposureProgress = progress
+        LongExposureProgressBus.shared.publish(
+            progress: progress,
+            pathLabel: longExposurePathLabel,
+            capturing: isLongExposureCapturing
+        )
+    }
+
+    private func clearLEProgressUI() {
+        longExposureProgress = 0
+        longExposurePathLabel = ""
+        LongExposureProgressBus.shared.reset()
     }
 
     /// Suspend live film/FX Metal while the chrome picker window is up.
@@ -675,7 +708,7 @@ class CameraManager: NSObject, ObservableObject {
             DispatchQueue.main.async {
                 self.shutterSpeed = duration
                 self.isoValue = iso
-                self.isManualExposure = true
+                if !self.isManualExposure { self.isManualExposure = true }
             }
         } catch {
             print("Error reapplying manual exposure: \(error)")
@@ -821,9 +854,10 @@ class CameraManager: NSObject, ObservableObject {
         longExposureInterfaceOrientation = Self.currentInterfaceOrientation()
         longExposureWasFront = (currentCamera == .front)
 
+        // Zero progress before flipping the flag so didSet doesn't flash stale %.
+        longExposureProgress = 0
         // Set synchronously before returning — ContentView reads this flag immediately.
         isLongExposureCapturing = true
-        longExposureProgress = 0.0
 
         // Get device's actual max exposure duration
         let maxHardwareDuration = CMTimeGetSeconds(device.activeFormat.maxExposureDuration)
@@ -831,10 +865,12 @@ class CameraManager: NSObject, ObservableObject {
         // If hardware can handle it directly, use single capture
         if durationSeconds <= maxHardwareDuration {
             longExposurePathLabel = "HW"
+            publishLEProgress(0)
             captureSingleLongExposure(duration: durationSeconds, completion: completion)
         } else {
             // Use computational long exposure (frame averaging)
             longExposurePathLabel = "STACK"
+            publishLEProgress(0)
             captureComputationalLongExposure(targetDuration: durationSeconds, completion: completion)
         }
     }
@@ -876,8 +912,7 @@ class CameraManager: NSObject, ObservableObject {
             self.hwTimeoutWork = nil
             self.restoreExposureAfterLongExposure()
             self.isLongExposureCapturing = false
-            self.longExposureProgress = 0.0
-            self.longExposurePathLabel = ""
+            
             completion(nil)
         }
         hwTimeoutWork = hwTimeout
@@ -902,7 +937,7 @@ class CameraManager: NSObject, ObservableObject {
                         self.photoStateLock.unlock()
                         hwTimeout.cancel()
                         self.hwTimeoutWork = nil
-                        self.longExposureProgress = 1.0
+                        self.publishLEProgress(1.0)
                         self.capturePhoto(
                             filmFilter: captureFilm,
                             lensFX: captureFX,
@@ -911,8 +946,7 @@ class CameraManager: NSObject, ObservableObject {
                             // Thaw multi-second preview lock, then restore manuals.
                             self.restoreExposureAfterLongExposure()
                             self.isLongExposureCapturing = false
-                            self.longExposureProgress = 0.0
-                            self.longExposurePathLabel = ""
+                            
                             completion(image)
                         }
                     }
@@ -929,8 +963,7 @@ class CameraManager: NSObject, ObservableObject {
                     self.longExposureCompletion = nil
                     self.photoStateLock.unlock()
                     self.isLongExposureCapturing = false
-                    self.longExposureProgress = 0.0
-                    self.longExposurePathLabel = ""
+                    
                     // Don't leave the finder locked on a multi-second custom exposure.
                     self.restoreExposureAfterLongExposure()
                     completion(nil)
@@ -1016,8 +1049,7 @@ class CameraManager: NSObject, ObservableObject {
                 self.restoreExposureAfterLongExposure()
                 DispatchQueue.main.async {
                     self.isLongExposureCapturing = false
-                    self.longExposureProgress = 0.0
-                    self.longExposurePathLabel = ""
+                    
                     completion(nil)
                 }
             }
@@ -1070,8 +1102,7 @@ class CameraManager: NSObject, ObservableObject {
 
         DispatchQueue.main.async {
             self.isLongExposureCapturing = false
-            self.longExposureProgress = 0.0
-            self.longExposurePathLabel = ""
+            
             if let bakeDone {
                 bakeDone(nil)
             } else {
@@ -1313,7 +1344,8 @@ class CameraManager: NSObject, ObservableObject {
                 device.unlockForConfiguration()
                 DispatchQueue.main.async {
                     self.isoValue = clampedISO
-                    self.isManualExposure = true
+                    // Guard — re-publishing true every ISO scrub sample rebuilt Metal.
+                    if !self.isManualExposure { self.isManualExposure = true }
                 }
             } catch {
                 print("Error setting ISO: \(error)")
@@ -1343,7 +1375,7 @@ class CameraManager: NSObject, ObservableObject {
                 DispatchQueue.main.async {
                     self.shutterSpeed = clampedDuration
                     self.isoValue = clampedISO
-                    self.isManualExposure = true
+                    if !self.isManualExposure { self.isManualExposure = true }
                 }
             } catch {
                 print("Error setting shutter speed: \(error)")
@@ -1480,7 +1512,8 @@ class CameraManager: NSObject, ObservableObject {
                 device.unlockForConfiguration()
                 DispatchQueue.main.async {
                     self.lensPosition = position
-                    self.isManualFocus = true
+                    // Guard — FOCUS scrub was republishing true ~30Hz into ContentView.
+                    if !self.isManualFocus { self.isManualFocus = true }
                 }
             } catch {
                 print("Error setting manual focus: \(error)")
@@ -3069,7 +3102,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                 lastLEProgressPublish = now
                 lastLEProgressValue = progress
                 DispatchQueue.main.async {
-                    self.longExposureProgress = progress
+                    self.publishLEProgress(progress)
                 }
             }
             return
@@ -3113,7 +3146,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             lastLEProgressPublish = now
             lastLEProgressValue = progress
             DispatchQueue.main.async {
-                self.longExposureProgress = progress
+                self.publishLEProgress(progress)
             }
         }
     }
@@ -3144,7 +3177,7 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         // Keep isLongExposureCapturing true through bake so Cancel still works
         // and sessionBusy blocks competing captures until JPEG lands.
         DispatchQueue.main.async {
-            self.longExposureProgress = 1.0
+            self.publishLEProgress(1.0)
         }
 
         // Snapshot + bake BEFORE restoring exposure. resetToAutoExposure used to

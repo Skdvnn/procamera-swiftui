@@ -994,10 +994,13 @@ struct ContentView: View {
             .ignoresSafeArea()
             // NEVER attach .animation to this ZStack — it owns Metal preview + shutter.
             // Toast/night chrome animate inside FinderStatusOverlays only.
-            // AE bus only — do NOT observe HistogramBus here (that rebuilt the
-            // whole Metal finder ~2Hz). Pick still *reads* bins when evaluating.
-            .onReceive(LiveExposureBus.shared.$iso) { _ in evaluateSceneAssist() }
-            .onReceive(LiveExposureBus.shared.$shutterLabel) { _ in evaluateSceneAssist() }
+            // Scene-assist AE probe lives on a zero-size leaf (Build 108) so
+            // ~2.5Hz LiveExposureBus ticks don't re-enter the Metal ZStack.
+            .background {
+                SceneAssistProbe {
+                    evaluateSceneAssist()
+                }
+            }
             .onChange(of: camera.isManualExposure) { _, manual in
                 if manual {
                     clearSceneAssistState()
@@ -1553,8 +1556,9 @@ struct ContentView: View {
             }
         }
         ShutterAppGroup.defaults.set(Array(encoded.prefix(4)), forKey: "widget.lookNames")
-        // Refresh Lock / Home widgets immediately (Release / TestFlight App Group).
-        WidgetCenter.shared.reloadAllTimelines()
+        // Debounce timeline reload — look flips were hitching the finder every
+        // chrome commit; capture/cull still force-reload via recents push.
+        WidgetReloadGate.reload(minInterval: 1.5)
         if #available(iOS 18.0, *) {
             Task {
                 try? await ShutterCameraCaptureIntent.updateAppContext(ctx)
@@ -1616,7 +1620,7 @@ struct ContentView: View {
                 }
             )
         )
-        WidgetCenter.shared.reloadAllTimelines()
+        WidgetReloadGate.reload(force: true)
     }
 
     /// Backfill so widgets aren't blank — or half-filled after a widget upgrade —
@@ -1824,7 +1828,7 @@ struct ContentView: View {
                         onExposureDrag: handleExposureDrag,
                         onCompareHold: { holding in
                             showingCleanCompare = holding
-                            camera.previewLooksBypassed = holding
+                            camera.setPreviewLooksBypassed(holding)
                             if holding { Haptics.light() }
                         }
                     )
@@ -1865,11 +1869,7 @@ struct ContentView: View {
 
                 Group {
                     if camera.isLongExposureCapturing {
-                        LongExposureProgressOverlay(
-                            progress: camera.longExposureProgress,
-                            pathLabel: camera.longExposurePathLabel,
-                            onCancel: { handleCapture() }
-                        )
+                        LongExposureProgressOverlay(onCancel: { handleCapture() })
                         .transition(.opacity)
                     }
                 }
@@ -2102,9 +2102,6 @@ struct ContentView: View {
             ShutterButton(
                 isBusy: isCapturing && !isBurstHolding && !burstConsumedTap,
                 timerCountdown: timerCountdown,
-                longExposureProgress: camera.isLongExposureCapturing
-                    ? camera.longExposureProgress
-                    : nil,
                 allowCancelWhileBusy: camera.isLongExposureCapturing,
                 compact: compact,
                 burstCount: isBurstHolding ? max(burstCaptured, 1) : 0,
@@ -2261,9 +2258,6 @@ struct ContentView: View {
                 ShutterButton(
                     isBusy: isCapturing && !isBurstHolding && !burstConsumedTap,
                     timerCountdown: timerCountdown,
-                    longExposureProgress: camera.isLongExposureCapturing
-                        ? camera.longExposureProgress
-                        : nil,
                     allowCancelWhileBusy: camera.isLongExposureCapturing,
                     burstCount: isBurstHolding ? max(burstCaptured, 1) : 0,
                     onBurstStart: holdBurstEnabled ? { beginBurstHold() } : nil,
@@ -2462,9 +2456,12 @@ struct ViewfinderVignette: View {
 
 // MARK: - Long Exposure Progress (viewfinder ring during computational LE)
 struct LongExposureProgressOverlay: View {
-    let progress: Float
-    var pathLabel: String = ""
+    /// Leaf-observed — progress must not ride CameraManager @Published (Build 108).
+    @ObservedObject private var leBus = LongExposureProgressBus.shared
     var onCancel: (() -> Void)? = nil
+
+    private var progress: Float { leBus.progress }
+    private var pathLabel: String { leBus.pathLabel }
 
     var body: some View {
         ZStack {
@@ -2516,6 +2513,22 @@ struct LongExposureProgressOverlay: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Scene-assist AE probe (leaf — keeps LiveExposureBus off Metal ZStack)
+/// AE publishes ~2.5Hz. Observing on the Metal-owning ZStack re-entered the
+/// whole finder; this zero-size leaf absorbs the ticks (Build 108).
+private struct SceneAssistProbe: View {
+    let onTick: () -> Void
+
+    var body: some View {
+        Color.clear
+            .frame(width: 0, height: 0)
+            .accessibilityHidden(true)
+            // AE bus only — do NOT observe HistogramBus here.
+            .onReceive(LiveExposureBus.shared.$iso) { _ in onTick() }
+            .onReceive(LiveExposureBus.shared.$shutterLabel) { _ in onTick() }
     }
 }
 
@@ -3148,7 +3161,7 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                     )
                 }
                 .allowsHitTesting(false)
-                .animation(ShutterMotion.scrub, value: tickPhase)
+                // tickPhase snaps without spring — Canvas animation thrashed ISO/S flicks.
 
                 // Classic readout: prev | label + value (+suffix) | next
                 HStack(spacing: 0) {
@@ -3175,8 +3188,9 @@ struct NativeSnapScrubber<Value: Hashable>: View {
                             .foregroundColor(isScrolling ? DS.accent : .white)
                             .scaleEffect(isScrolling ? 1.12 : 1.0)
                             .contentTransition(.numericText())
-                            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: selection)
-                            .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isScrolling)
+                            // Light fade only — scrub springs stacked with tickPhase (Build 108).
+                            .animation(.easeOut(duration: 0.12), value: selection)
+                            .animation(.easeOut(duration: 0.12), value: isScrolling)
 
                         if let suffix {
                             Text(suffix)
@@ -3250,9 +3264,10 @@ struct NativeSnapScrubber<Value: Hashable>: View {
             // After onChanged so parent state (focus/EV/ISO) is current for the arch.
             onActiveChanged?(true)
             if let idx = values.firstIndex(of: newValue) {
-                withAnimation(ShutterMotion.scrub) {
-                    tickPhase = CGFloat(idx) * 6
-                }
+                // Snap ticks without stacking scrub springs (Build 108).
+                var t = Transaction()
+                t.disablesAnimations = true
+                withTransaction(t) { tickPhase = CGFloat(idx) * 6 }
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.38) {
                 if gen == scrollGeneration {
@@ -3638,8 +3653,6 @@ struct ShutterButton: View {
     var isBusy: Bool = false
     /// Countdown seconds remaining; >0 keeps the button enabled for cancel.
     var timerCountdown: Int = 0
-    /// 0…1 while STACK/HW long exposure is running (nil = not in LE).
-    var longExposureProgress: Float? = nil
     /// Keep shutter enabled so the user can abort LE.
     var allowCancelWhileBusy: Bool = false
     /// Landscape / short deck — slightly smaller chrome.
@@ -3652,9 +3665,14 @@ struct ShutterButton: View {
     let action: () -> Void
 
     @GestureState private var burstPressing = false
+    /// LE ring progress — leaf bus so ContentView doesn't rebuild at 12Hz (Build 108).
+    @ObservedObject private var leBus = LongExposureProgressBus.shared
 
     private var isTimerArmed: Bool { timerCountdown > 0 }
     private var canCancel: Bool { isTimerArmed || allowCancelWhileBusy }
+    private var longExposureProgress: Float? {
+        allowCancelWhileBusy || leBus.isCapturing ? leBus.progress : nil
+    }
 
     var body: some View {
         Button(action: action) {

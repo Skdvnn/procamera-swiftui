@@ -84,3 +84,34 @@ final class LiveExposureBus: ObservableObject {
         }
     }
 }
+
+/// STACK/HW long-exposure progress — leaf chrome only (Build 108).
+/// Publishing through `@Published` on CameraManager rebuilt the whole Metal finder ~12Hz.
+final class LongExposureProgressBus: ObservableObject {
+    static let shared = LongExposureProgressBus()
+
+    @Published private(set) var progress: Float = 0
+    @Published private(set) var pathLabel: String = ""
+    @Published private(set) var isCapturing: Bool = false
+
+    func publish(progress: Float, pathLabel: String, capturing: Bool) {
+        if capturing != isCapturing {
+            isCapturing = capturing
+        }
+        if abs(progress - self.progress) >= 0.01 {
+            self.progress = progress
+        }
+        if pathLabel != self.pathLabel {
+            self.pathLabel = pathLabel
+        }
+        if !capturing, self.progress != 0 {
+            self.progress = 0
+        }
+    }
+
+    func reset() {
+        progress = 0
+        pathLabel = ""
+        isCapturing = false
+    }
+}

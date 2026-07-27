@@ -8,13 +8,16 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 107 phone test pack (tighter widget margins):**
+**Build 108 phone test pack (finder thrash / LE bus):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **107**.
-Verified: Home widgets use 8pt side/top pad; medium sheet is larger with
-sprockets + frame numbers; small/large show keepers and denser meta.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **108**.
+Verified: long-exposure progress on a leaf bus; ISO/zoom/shutter demoted;
+manual focus/exposure flags guarded; compare bypass not Published; scene-assist
+AE probe off Metal ZStack; widget reloads gated; scrub ticks/labels snap light.
+
+Build 107: tighter widget margins.
 
 Build 106: stability / lag pass.
 
