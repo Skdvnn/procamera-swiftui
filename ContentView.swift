@@ -285,8 +285,10 @@ struct ContentView: View {
     @State private var frozenFilmFilter: FilmFilterMode? = nil
     @State private var frozenLensFX: LensFXMode? = nil
     @State private var lastShutterEventAt: CFAbsoluteTime = 0
-    @State private var photoCount = 0
+    @State private var photoCount = 0 // mirrored to CaptureChromeBus for leaf chrome
     @State private var lastCapturedImage: UIImage?
+    /// Local MANUAL flag — CameraManager.isManualExposure is not @Published (Build 111).
+    @State private var isManualExposure = false
     /// Brief chrome toast for failed capture / Photos denial / LE cancel — ToastBus (Build 109).
     /// Suppresses "Capture failed" toast when the user aborted LE.
     @State private var expectingLECancel = false
@@ -544,6 +546,7 @@ struct ContentView: View {
             } else {
                 lastCapturedImage = nil
             }
+            CaptureChromeBus.shared.setRecents(count: photoCount, thumb: lastCapturedImage)
         }) {
             CullLibraryView(
                 store: gallery,
@@ -741,7 +744,7 @@ struct ContentView: View {
                 VStack(spacing: 0) {
                     // TOP: Analog Display Panel — FOCUS/EV when compact
                     LiveExposureChrome(
-                        isManualExposure: camera.isManualExposure,
+                        isManualExposure: isManualExposure,
                         isoOverride: isoValue,
                         shutterOverride: shutterSpeeds[safeShutterSpeedIndex]
                     ) { liveISO, liveShutter in
@@ -751,9 +754,9 @@ struct ContentView: View {
                             shutterSpeedIndex: $shutterSpeedIndex,
                             timerSeconds: timerSeconds,
                             iso: liveISO,
-                            isoIsAuto: !camera.isManualExposure,
+                            isoIsAuto: !isManualExposure,
                             shutterLabel: liveShutter,
-                            shutterIsAuto: !camera.isManualExposure,
+                            shutterIsAuto: !isManualExposure,
                             flashMode: flashModeLabel(flashMode),
                             macroEnabled: macroEnabled,
                             isAutoFocus: !isManualFocusEnabled,
@@ -766,7 +769,7 @@ struct ContentView: View {
                                 setScrubEdge(.focus, active: true, value: focusDistanceLabel(val))
                             },
                             onExposureChanged: { val in
-                                guard !isLocked, !camera.isManualExposure else { return }
+                                guard !isLocked, !isManualExposure else { return }
                                 camera.setExposure(val)
                                 setScrubEdge(.ev, active: true, value: String(format: "%+.1f", val))
                             },
@@ -774,6 +777,7 @@ struct ContentView: View {
                                 guard !isLocked else { return }
                                 // Pass UI ISO so we don't lock shutter with CameraManager's stale 100.
                                 shutterSpeedIndex = idx
+                                isManualExposure = true
                                 camera.setShutterSpeed(index: idx, iso: Float(isoValue))
                             },
                             // Top FOCUS / EV scrubs peel the same dial as sun-drag (Build 94).
@@ -840,7 +844,7 @@ struct ContentView: View {
                             // on the bottom-padded frame — that invisible pad sat on top
                             // of the shutter and ate every tap.
                             LiveExposureChrome(
-                                isManualExposure: camera.isManualExposure,
+                                isManualExposure: isManualExposure,
                                 isoOverride: isoValue,
                                 shutterOverride: shutterSpeeds[safeShutterSpeedIndex]
                             ) { liveISO, liveShutter in
@@ -853,7 +857,7 @@ struct ContentView: View {
                                     captureFormat: captureFormat,
                                     aspectLabel: aspectRatio.shortLabel,
                                     isLocked: isLocked,
-                                    isManualExposure: camera.isManualExposure,
+                                    isManualExposure: isManualExposure,
                                     naturalCapture: naturalCapture,
                                     showLevel: showLevel,
                                     compact: isLandscape,
@@ -981,7 +985,7 @@ struct ContentView: View {
                     evaluateSceneAssist()
                 }
             }
-            .onChange(of: camera.isManualExposure) { _, manual in
+            .onChange(of: isManualExposure) { _, manual in
                 if manual {
                     clearSceneAssistState()
                 } else {
@@ -1026,6 +1030,7 @@ struct ContentView: View {
         if let last = gallery.shots.last, let img = gallery.thumbnail(for: last) {
             lastCapturedImage = img
         }
+        CaptureChromeBus.shared.setRecents(count: photoCount, thumb: lastCapturedImage)
         // Seed widget overlapping recents from gallery if App Group is empty.
         seedWidgetRecentsIfNeeded()
         apertureValue = camera.lensAperture
@@ -1063,7 +1068,7 @@ struct ContentView: View {
 
     /// ISO for chrome / metadata — live sensor value while AUTO.
     private var displayISO: Int {
-        if camera.isManualExposure { return isoValue }
+        if isManualExposure { return isoValue }
         let live = Int(LiveExposureBus.shared.iso.rounded())
         return live > 0 ? live : isoValue
     }
@@ -1077,7 +1082,7 @@ struct ContentView: View {
     private static let longExposureDurations: [Double] = [4.0, 2.0, 1.0, 0.5]
 
     private var isLongExposureShutterIndex: Bool {
-        camera.isManualExposure && (0...3).contains(safeShutterSpeedIndex)
+        isManualExposure && (0...3).contains(safeShutterSpeedIndex)
     }
 
     private var longExposureDurationIfAny: Double? {
@@ -1087,7 +1092,7 @@ struct ContentView: View {
 
     /// Shutter label for chrome / metadata — live duration while AUTO.
     private var displayShutterLabel: String {
-        if camera.isManualExposure { return shutterSpeeds[safeShutterSpeedIndex] }
+        if isManualExposure { return shutterSpeeds[safeShutterSpeedIndex] }
         let live = LiveExposureBus.shared.shutterLabel
         return live.isEmpty || live == "AUTO" ? "AUTO" : live
     }
@@ -1138,7 +1143,7 @@ struct ContentView: View {
             capturing: isCapturing,
             bursting: isBurstHolding,
             longExposure: camera.isLongExposureCapturing,
-            manualExposure: camera.isManualExposure,
+            manualExposure: isManualExposure,
             armedAuto: armed
         )
     }
@@ -1311,6 +1316,7 @@ struct ContentView: View {
             // Arm SCENE Auto — continuous AE + soft tips (Build 105).
             isLocked = false
             isManualFocusEnabled = false
+            isManualExposure = false
             exposureValue = 0
             shutterSpeedIndex = 9
             isoValue = 400
@@ -1327,6 +1333,7 @@ struct ContentView: View {
             zebraEnabled = false
             shutterSpeedIndex = 10 // 1/250
             isoValue = 400
+            isManualExposure = true
             camera.setShutterSpeed(index: 10)
             camera.setISO(400)
             isLocked = false
@@ -1344,6 +1351,7 @@ struct ContentView: View {
             LensFXEngine.shared.clearStickyTouch()
             shutterSpeedIndex = 6 // 1/15 — handheld-ish, not LE
             isoValue = 1600
+            isManualExposure = true
             camera.setShutterSpeed(index: 6)
             camera.setISO(1600)
             isLocked = false
@@ -1354,6 +1362,7 @@ struct ContentView: View {
             zebraEnabled = true
             shutterSpeedIndex = 9 // 1/125
             isoValue = 200
+            isManualExposure = true
             camera.setShutterSpeed(index: 9)
             camera.setISO(200)
             camera.setAEAFLocked(true)
@@ -1368,6 +1377,7 @@ struct ContentView: View {
             shutterSpeedIndex = 8 // 1/60
             isoValue = 400
             // Keep 1/60 + ISO 400 — do not call return-to-auto (it wiped the preset).
+            isManualExposure = true
             camera.setShutterSpeed(index: 8)
             camera.setISO(400)
             isLocked = false
@@ -1491,10 +1501,12 @@ struct ContentView: View {
         let framed = img.croppedToAspectMode(aspectRatio)
         lastCapturedImage = framed
         photoCount += 1
+        CaptureChromeBus.shared.bumpPhotoCount(thumb: framed)
         // Gallery publishes only after JPEG + thumb exist. Refreshing before
         // this completion made widget recents one capture behind.
         recordShot(framed) {
             photoCount = gallery.shots.count
+            CaptureChromeBus.shared.setRecents(count: gallery.shots.count, thumb: lastCapturedImage)
             refreshWidgetRecents()
         }
     }
@@ -1505,7 +1517,31 @@ struct ContentView: View {
     }
 
     /// Shared with CullGallery so rejects drop off the Home Screen stack.
-    static func pushUnculledWidgetRecents(from gallery: GalleryStore, marks: FrameMarkStore? = nil) {
+    private static var cullWidgetDebounceWork: DispatchWorkItem?
+
+    static func pushUnculledWidgetRecents(
+        from gallery: GalleryStore,
+        marks: FrameMarkStore? = nil,
+        debounce: Bool = false
+    ) {
+        if debounce {
+            cullWidgetDebounceWork?.cancel()
+            let work = DispatchWorkItem {
+                pushUnculledWidgetRecentsNow(from: gallery, marks: marks)
+            }
+            cullWidgetDebounceWork = work
+            // Mark spam mid page-turn used to pack JPEG + force-reload WidgetKit (Build 111).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.85, execute: work)
+            return
+        }
+        cullWidgetDebounceWork?.cancel()
+        pushUnculledWidgetRecentsNow(from: gallery, marks: marks)
+    }
+
+    private static func pushUnculledWidgetRecentsNow(
+        from gallery: GalleryStore,
+        marks: FrameMarkStore?
+    ) {
         let markStore = marks ?? FrameMarkStore()
         let unculled = gallery.shots
             .sorted { $0.date > $1.date }
@@ -1584,7 +1620,7 @@ struct ContentView: View {
     /// instead — the gesture must never be a silent no-op.
     private func handleExposureDrag(_ translationY: CGFloat, ended: Bool) {
         guard !isLocked else { return }
-        let manual = camera.isManualExposure
+        let manual = isManualExposure
 
         if ended {
             focusStartEV = exposureValue
@@ -1619,15 +1655,16 @@ struct ContentView: View {
         if manual {
             let target = Float(dragStartISO) * powf(2, stops)
             let capped = Int(max(camera.minISO, min(camera.maxISO, target)).rounded())
-            if capped != isoValue {
-                isoValue = capped
-                // ~30Hz device writes — UI updates every pan sample (Build 106).
-                let now = CFAbsoluteTimeGetCurrent()
-                if now - lastExposureApplyTime >= 1.0 / 30.0 {
-                    lastExposureApplyTime = now
-                    camera.setISO(Float(capped))
-                }
-            }
+                    if capped != isoValue {
+                        isoValue = capped
+                        isManualExposure = true
+                        // ~30Hz device writes — UI updates every pan sample (Build 106).
+                        let now = CFAbsoluteTimeGetCurrent()
+                        if now - lastExposureApplyTime >= 1.0 / 30.0 {
+                            lastExposureApplyTime = now
+                            camera.setISO(Float(capped))
+                        }
+                    }
             // Detent off the gain that actually landed, so the finger stops
             // ticking once ISO is pinned at either rail.
             exposureDetentHaptic(log2(Float(capped) / Float(max(1, dragStartISO))))
@@ -1830,7 +1867,7 @@ struct ContentView: View {
                     VStack {
                         Spacer().allowsHitTesting(false)
                         LiveExposureChrome(
-                            isManualExposure: camera.isManualExposure,
+                            isManualExposure: isManualExposure,
                             isoOverride: isoValue,
                             shutterOverride: shutterSpeeds[safeShutterSpeedIndex]
                         ) { liveISO, liveShutter in
@@ -1843,7 +1880,7 @@ struct ContentView: View {
                                 captureFormat: captureFormat,
                                 aspectLabel: aspectRatio.shortLabel,
                                 isLocked: isLocked,
-                                isManualExposure: camera.isManualExposure,
+                                isManualExposure: isManualExposure,
                                 naturalCapture: naturalCapture,
                                 showLevel: showLevel,
                                 onToggleLock: { toggleAEAFLock() },
@@ -2053,7 +2090,7 @@ struct ContentView: View {
                     // Device zoom is often 1.0 on UW/tele — don't invent 0.5/5.0 for pinch.
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
                         zoomValue = camera.zoomFactor
-                        if camera.isManualExposure {
+                        if isManualExposure {
                             camera.setISO(Float(isoValue))
                             camera.setShutterSpeed(index: shutterSpeedIndex, iso: Float(isoValue))
                         }
@@ -2061,6 +2098,7 @@ struct ContentView: View {
                 },
                 onISOChanged: { iso in
                     guard !isLocked else { return }
+                    isManualExposure = true
                     camera.setISO(Float(iso))
                 }
             )
@@ -2079,6 +2117,7 @@ struct ContentView: View {
                     onChanged: { idx in
                         guard !isLocked else { return }
                         // Pass UI ISO; shutter and EV stay independent.
+                        isManualExposure = true
                         camera.setShutterSpeed(index: idx, iso: Float(isoValue))
                     }
                 )
@@ -2089,6 +2128,7 @@ struct ContentView: View {
                         guard !isLocked else { return }
                         let capped = min(iso, max(1, Int(camera.maxISO)))
                         if capped != isoValue { isoValue = capped }
+                        isManualExposure = true
                         camera.setISO(Float(capped))
                     }
                 )

@@ -30,7 +30,8 @@ class CameraManager: NSObject, ObservableObject {
     var lensPosition: Float = 0.5
     /// Not @Published — ContentView owns zoom via @State; pinch was thrashing Metal.
     var zoomFactor: CGFloat = 1.0
-    @Published var isManualExposure: Bool = false
+    /// Not @Published — ContentView owns manual exposure chrome via @State (Build 111).
+    var isManualExposure: Bool = false
     /// Not @Published — ContentView owns `isLocked` (Build 110).
     var isAEAFLocked: Bool = false
     /// Live sensor ISO while AUTO (0 when unknown / manual owns the dial).

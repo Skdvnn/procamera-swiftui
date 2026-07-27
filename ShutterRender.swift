@@ -157,6 +157,9 @@ final class CaptureChromeBus: ObservableObject {
     @Published private(set) var burstCount = 0
     @Published private(set) var showFlash = false
     @Published private(set) var showCurtain = false
+    /// Finder thumb + roll count — leaf chrome only (Build 111).
+    @Published private(set) var photoCount = 0
+    @Published private(set) var lastThumb: UIImage?
 
     func setCapturing(_ value: Bool) {
         isCapturing = value
@@ -192,6 +195,16 @@ final class CaptureChromeBus: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
             self?.showCurtain = false
         }
+    }
+
+    func setRecents(count: Int, thumb: UIImage?) {
+        if photoCount != count { photoCount = count }
+        if thumb !== lastThumb { lastThumb = thumb }
+    }
+
+    func bumpPhotoCount(thumb: UIImage?) {
+        photoCount += 1
+        if let thumb { lastThumb = thumb }
     }
 
     private func refreshShutterBusy() {
