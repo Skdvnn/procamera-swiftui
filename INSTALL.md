@@ -8,13 +8,15 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 106 phone test pack (stability / lag pass):**
+**Build 107 phone test pack (tighter widget margins):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **106**.
-Verified: Scene tip no longer rebuilds Metal every AE sample; hist stays off
-the Metal queue; Settings parks live FX; sun-drag EV is throttled; level is calmer.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **107**.
+Verified: Home widgets use 8pt side/top pad; medium sheet is larger with
+sprockets + frame numbers; small/large show keepers and denser meta.
+
+Build 106: stability / lag pass.
 
 Build 105: SCENE Auto advisor.
 

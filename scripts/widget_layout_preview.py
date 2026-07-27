@@ -81,8 +81,8 @@ def parse_geometry() -> dict:
     small = chunk("private var smallBody", "private var footerLine")
     looks = chunk("struct ShutterLooksView", "// MARK: - Lock Screen")
 
-    # Shared outer pad (Build 102) — every Home face uses WidgetPalette.contentPad.
-    content_pad = num(src, r"static let contentPad: CGFloat = (\d+)", 14)
+    # Shared outer pad (Build 107) — every Home face uses WidgetPalette.contentPad.
+    content_pad = num(src, r"static let contentPad: CGFloat = (\d+)", 8)
 
     def body_pad(text: str, fallback: int) -> int:
         # Prefer shared contentPad; fall back to a literal .padding(N).
@@ -92,19 +92,19 @@ def parse_geometry() -> dict:
 
     return {
         "content_pad": content_pad,
-        "small_pad": body_pad(small, 14),
-        "small_gap": num(small, r"VStack\(alignment: \.leading, spacing: (\d+)\)", 5),
-        "small_bars": num(small, r"barHeight: (\d+)", 14),
-        "med_pad": body_pad(medium, 14),
-        "med_gap": num(medium, r"VStack\(alignment: \.leading, spacing: (\d+)\)", 6),
-        "med_bars": num(medium, r"barHeight: (\d+)", 24),
-        # Explicit 122×96 — don't confuse with the compact shoot chip's 18×18.
-        "med_sheet_w": num(medium, r"\.frame\(width: (122), height: \d+\)", 122),
-        "med_sheet_h": num(medium, r"\.frame\(width: 122, height: (\d+)\)", 96),
-        "large_pad": body_pad(large, 14),
-        "large_gap": num(large, r"VStack\(alignment: \.leading, spacing: (\d+)\)", 9),
-        "large_bars": num(large, r"barHeight: (\d+)", 28),
-        "looks_pad": body_pad(looks, 14),
+        "small_pad": body_pad(small, 8),
+        "small_gap": num(small, r"VStack\(alignment: \.leading, spacing: (\d+)\)", 4),
+        "small_bars": num(small, r"barHeight: (\d+)", 16),
+        "med_pad": body_pad(medium, 8),
+        "med_gap": num(medium, r"VStack\(alignment: \.leading, spacing: (\d+)\)", 5),
+        "med_bars": num(medium, r"barHeight: (\d+)", 26),
+        # Explicit 136×108 — don't confuse with the compact shoot chip's 18×18.
+        "med_sheet_w": num(medium, r"\.frame\(width: (136), height: \d+\)", 136),
+        "med_sheet_h": num(medium, r"\.frame\(width: 136, height: (\d+)\)", 108),
+        "large_pad": body_pad(large, 8),
+        "large_gap": num(large, r"VStack\(alignment: \.leading, spacing: (\d+)\)", 7),
+        "large_bars": num(large, r"barHeight: (\d+)", 30),
+        "looks_pad": body_pad(looks, 8),
         "looks_gap": num(looks, r"spacing: family == \.systemLarge \? \d+ : (\d+)", 6),
         "chip_med": num(looks, r"minHeight: family == \.systemLarge \? \d+ : (\d+)", 28),
         "chip_large": num(looks, r"minHeight: family == \.systemLarge \? (\d+)", 38),
@@ -203,9 +203,9 @@ class Face:
         # Film paper plate + optional sprocket rails — matches WidgetContactSheet.
         # Compact medium/strip sheets skip sprockets (same as showSprockets: false).
         self.rect(x, y, w, h, fill=PAPER + (255,), outline=(255, 255, 255, 20), radius=6)
-        pad = 5 if sprockets else 3
+        pad = 3 if sprockets else 2
         rail = 5 if sprockets else 0
-        rail_gap = 3 if sprockets else 0
+        rail_gap = 2 if sprockets else 0
         inner_x = x + pad + rail + rail_gap
         inner_y = y + pad
         inner_w = w - (pad + rail + rail_gap) * 2
@@ -342,10 +342,10 @@ def launch_medium(g) -> Image.Image:
     f.text(x + 28, cap_y + cap_h / 2, "SHOOT", pt=11, fill=ACCENT, anchor="lm")
 
     sx = MEDIUM[0] - p - sheet_w
-    f.contact_sheet(sx, p, sheet_w, sheet_h, cols=2, rows=2, filled=4, numbered=False, sprockets=False)
+    f.contact_sheet(sx, p, sheet_w, sheet_h, cols=2, rows=2, filled=4, numbered=True, sprockets=True)
     f.text(
         sx, p + sheet_h + 5,
-        f"{STATS['unculled']} UNCULLED · {STATS['keepers']} KEEP",
+        f"{STATS['unculled']} OPEN · {STATS['keepers']} KEEP",
         pt=8, alpha=110,
     )
     return f.save("launch-medium.png")
@@ -392,7 +392,7 @@ def launch_large(g) -> Image.Image:
         (f"{STATS['today']}", "TODAY", ACCENT),
         (f"{STATS['week_total']}", "WEEK", INK),
         (f"{STATS['keepers']}", "KEEP", INK),
-        (f"{STATS['unculled']}", "UNCULLED", INK),
+        (f"{STATS['unculled']}", "OPEN", INK),
     ]
     tx = x + 126
     tw = (w - 126) / len(tiles)
@@ -448,7 +448,7 @@ def looks_face(g, large: bool) -> Image.Image:
         for value, caption, tint in (
             (f"{STATS['today']}", "TODAY", ACCENT),
             (f"{STATS['week_total']}", "WEEK", INK),
-            (f"{STATS['unculled']}", "UNCULLED", INK),
+            (f"{STATS['unculled']}", "OPEN", INK),
         ):
             f.stat(tx, y, value, caption, pt=13, tint=tint)
             tx += (w - 124) / 3
