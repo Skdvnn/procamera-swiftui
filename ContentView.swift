@@ -2119,9 +2119,9 @@ struct ContentView: View {
             ShutterButton(
                 timerCountdown: timerCountdown,
                 compact: compact,
-                stayEnabledForBurstTap: burstConsumedTap,
                 onBurstStart: holdBurstEnabled ? { beginBurstHold() } : nil,
-                onBurstEnd: holdBurstEnabled ? { endBurstHold() } : nil
+                onBurstEnd: holdBurstEnabled ? { endBurstHold() } : nil,
+                stayEnabledForBurstTap: burstConsumedTap
             ) {
                 if burstConsumedTap {
                     burstConsumedTap = false
@@ -2282,9 +2282,9 @@ struct ContentView: View {
 
                 ShutterButton(
                     timerCountdown: timerCountdown,
-                    stayEnabledForBurstTap: burstConsumedTap,
                     onBurstStart: holdBurstEnabled ? { beginBurstHold() } : nil,
-                    onBurstEnd: holdBurstEnabled ? { endBurstHold() } : nil
+                    onBurstEnd: holdBurstEnabled ? { endBurstHold() } : nil,
+                    stayEnabledForBurstTap: burstConsumedTap
                 ) {
                     if burstConsumedTap {
                         burstConsumedTap = false

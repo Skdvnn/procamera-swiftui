@@ -568,6 +568,15 @@ def test_source_guards() -> None:
         "VolumeShutterOwner is MainActor",
         "@MainActor" in photobook[photobook.find("final class VolumeShutterOwner")-40:photobook.find("final class VolumeShutterOwner")+80],
     )
+    # Build 117 — labeled ShutterButton args must follow declaration order.
+    import re as _re
+    for m in _re.finditer(r"ShutterButton\(([\s\S]*?)\)\s*\{", content):
+        body = m.group(1)
+        if "onBurstStart" in body and "stayEnabledForBurstTap" in body:
+            check(
+                "ShutterButton arg order onBurst before stayEnabled",
+                body.find("onBurstStart") < body.find("stayEnabledForBurstTap"),
+            )
     # Build 114 — tap-to-focus must work while AE/AF was locked; clear manual.
     check(
         "tap focus unlocks AEAF",

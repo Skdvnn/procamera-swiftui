@@ -8,16 +8,15 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 116 phone test pack (GalleryStore MainActor):**
+**Build 117 phone test pack (shutter arg order):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **116**.
-Verified: GalleryStoreOwner / VolumeShutterOwner are @MainActor so Xcode
-no longer errors on main-actor-isolated init in a nonisolated context.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **117**.
+Verified: ShutterButton call sites pass onBurstStart before stayEnabledForBurstTap.
 
+Build 116: GalleryStore MainActor.
 Build 115: CameraManager control-byte compile fix.
-Build 114: focus + scrub close.
 Build 112: straight scrub rail.
 Build 111: darkroom page-turn + finder thrash.
 
