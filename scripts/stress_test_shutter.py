@@ -69,6 +69,8 @@ def parse_deeplink(url: str):
         return ("fieldBook",)
     if route in ("look", "recipe"):
         return ("look", q.get("film"), q.get("fx"))
+    if route in ("scene", "mode"):
+        return ("scene", (q.get("mode") or q.get("name") or "auto").lower())
     if route == "timer":
         seconds = int(q.get("seconds") or q.get("s") or "3")
         return ("timer", seconds)
@@ -104,6 +106,8 @@ def test_deeplinks() -> None:
         ("shuttercam://books", ("fieldBook",)),
         ("shuttercam://look?film=Portra%20400&fx=Liquid", ("look", "Portra 400", "Liquid")),
         ("shuttercam://look?film=Tri-X%20400", ("look", "Tri-X 400", None)),
+        ("shuttercam://scene?mode=auto", ("scene", "auto")),
+        ("shuttercam://scene?mode=night", ("scene", "night")),
         ("shuttercam://timer?seconds=10", ("timer", 10)),
         ("shuttercam://timer?s=3", ("timer", 3)),
         ("shuttercam://peaking?on=0", ("peaking", False)),
@@ -335,6 +339,14 @@ def test_source_guards() -> None:
     intents = (ROOT / "ShutterAppIntents.swift").read_text()
     check("live shutter on top meter", "shutterIsAuto" in gauge and ("shutterLabel: liveShutter" in content or "shutterLabel: displayShutterLabel" in content) and "LiveExposureChrome" in content)
     check("Auto Night assist chip", "evaluateNightAssist" in content and "TAP FOR NIGHT" in content)
+    # Build 105 — SCENE Auto advisor (Night / Street / Film soft tips + Shortcuts).
+    settings = (ROOT / "ShutterSettings.swift").read_text()
+    check("ShootMode has auto", "case auto" in settings and '"Watch light · suggest SCENE"' in settings)
+    check("AutoSceneAdvisor pick", "enum AutoSceneAdvisor" in settings and "static func pick(" in settings)
+    check("scene assist evaluate", "evaluateSceneAssist" in content)
+    check("scene tip settings label", "Scene tip" in settings)
+    check("scene deep link", 'case "scene", "mode"' in (ROOT / "ShutterDeepLink.swift").read_text())
+    check("ApplyShutterSceneIntent", "struct ApplyShutterSceneIntent" in (ROOT / "ShutterAppIntents.swift").read_text())
     check("hold-to-burst shutter", "beginBurstHold" in content and "onBurstStart" in content and "Hold for burst" in content)
     check("widget timeline reload", "WidgetCenter.shared.reloadAllTimelines" in content)
     check("keeper JPEG share packager", "KeeperSharePackager" in proof and "jpegFileURLs" in cull)
@@ -353,7 +365,7 @@ def test_source_guards() -> None:
     check("optional shootMode in film dock", "var shootMode: ShootMode?" in (ROOT / "ViewfinderOverlay.swift").read_text())
     check("burst count on shutter chrome", "burstCount:" in content and "isBursting" in content)
     check("loupe magnification badge", "magnification" in cull and "%.1f×" in cull)
-    check("settings night+burst toggles", "Night tip" in settings and "Hold burst" in settings)
+    check("settings night+burst toggles", "Scene tip" in settings and "Hold burst" in settings)
     check("ContentView body split for type-checker", "finderCanvas(geo:" in content and "struct FinderStatusOverlays" in content and "struct ContentViewLifecycle" in content)
 
     # Build 51 — deep device-breaker guards (not just "string exists")

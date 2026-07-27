@@ -11,6 +11,8 @@ enum ShutterDeepLink: Equatable {
     case darkroom
     case fieldBook
     case look(film: String?, fx: String?)
+    /// SCENE preset — Auto / Street / Night / Studio / Film (Build 105).
+    case scene(mode: String)
     case timer(seconds: Int)
     case peaking(Bool)
     case flip
@@ -38,6 +40,9 @@ enum ShutterDeepLink: Equatable {
             return .fieldBook
         case "look", "recipe":
             return .look(film: q("film"), fx: q("fx"))
+        case "scene", "mode":
+            let raw = (q("mode") ?? q("name") ?? "auto").lowercased()
+            return .scene(mode: raw)
         case "timer":
             let sec = Int(q("seconds") ?? q("s") ?? "3") ?? 3
             // Invalid values → off (not silently 3s).
@@ -71,6 +76,8 @@ enum ShutterDeepLink: Equatable {
             if let fx { items.append(URLQueryItem(name: "fx", value: fx)) }
             c.queryItems = items.isEmpty ? nil : items
             return c.url!
+        case .scene(let mode):
+            return URL(string: "shuttercam://scene?mode=\(mode)")!
         case .timer(let seconds):
             return URL(string: "shuttercam://timer?seconds=\(seconds)")!
         case .peaking(let on):
