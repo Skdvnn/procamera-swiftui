@@ -32,8 +32,8 @@ enum WidgetPalette {
     static let well = Color(red: 0x0A / 255.0, green: 0x0A / 255.0, blue: 0x0A / 255.0)
     static let paper = Color(red: 0x1A / 255.0, green: 0x16 / 255.0, blue: 0x12 / 255.0)
     static let hairline = accent.opacity(0.32)
-    /// Matched outer pad on every Home face — sides + top (Build 102).
-    static let contentPad: CGFloat = 14
+    /// Tight outer pad — sides + top match, edge-to-edge feel (Build 107).
+    static let contentPad: CGFloat = 8
 
     static var vulcaniteBackground: some View {
         LinearGradient(
@@ -283,13 +283,13 @@ struct WidgetContactSheet: View {
     let frames: [ShutterAppGroup.WidgetRecentFrame]
     var columns: Int = 3
     var rows: Int = 2
-    var spacing: CGFloat = 4
-    var corner: CGFloat = 4
+    var spacing: CGFloat = 3
+    var corner: CGFloat = 3
     var numbered: Bool = true
     var showSprockets: Bool = true
 
     var body: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 2) {
             if showSprockets { sprocketRail }
             VStack(spacing: spacing) {
                 ForEach(0..<rows, id: \.self) { row in
@@ -302,7 +302,7 @@ struct WidgetContactSheet: View {
             }
             if showSprockets { sprocketRail }
         }
-        .padding(5)
+        .padding(3)
         .background(
             RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(WidgetPalette.paper)
@@ -560,6 +560,8 @@ struct ShutterLaunchWidget: Widget {
         .configurationDisplayName("Shutter Cam")
         .description("Contact sheet, week of frames, and tap to shoot.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+        // Own the edge inset — system margins stacked on contentPad made sides huge (Build 107).
+        .contentMarginsDisabled()
     }
 }
 
@@ -591,7 +593,7 @@ struct ShutterLaunchView: View {
 
     private var smallBody: some View {
         Link(destination: ShutterDeepLink.capture.url) {
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 4) {
                     Text("SHUTTER")
                         .font(.system(size: 9, weight: .bold, design: .monospaced))
@@ -604,22 +606,33 @@ struct ShutterLaunchView: View {
                     Text("TDY")
                         .font(.system(size: 7, weight: .bold, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.35))
+                    if stats.hasHistory {
+                        Text("·")
+                            .font(.system(size: 7, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.25))
+                        Text("\(stats.keepers)")
+                            .font(.system(size: 10, weight: .bold, design: .monospaced))
+                            .foregroundStyle(accent.opacity(0.85))
+                        Text("KEEP")
+                            .font(.system(size: 7, weight: .bold, design: .monospaced))
+                            .foregroundStyle(.white.opacity(0.35))
+                    }
                 }
 
-                WidgetDSLRWell(corner: 6) {
+                WidgetDSLRWell(corner: 5) {
                     WidgetRecentStack(
                         images: entry.recents,
                         large: false,
                         exposureStamp: entry.latestMeta?.exposureLine ?? ""
                     )
-                    .padding(5)
+                    .padding(3)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 WidgetWeekBars(
                     week: stats.week,
                     labels: stats.weekLabels,
-                    barHeight: 14,
+                    barHeight: 16,
                     showLabels: false
                 )
 
@@ -632,7 +645,7 @@ struct ShutterLaunchView: View {
                     .font(.system(size: 8, weight: .medium, design: .monospaced))
                     .foregroundStyle(.white.opacity(0.45))
                     .lineLimit(1)
-                    .minimumScaleFactor(0.8)
+                    .minimumScaleFactor(0.75)
             }
             .padding(WidgetPalette.contentPad)
         }
@@ -640,14 +653,18 @@ struct ShutterLaunchView: View {
 
     private var footerLine: String {
         guard stats.hasHistory else { return "TAP TO SHOOT" }
-        return "\(stats.lastCaptureRelative) · \(stats.framesWeek) THIS WEEK"
+        var parts = ["\(stats.lastCaptureRelative)", "\(stats.framesWeek) WK"]
+        if stats.unculled > 0 {
+            parts.append("\(stats.unculled) OPEN")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private var mediumBody: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             // Spacing is tight on purpose: an SE medium widget only offers
             // ~127pt of content height and this column stacks five rows.
-            VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 4) {
                     Text("SHUTTER")
                         .font(.system(size: 10, weight: .bold, design: .monospaced))
@@ -662,7 +679,7 @@ struct ShutterLaunchView: View {
                 WidgetWeekBars(
                     week: stats.week,
                     labels: stats.weekLabels,
-                    barHeight: 24
+                    barHeight: 26
                 )
 
                 VStack(alignment: .leading, spacing: 1) {
@@ -675,7 +692,7 @@ struct ShutterLaunchView: View {
                         .font(.system(size: 9, weight: .medium, design: .monospaced))
                         .foregroundStyle(.white.opacity(0.45))
                         .lineLimit(1)
-                        .minimumScaleFactor(0.8)
+                        .minimumScaleFactor(0.75)
                 }
 
                 Spacer(minLength: 0)
@@ -721,19 +738,20 @@ struct ShutterLaunchView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             Link(destination: ShutterDeepLink.darkroom.url) {
-                VStack(spacing: 5) {
+                VStack(spacing: 4) {
+                    // Bigger sheet — pad drop (14→8) buys photo real estate (Build 107).
                     WidgetContactSheet(
                         frames: Array(entry.frames.prefix(4)),
                         columns: 2,
                         rows: 2,
-                        numbered: false,
-                        showSprockets: false
+                        numbered: true,
+                        showSprockets: true
                     )
-                    .frame(width: 122, height: 96)
+                    .frame(width: 136, height: 108)
 
                     Text(
                         stats.hasHistory
-                            ? "\(stats.unculled) UNCULLED · \(stats.keepers) KEEP"
+                            ? "\(stats.unculled) OPEN · \(stats.keepers) KEEP"
                             : "NO FRAMES YET"
                     )
                     .font(.system(size: 8, weight: .bold, design: .monospaced))
@@ -755,13 +773,16 @@ struct ShutterLaunchView: View {
         if !stats.topFilm.isEmpty {
             parts.append(stats.topFilm.uppercased())
         }
+        if stats.rejects > 0 {
+            parts.append("\(stats.rejects) X")
+        }
         return parts.joined(separator: " · ")
     }
 
     private var largeBody: some View {
-        VStack(alignment: .leading, spacing: 9) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 3) {
+                VStack(alignment: .leading, spacing: 2) {
                     Text("SHUTTER")
                         .font(.system(size: 11, weight: .bold, design: .monospaced))
                         .tracking(1.6)
@@ -792,7 +813,7 @@ struct ShutterLaunchView: View {
                 Spacer(minLength: 6)
                 Link(destination: ShutterDeepLink.capture.url) {
                     WidgetShootButton(compact: false)
-                        .padding(8)
+                        .padding(6)
                         .background(
                             Circle()
                                 .fill(WidgetPalette.well.opacity(0.95))
@@ -808,12 +829,12 @@ struct ShutterLaunchView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
 
-            WidgetDSLRWell(corner: 8) {
-                HStack(alignment: .bottom, spacing: 10) {
-                    WidgetWeekBars(week: stats.week, labels: stats.weekLabels, barHeight: 28)
-                        .frame(width: 116)
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack(spacing: 8) {
+            WidgetDSLRWell(corner: 7) {
+                HStack(alignment: .bottom, spacing: 8) {
+                    WidgetWeekBars(week: stats.week, labels: stats.weekLabels, barHeight: 30)
+                        .frame(width: 120)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
                             WidgetStatTile(
                                 value: "\(stats.framesToday)",
                                 caption: "TODAY",
@@ -821,7 +842,7 @@ struct ShutterLaunchView: View {
                             )
                             WidgetStatTile(value: "\(stats.framesWeek)", caption: "WEEK")
                             WidgetStatTile(value: "\(stats.keepers)", caption: "KEEP")
-                            WidgetStatTile(value: "\(stats.unculled)", caption: "UNCULLED")
+                            WidgetStatTile(value: "\(stats.unculled)", caption: "OPEN")
                         }
                         Text(rollLine)
                             .font(.system(size: 8, weight: .bold, design: .monospaced))
@@ -830,8 +851,8 @@ struct ShutterLaunchView: View {
                             .minimumScaleFactor(0.7)
                     }
                 }
-                .padding(.horizontal, 8)
-                .padding(.vertical, 7)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 6)
             }
         }
         .padding(WidgetPalette.contentPad)
@@ -840,6 +861,12 @@ struct ShutterLaunchView: View {
     private func largeMetaLine(_ meta: ShutterAppGroup.WidgetRecentMeta) -> String {
         var parts = ["\(meta.relativeTime) AGO"]
         if meta.focalLength > 0 { parts.append("\(meta.focalLength)mm") }
+        if !stats.topFilm.isEmpty {
+            parts.append(stats.topFilm.uppercased())
+        }
+        if !meta.mark.isEmpty, meta.mark != "none" {
+            parts.append(meta.mark.uppercased())
+        }
         return parts.joined(separator: " · ")
     }
 
@@ -940,6 +967,7 @@ struct ShutterLooksWidget: Widget {
         .configurationDisplayName("Shutter Looks")
         .description("One-tap film + FX looks, armed look, and recent frames.")
         .supportedFamilies([.systemMedium, .systemLarge])
+        .contentMarginsDisabled()
     }
 }
 

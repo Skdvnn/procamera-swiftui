@@ -817,7 +817,7 @@ def test_source_guards() -> None:
     )
     check("looks large recents section", '"RECENTS"' in widgets and "darkroom.url" in widgets)
     # Build 102 — matched outer pad + fun photo previews.
-    check("widget shared contentPad", "static let contentPad: CGFloat = 14" in widgets)
+    check("widget shared contentPad", "static let contentPad: CGFloat = 8" in widgets)
     check(
         "widget bodies use contentPad",
         widgets.count("padding(WidgetPalette.contentPad)") >= 4,
@@ -826,6 +826,11 @@ def test_source_guards() -> None:
     check("widget stack exposure stamp", "exposureStamp" in widgets)
     check("widget contact scan-line", "Soft scan-line" in widgets)
     check("widget empty emulsion ghost", "Unexposed emulsion ghost" in widgets)
+    # Build 107 — tighter pad + denser detail.
+    check("widget tight contentPad 8", "Tight outer pad" in widgets)
+    check("widget medium bigger sheet", ".frame(width: 136, height: 108)" in widgets)
+    check("widget small keep count", "KEEP" in widgets and "stats.keepers" in widgets)
+    check("widget contentMarginsDisabled", "contentMarginsDisabled()" in widgets)
 
     # Build 71 — fun scrubbers + fullscreen arch vibe
     aids = (ROOT / "ViewfinderAids.swift").read_text()
@@ -1001,7 +1006,7 @@ def test_source_guards() -> None:
     check("widget rebuild unculled", "func rebuildRecentFrames" in deep)
     check("push unculled widget helper", "pushUnculledWidgetRecents" in content)
     check("widget shoot deep link", "ShutterDeepLink.capture.url" in widgets)
-    check("widget unculled label", "UNCULLED" in widgets)
+    check("widget unculled label", "OPEN" in widgets and "stats.unculled" in widgets)
     check("widget exposure line", "exposureLine" in deep and "latestMeta" in widgets)
 
     # Build 75 — film FX pink freeze: origin normalize + transparent Metal until present
@@ -1249,7 +1254,7 @@ def test_widget_content() -> None:
     medium = source_chunk(wsrc, "private var mediumBody", "private var subhead")
     check("medium shows week bars", "WidgetWeekBars" in medium)
     check("medium shows a contact sheet", "WidgetContactSheet" in medium)
-    check("medium shows cull counts", "UNCULLED" in medium)
+    check("medium shows cull counts", "OPEN" in medium and "KEEP" in medium)
 
     large = source_chunk(wsrc, "private var largeBody", "private var rollLine")
     check("large shows a 3x2 sheet", "columns: 3, rows: 2" in large)
@@ -1265,9 +1270,9 @@ def test_widget_content() -> None:
     _, med_h = WIDGET_BOX["medium"]
     _, large_h = WIDGET_BOX["large"]
 
-    # Build 102 — outer pad is WidgetPalette.contentPad on every Home face.
+    # Build 102/107 — outer pad is WidgetPalette.contentPad on every Home face.
     content_pad = parse_int(
-        wsrc, r"static let contentPad: CGFloat = (\d+)", "shared contentPad", 14
+        wsrc, r"static let contentPad: CGFloat = (\d+)", "shared contentPad", 8
     )
 
     def face_pad(chunk: str, name: str, fallback: int) -> int:
@@ -1276,10 +1281,10 @@ def test_widget_content() -> None:
             return content_pad
         return parse_int(chunk, r"\.padding\((\d+)\)", name, fallback, last=True)
 
-    pad = face_pad(medium, "launch medium padding", 14)
-    gap = parse_int(medium, r"VStack\(alignment: \.leading, spacing: (\d+)\)", "launch medium gap", 6)
-    bars = parse_int(medium, r"barHeight: (\d+)", "launch medium bar height", 24)
-    sheet = parse_int(medium, r"\.frame\(width: 122, height: (\d+)\)", "launch medium sheet", 96)
+    pad = face_pad(medium, "launch medium padding", 8)
+    gap = parse_int(medium, r"VStack\(alignment: \.leading, spacing: (\d+)\)", "launch medium gap", 5)
+    bars = parse_int(medium, r"barHeight: (\d+)", "launch medium bar height", 26)
+    sheet = parse_int(medium, r"\.frame\(width: 136, height: (\d+)\)", "launch medium sheet", 108)
     left = (
         text_line(10)                       # SHUTTER / roll count row
         + bars + 3 + text_line(7)           # week bars + day letters
@@ -1293,7 +1298,7 @@ def test_widget_content() -> None:
     check("launch medium sheet fits", right <= budget, f"{right}pt in {budget}pt")
 
     looks = source_chunk(wsrc, "struct ShutterLooksView", "// MARK: - Lock Screen")
-    lpad = face_pad(looks, "looks padding", 14)
+    lpad = face_pad(looks, "looks padding", 8)
     lgap = parse_int(looks, r"spacing: family == \.systemLarge \? \d+ : (\d+)", "looks medium gap", 6)
     chip = parse_int(looks, r"minHeight: family == \.systemLarge \? \d+ : (\d+)", "looks chip", 30)
     strip = parse_int(looks, r"\.frame\(width: 132, height: (\d+)\)", "looks strip", 34)
@@ -1319,7 +1324,7 @@ def test_widget_content() -> None:
         f"{looks_large}pt in {large_h - lpad * 2}pt",
     )
 
-    lgpad = face_pad(large, "launch large padding", 14)
+    lgpad = face_pad(large, "launch large padding", 8)
     lggap = parse_int(large, r"VStack\(alignment: \.leading, spacing: (\d+)\)", "launch large gap", 9)
     lgbars = parse_int(large, r"barHeight: (\d+)", "launch large bars", 28)
     header = max(
