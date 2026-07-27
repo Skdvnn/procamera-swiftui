@@ -38,6 +38,13 @@ struct Book: Codable, Identifiable, Equatable {
 // MARK: - Gallery Store
 // App-side persistence: full-res JPEG + small thumbnail per shot, plus JSON
 // indexes for the master roll and the books, all in Documents/PhotoBook.
+
+/// Holds GalleryStore without forwarding @Published into ContentView (Build 109).
+/// Shot appends used to rebuild the Metal finder on every capture / Photos ID attach.
+final class GalleryStoreOwner: ObservableObject {
+    let store = GalleryStore()
+}
+
 final class GalleryStore: ObservableObject {
     @Published private(set) var shots: [ShotMetadata] = []
     @Published private(set) var books: [Book] = []

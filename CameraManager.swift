@@ -37,14 +37,18 @@ class CameraManager: NSObject, ObservableObject {
     var liveShutterLabel: String = "AUTO"
     /// Hardware lens aperture (read-only; phones don't stop down).
     @Published var lensAperture: Float = 0
-    @Published var focusPeakingEnabled: Bool = false {
+    /// Not @Published — ContentView owns peaking via @AppStorage; pipeline syncs in didSet.
+    var focusPeakingEnabled: Bool = false {
         didSet {
+            guard oldValue != focusPeakingEnabled else { return }
             syncPipelineSelection()
             refreshLivePreviewState()
         }
     }
-    @Published var zebraEnabled: Bool = false {
+    /// Not @Published — ContentView owns zebra via @AppStorage (Build 109).
+    var zebraEnabled: Bool = false {
         didSet {
+            guard oldValue != zebraEnabled else { return }
             syncPipelineSelection()
             refreshLivePreviewState()
         }
@@ -61,7 +65,8 @@ class CameraManager: NSObject, ObservableObject {
             refreshLivePreviewState()
         }
     }
-    @Published var isLongExposureCapturing: Bool = false {
+    /// Not @Published — LE chrome rides LongExposureProgressBus (Build 108/109).
+    var isLongExposureCapturing: Bool = false {
         didSet {
             // Keep leaf LE chrome in sync without progress thrashing ContentView.
             LongExposureProgressBus.shared.publish(
@@ -79,8 +84,6 @@ class CameraManager: NSObject, ObservableObject {
     /// "HW" single-shot hardware duration vs "STACK" computational average.
     /// Not @Published — leaf overlay reads LongExposureProgressBus.
     var longExposurePathLabel: String = ""
-    /// One-shot toast when film/FX bake falls back to a clean still.
-    @Published var captureNote: String?
     /// Hold-to-compare clean preview — Not @Published; ContentView owns compare chrome.
     private(set) var previewLooksBypassed: Bool = false
 
@@ -2192,6 +2195,18 @@ class CameraManager: NSObject, ObservableObject {
         return baked
     }
 
+    /// Instant / Dream / Liquid / Mirror / VHS were the stuck-wash offenders (Build 104).
+    /// Skip the 2× CIAreaAverage tax on every Portra/Tri-X preview frame (Build 109).
+    private func shouldWashCheckPreview(film: FilmFilter, fx: LensFXMode) -> Bool {
+        if film == .instant { return true }
+        switch fx {
+        case .dream, .liquid, .mirror, .vhs:
+            return true
+        default:
+            return false
+        }
+    }
+
     /// Reject cream/white wash frames that would stick Metal over the live AV feed.
     /// Real Instant/warm scenes still have regional contrast — uniform wash does not.
     private func isWashedPreviewFrame(_ image: CIImage) -> Bool {
@@ -2399,7 +2414,8 @@ class CameraManager: NSObject, ObservableObject {
         // Heavy liquid/chrome — 6 fps is enough to read the warp; 12 fps jetsams.
         if isHeavyPreviewFX(fx) { return 1.0 / 6.0 }
         if film != .none || fx != .none { return previewFrameInterval }
-        return previewFrameInterval
+        // Peaking/zebra alone — aids don't need full film rate (Build 109).
+        return 1.0 / 6.0
     }
 
     // MARK: - Live Histogram
@@ -2552,7 +2568,7 @@ class CameraManager: NSObject, ObservableObject {
             if fx != .none, !fxOK { notes.append("FX") }
             let message = (notes.isEmpty ? "Look" : notes.joined(separator: " + "))
                 + " bake failed — try again"
-            DispatchQueue.main.async { self.captureNote = message }
+            DispatchQueue.main.async { ToastBus.shared.show(message) }
             print("bakeLooksForCapture FAILED film=\(film) fx=\(fx.name) filmOK=\(filmOK) fxOK=\(fxOK)")
             return nil
         }
@@ -2563,7 +2579,7 @@ class CameraManager: NSObject, ObservableObject {
                 < image.size.width + image.size.height - 1
             if shrunk {
                 DispatchQueue.main.async {
-                    self.captureNote = "Look baked at lower res"
+                    ToastBus.shared.show("Look baked at lower res")
                 }
             }
         }
@@ -3037,8 +3053,10 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                         ))
                         out = frame.extent
                     }
-                    // Drop cream/white wash before Metal covers AV (Build 104).
-                    if self.isWashedPreviewFrame(frame) {
+                    // Drop cream/white wash before Metal covers AV (Build 104/109).
+                    // Area-average is expensive — only for Instant / wash-prone FX.
+                    if self.shouldWashCheckPreview(film: filmFilter, fx: lensFX),
+                       self.isWashedPreviewFrame(frame) {
                         return nil
                     }
                     // Materialize now — CVPixelBuffer is recycled when this callback returns.
