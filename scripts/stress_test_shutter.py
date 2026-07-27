@@ -869,6 +869,19 @@ def test_source_guards() -> None:
     check("LensFX purge caches", "func purgePreviewCaches" in (ROOT / "LensFXEngine.swift").read_text())
     check("Metal drawable capped", "maxEdge: CGFloat = 1280" in preview)
 
+    # Build 104 — FX stuck washout (cream+grain / white blowout / half-frame)
+    fx = (ROOT / "LensFXEngine.swift").read_text()
+    check("dream preview skips screen blend", "Live preview: soft glow without screen-blend washout" in fx)
+    check("liquid texture never lazy blur", "Never return the lazy blur graph" in fx)
+    check("glass scale clamped", "Clamp glass scale" in fx)
+    check("legacy instant preview skips bloom", "Live bloom + Instant warmth" in fx)
+    check("mirror clamps before flip", "Clamp first so the flip never samples" in fx)
+    check("FX output pinned origin-zero", "Pin every FX to the input extent" in fx)
+    check("heavy FX includes fisheye vhs mirror", ".fisheye, .vhs, .mirror" in cam)
+    check("cached film grain tile", "func filmGrainTile" in cam and "cachedGrainTile" in cam)
+    check("washed preview reject", "func isWashedPreviewFrame" in cam)
+    check("wash reject before Metal push", "Drop cream/white wash before Metal" in cam)
+
 
     # Build 72 — DSLR settings + deck spacing
     check("dslr toggle row type", "struct DSLRToggleRow" in (ROOT / "ShutterSettings.swift").read_text())

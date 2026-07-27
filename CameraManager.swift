@@ -92,6 +92,10 @@ class CameraManager: NSObject, ObservableObject {
     /// Cap live FX preview — heavy FX go slower. Build 91 drops the rate further
     /// so createCGImage at preview size can't jetsam the process under Debug.
     private let previewFrameInterval: CFAbsoluteTime = 1.0 / 10.0
+    /// Baked soft-light grain tile — CIRandomGenerator every frame washed Instant
+    /// into cream noise under GPU pressure (Build 104).
+    private var cachedGrainTile: CIImage?
+    private let grainTileLock = NSLock()
     /// STACK LE — don't materialize every sensor frame (was a jetsam hot path).
     private var lastLEAccumulateTime: CFAbsoluteTime = 0
     private let leAccumulateInterval: CFAbsoluteTime = 1.0 / 10.0
@@ -225,6 +229,9 @@ class CameraManager: NSObject, ObservableObject {
     func purgeMemoryPressure(dropSession: Bool) {
         clearLivePreviewForReconfiguration()
         LensFXEngine.shared.purgePreviewCaches()
+        grainTileLock.lock()
+        cachedGrainTile = nil
+        grainTileLock.unlock()
         photoStateLock.lock()
         let accumulating = isAccumulatingLongExposure || isFinalizingLongExposure
         if !accumulating {
@@ -2089,19 +2096,17 @@ class CameraManager: NSObject, ObservableObject {
     }
 
     /// Soft luminance grain (shared by live preview + still bake).
+    /// Live path tiles a baked bitmap — never re-runs CIRandomGenerator per frame.
     private func applyFilmGrain(to image: CIImage, amount: Float) -> CIImage {
         let extent = image.extent
         guard !extent.isInfinite, extent.width > 1, extent.height > 1, amount > 0 else {
             return image
         }
-        let noise = CIFilter.randomGenerator()
-        guard var noiseImage = noise.outputImage?.cropped(to: extent) else { return image }
+        guard let tile = filmGrainTile() else { return image }
 
-        let mono = CIFilter.colorControls()
-        mono.inputImage = noiseImage
-        mono.saturation = 0
-        mono.contrast = 1.4
-        if let result = mono.outputImage { noiseImage = result }
+        let noiseImage = tile
+            .applyingFilter("CIAffineTile")
+            .cropped(to: extent)
 
         let matrix = CIFilter.colorMatrix()
         matrix.inputImage = noiseImage
@@ -2117,6 +2122,96 @@ class CameraManager: NSObject, ObservableObject {
         softLight.inputImage = grainAlpha
         softLight.backgroundImage = image
         return (softLight.outputImage ?? image).cropped(to: extent)
+    }
+
+    /// One soft mono noise tile, materialized once for softLight grain.
+    private func filmGrainTile() -> CIImage? {
+        grainTileLock.lock()
+        if let cachedGrainTile {
+            grainTileLock.unlock()
+            return cachedGrainTile
+        }
+        grainTileLock.unlock()
+
+        let rect = CGRect(x: 0, y: 0, width: 256, height: 256)
+        guard let random = CIFilter.randomGenerator().outputImage?.cropped(to: rect) else {
+            return nil
+        }
+        let mono = CIFilter.colorControls()
+        mono.inputImage = random
+        mono.saturation = 0
+        mono.contrast = 1.4
+        let prepared = (mono.outputImage ?? random).cropped(to: rect)
+        let baked: CIImage
+        if let cg = ShutterRender.syncCI({
+            ShutterRender.ciContext.createCGImage(prepared, from: rect)
+        }) {
+            baked = CIImage(cgImage: cg)
+        } else {
+            // Solid mid-gray — never keep the lazy random graph live.
+            baked = CIImage(color: CIColor(red: 0.5, green: 0.5, blue: 0.5)).cropped(to: rect)
+        }
+
+        grainTileLock.lock()
+        cachedGrainTile = baked
+        grainTileLock.unlock()
+        return baked
+    }
+
+    /// Reject cream/white wash frames that would stick Metal over the live AV feed.
+    /// Real Instant/warm scenes still have regional contrast — uniform wash does not.
+    private func isWashedPreviewFrame(_ image: CIImage) -> Bool {
+        let extent = image.extent
+        guard !extent.isInfinite, extent.width > 16, extent.height > 16 else { return true }
+        let insetX = extent.width * 0.15
+        let insetY = extent.height * 0.15
+        let a = CGRect(
+            x: extent.minX + insetX, y: extent.minY + insetY,
+            width: extent.width * 0.25, height: extent.height * 0.25
+        )
+        let b = CGRect(
+            x: extent.maxX - insetX - extent.width * 0.25,
+            y: extent.maxY - insetY - extent.height * 0.25,
+            width: extent.width * 0.25, height: extent.height * 0.25
+        )
+        guard let c1 = areaAverageRGB(image, rect: a),
+              let c2 = areaAverageRGB(image, rect: b) else {
+            return false
+        }
+        func nearWhite(_ c: (CGFloat, CGFloat, CGFloat)) -> Bool {
+            c.0 > 0.96 && c.1 > 0.96 && c.2 > 0.96
+        }
+        func creamWash(_ c: (CGFloat, CGFloat, CGFloat)) -> Bool {
+            // Field-test stuck frames: pale yellow + grain, almost no scene.
+            c.0 > 0.90 && c.1 > 0.86 && c.2 > 0.48 && (c.0 - c.2) > 0.22 && abs(c.0 - c.1) < 0.10
+        }
+        let bothWhite = nearWhite(c1) && nearWhite(c2)
+        let bothCream = creamWash(c1) && creamWash(c2)
+        guard bothWhite || bothCream else { return false }
+        // Uniform across opposite corners → stuck wash, not a bright subject.
+        let dr = abs(c1.0 - c2.0)
+        let dg = abs(c1.1 - c2.1)
+        let db = abs(c1.2 - c2.2)
+        return (dr + dg + db) < 0.12
+    }
+
+    private func areaAverageRGB(_ image: CIImage, rect: CGRect) -> (CGFloat, CGFloat, CGFloat)? {
+        guard let filter = CIFilter(name: "CIAreaAverage") else { return nil }
+        filter.setValue(image, forKey: kCIInputImageKey)
+        filter.setValue(CIVector(cgRect: rect), forKey: "inputExtent")
+        guard let avg = filter.outputImage else { return nil }
+        var pixel = [UInt8](repeating: 0, count: 4)
+        ShutterRender.syncCI {
+            ShutterRender.ciContext.render(
+                avg,
+                toBitmap: &pixel,
+                rowBytes: 4,
+                bounds: CGRect(x: 0, y: 0, width: 1, height: 1),
+                format: .RGBA8,
+                colorSpace: CGColorSpaceCreateDeviceRGB()
+            )
+        }
+        return (CGFloat(pixel[0]) / 255, CGFloat(pixel[1]) / 255, CGFloat(pixel[2]) / 255)
     }
 
     /// Finite-extent + downscale + software CIContext retries for still bakes.
@@ -2257,8 +2352,12 @@ class CameraManager: NSObject, ObservableObject {
 
     private func isHeavyPreviewFX(_ fx: LensFXMode) -> Bool {
         switch fx {
-        case .liquid, .chrome, .dream, .kaleido, .toon: return true
-        default: return false
+        // Fisheye/VHS/Mirror join the slow lane — they were washing the finder
+        // at 10fps under GPU load (Build 104).
+        case .liquid, .chrome, .dream, .kaleido, .toon, .fisheye, .vhs, .mirror:
+            return true
+        default:
+            return false
         }
     }
 
@@ -2906,6 +3005,10 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
                             y: -out.origin.y
                         ))
                         out = frame.extent
+                    }
+                    // Drop cream/white wash before Metal covers AV (Build 104).
+                    if self.isWashedPreviewFrame(frame) {
+                        return nil
                     }
                     // Materialize now — CVPixelBuffer is recycled when this callback returns.
                     guard let cg = ShutterRender.syncCI({

@@ -412,13 +412,22 @@ final class LensFXEngine {
             result = applyNegative(to: image)
         }
 
-        let outExtent = result.extent
+        // Pin every FX to the input extent + origin-zero so Metal never
+        // aspect-fills a half-empty / offset bitmap (Build 104).
+        var pinned = result.cropped(to: extent)
+        let outExtent = pinned.extent
         guard !outExtent.isInfinite,
               outExtent.width > 1,
               outExtent.height > 1 else {
             return image
         }
-        return result
+        if outExtent.origin != .zero {
+            pinned = pinned.transformed(by: CGAffineTransform(
+                translationX: -outExtent.origin.x,
+                y: -outExtent.origin.y
+            ))
+        }
+        return pinned
     }
 
     /// Renders a still-image variant of an effect. Orientation metadata is
@@ -597,13 +606,15 @@ final class LensFXEngine {
         let blurred = (blur.outputImage ?? random).cropped(to: textureRect)
 
         // Render once to a bitmap — otherwise the noise+blur chain would be
-        // lazily re-executed on the GPU for every preview frame
+        // lazily re-executed on the GPU for every preview frame.
+        // Never return the lazy blur graph: under GPU pressure it washes the
+        // finder into noisy cream (Build 104).
         if let cgImage = ShutterRender.syncCI({
             ShutterRender.ciContext.createCGImage(blurred, from: textureRect)
         }) {
             return CIImage(cgImage: cgImage)
         }
-        return blurred
+        return CIImage(color: CIColor(red: 0.5, green: 0.5, blue: 0.5)).cropped(to: textureRect)
     }
 
     // Two noise layers flowing in different directions, blended 50/50.
@@ -670,7 +681,9 @@ final class LensFXEngine {
         let texture = morphingTexture(covering: extent, time: textureTime)
 
         let forceGain: CGFloat = applyPreviewCheap ? (1.0 + force * 1.1) : (1.0 + force * 1.8 + velBoost * 0.6)
-        let glassScale = extent.width * strength * forceGain
+        // Clamp glass scale — unbounded displacement blows out to cream wash.
+        let maxGlass = min(extent.width, extent.height) * (applyPreviewCheap ? 0.08 : 0.14)
+        let glassScale = min(maxGlass, extent.width * strength * forceGain)
 
         guard let glass = CIFilter(name: "CIGlassDistortion") else { return image }
         glass.setValue(image.clampedToExtent(), forKey: kCIInputImageKey)
@@ -686,7 +699,7 @@ final class LensFXEngine {
             bump.inputImage = output.clampedToExtent()
             bump.center = center
             bump.radius = Float(min(extent.width, extent.height) * (0.18 + force * 0.28))
-            bump.scale = Float(0.35 + force * 0.85 + velBoost * 0.25)
+            bump.scale = Float(min(0.85, 0.35 + force * 0.55 + velBoost * 0.2))
             output = (bump.outputImage ?? output).cropped(to: extent)
 
             // Trailing wake opposite drag velocity (skip on cheap live preview)
@@ -809,12 +822,15 @@ final class LensFXEngine {
         vignette.radius = 1.8
         if let result = vignette.outputImage { output = result }
 
-        // Gentle halation glow on highlights
-        let bloom = CIFilter.bloom()
-        bloom.inputImage = output
-        bloom.radius = 4
-        bloom.intensity = 0.25
-        if let result = bloom.outputImage { output = result }
+        // Gentle halation — stills only. Live bloom + Instant warmth was the
+        // cream wash that stuck the finder (Build 104).
+        if !applyPreviewCheap {
+            let bloom = CIFilter.bloom()
+            bloom.inputImage = output
+            bloom.radius = 4
+            bloom.intensity = 0.25
+            if let result = bloom.outputImage { output = result }
+        }
 
         return output.cropped(to: extent)
     }
@@ -824,10 +840,29 @@ final class LensFXEngine {
     private func applyDream(to image: CIImage) -> CIImage {
         let extent = image.extent
 
+        // Live preview: soft glow without screen-blend washout (Build 104).
+        // Full Orton screen on every preview frame blew frames to white.
+        if applyPreviewCheap {
+            let blur = CIFilter.gaussianBlur()
+            blur.inputImage = image.clampedToExtent()
+            blur.radius = Float(extent.width * 0.004)
+            let blurred = (blur.outputImage ?? image).cropped(to: extent)
+            let mix = CIFilter.dissolveTransition()
+            mix.inputImage = image
+            mix.targetImage = blurred
+            mix.time = 0.35
+            var output = (mix.outputImage ?? image).cropped(to: extent)
+            let vibrance = CIFilter.vibrance()
+            vibrance.inputImage = output
+            vibrance.amount = 0.18
+            if let result = vibrance.outputImage { output = result }
+            return output.cropped(to: extent)
+        }
+
         // Wide soft blur of the frame...
         let blur = CIFilter.gaussianBlur()
         blur.inputImage = image.clampedToExtent()
-        blur.radius = Float(extent.width * (applyPreviewCheap ? 0.006 : 0.012))
+        blur.radius = Float(extent.width * 0.012)
         let blurred = (blur.outputImage ?? image).cropped(to: extent)
 
         // ...dimmed, then screened over the sharp original: highlights bloom
@@ -868,7 +903,8 @@ final class LensFXEngine {
         bump.inputImage = image.clampedToExtent()
         bump.center = center
         bump.radius = Float(max(extent.width, extent.height) * (0.62 - t.force * 0.12))
-        bump.scale = 0.55 + scaleBoost
+        // Clamp bump — extreme scale expands extent into blank wash.
+        bump.scale = min(0.85, 0.55 + scaleBoost)
 
         var output = (bump.outputImage ?? image).cropped(to: extent)
 
@@ -890,7 +926,8 @@ final class LensFXEngine {
 
         // Fringe amount wobbles slightly over time like bad tracking
         let wobble = time > 0 ? (1.0 + 0.3 * sin(time * 2.3)) : 1.0
-        let dx = extent.width * 0.0035 * CGFloat(wobble)
+        let fringe: CGFloat = applyPreviewCheap ? 0.0022 : 0.0035
+        let dx = extent.width * fringe * CGFloat(wobble)
 
         func channel(_ r: CGFloat, _ g: CGFloat, _ b: CGFloat, shiftX: CGFloat) -> CIImage? {
             let matrix = CIFilter.colorMatrix()
@@ -918,11 +955,12 @@ final class LensFXEngine {
 
         var output = addB.outputImage ?? image
 
-        // Slightly hot saturation and lifted blacks, like tape playback
+        // Slightly hot saturation and lifted blacks, like tape playback.
+        // Preview keeps the fringe milder so additionCompositing can't blow out.
         let controls = CIFilter.colorControls()
         controls.inputImage = output
-        controls.saturation = 1.15
-        controls.brightness = 0.02
+        controls.saturation = applyPreviewCheap ? 1.08 : 1.15
+        controls.brightness = applyPreviewCheap ? 0.0 : 0.02
         controls.contrast = 0.98
         if let result = controls.outputImage { output = result }
 
@@ -974,19 +1012,27 @@ final class LensFXEngine {
 
     private func applyMirror(to image: CIImage) -> CIImage {
         let extent = image.extent
+        guard extent.width > 2, extent.height > 1 else { return image }
+
+        // Clamp first so the flip never samples infinite/empty outside.
+        let clamped = image.clampedToExtent().cropped(to: extent)
 
         // Flip horizontally in place: x' = (maxX + minX) - x
         let flip = CGAffineTransform(a: -1, b: 0, c: 0, d: 1,
                                      tx: extent.maxX + extent.minX, ty: 0)
-        let flipped = image.transformed(by: flip)
+        let flipped = clamped.transformed(by: flip)
 
         // Right half becomes the reflection of the left half
+        let halfW = extent.width / 2
+        guard halfW > 1 else { return image }
         let rightHalf = CGRect(x: extent.midX, y: extent.minY,
-                               width: extent.width / 2, height: extent.height)
+                               width: halfW, height: extent.height)
+        let right = flipped.cropped(to: rightHalf)
+        guard right.extent.width > 1, right.extent.height > 1 else { return image }
 
         let composite = CIFilter.sourceOverCompositing()
-        composite.inputImage = flipped.cropped(to: rightHalf)
-        composite.backgroundImage = image
+        composite.inputImage = right
+        composite.backgroundImage = clamped
 
         return (composite.outputImage ?? image).cropped(to: extent)
     }
