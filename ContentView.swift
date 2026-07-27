@@ -264,7 +264,7 @@ struct ContentView: View {
     @AppStorage("cam.zebra") private var zebraEnabled = false
     /// Off by default — motion updates were fighting the camera UI for main-thread time.
     @AppStorage("cam.showLevel") private var showLevel = false
-    @AppStorage("cam.shootMode") private var shootModeRaw: String = ShootMode.street.rawValue
+    @AppStorage("cam.shootMode") private var shootModeRaw: String = ShootMode.auto.rawValue
     @AppStorage("cam.defaultFilm") private var defaultFilmRaw: Int = FilmFilterMode.none.rawValue
     @AppStorage("cam.captureFormat") private var captureFormatRaw: String = CaptureFormat.heic.rawValue
     /// Default ON — minimize Apple computational photography (speed + Bayer RAW).
@@ -291,9 +291,11 @@ struct ContentView: View {
     /// Suppresses "Capture failed" toast when the user aborted LE.
     @State private var expectingLECancel = false
     /// Soft Auto Night assist — opt-in chip when AUTO is hunting in the dark.
+    /// Soft SCENE tip while on AUTO (Build 105 — was Night-only).
     @State private var nightAssistVisible = false
     @State private var nightAssistDarkStreak = 0
     @State private var nightAssistDismissedUntil: Date?
+    @State private var sceneAssistPick: AutoScenePick?
     @AppStorage("cam.nightAssist") private var nightAssistEnabled = true
     /// Hold-to-burst is opt-in — default off (Build 65).
     @AppStorage("cam.holdBurst") private var holdBurstEnabled = false
@@ -969,25 +971,35 @@ struct ContentView: View {
                     safeTop: safeTop,
                     toast: statusToast,
                     nightAssistVisible: nightAssistVisible,
+                    sceneAssistLead: sceneAssistPick?.chipLead ?? "AUTO",
+                    sceneAssistAction: sceneAssistPick?.chipAction ?? "TAP FOR NIGHT",
                     cameraError: camera.error?.localizedDescription,
-                    onApplyNight: { applyNightAssistFromChip() },
+                    onApplyNight: { applySceneAssistFromChip() },
                     onDismissNight: {
                         Haptics.click()
                         nightAssistVisible = false
+                        sceneAssistPick = nil
                         nightAssistDismissedUntil = Date().addingTimeInterval(300)
                     }
                 )
                 .animation(ShutterMotion.chrome, value: statusToast)
                 .animation(ShutterMotion.chrome, value: nightAssistVisible)
+                .animation(ShutterMotion.chrome, value: sceneAssistPick)
             }
             .ignoresSafeArea()
             // NEVER attach .animation to this ZStack — it owns Metal preview + shutter.
             // Toast/night chrome animate inside FinderStatusOverlays only.
-            .onReceive(LiveExposureBus.shared.$iso) { _ in evaluateNightAssist() }
-            .onReceive(LiveExposureBus.shared.$shutterLabel) { _ in evaluateNightAssist() }
+            .onReceive(LiveExposureBus.shared.$iso) { _ in evaluateSceneAssist() }
+            .onReceive(LiveExposureBus.shared.$shutterLabel) { _ in evaluateSceneAssist() }
+            .onReceive(HistogramBus.shared.$bins) { _ in evaluateSceneAssist() }
             .onChange(of: camera.isManualExposure) { _, manual in
-                if manual { nightAssistVisible = false; nightAssistDarkStreak = 0 }
-                else { evaluateNightAssist() }
+                if manual {
+                    nightAssistVisible = false
+                    nightAssistDarkStreak = 0
+                    sceneAssistPick = nil
+                } else {
+                    evaluateSceneAssist()
+                }
             }
             .onChange(of: isLandscape) { _, landscape in
                 finderIsLandscape = landscape
@@ -1135,12 +1147,13 @@ struct ContentView: View {
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: work)
     }
 
-    /// Soft Auto Night — suggest manual Night when AUTO is clearly dark.
-    /// Opt-in chip only (never auto-applies 1″ LE mid-shoot).
-    private func evaluateNightAssist() {
+    /// Soft Auto SCENE — suggest Night / Street / Film from live AE + hist.
+    /// Opt-in chip only (never silent-applies mid-shoot). Build 105.
+    private func evaluateSceneAssist() {
         guard nightAssistEnabled else {
             nightAssistVisible = false
             nightAssistDarkStreak = 0
+            sceneAssistPick = nil
             return
         }
         // Never prompt / keep chip up while a capture owns the pipeline.
@@ -1154,62 +1167,71 @@ struct ContentView: View {
         guard !camera.isManualExposure else {
             nightAssistVisible = false
             nightAssistDarkStreak = 0
+            sceneAssistPick = nil
             return
         }
-        if ShootMode(rawValue: shootModeRaw) == .night {
+        // Only while SCENE Auto (or legacy "auto" sentinel) owns the dial.
+        let armed = ShootMode(rawValue: shootModeRaw) == .auto || shootModeRaw == "auto"
+        guard armed else {
             nightAssistVisible = false
+            nightAssistDarkStreak = 0
+            sceneAssistPick = nil
             return
         }
         if let until = nightAssistDismissedUntil, Date() < until {
             nightAssistVisible = false
             return
         }
-        let dark = isLowLightAUTO(
+        let pick = AutoSceneAdvisor.pick(
             iso: LiveExposureBus.shared.iso,
-            shutterLabel: LiveExposureBus.shared.shutterLabel
+            shutterLabel: LiveExposureBus.shared.shutterLabel,
+            histogram: HistogramBus.shared.bins
         )
-        if dark {
-            nightAssistDarkStreak += 1
+        if let pick {
+            if sceneAssistPick == pick {
+                nightAssistDarkStreak += 1
+            } else {
+                sceneAssistPick = pick
+                nightAssistDarkStreak = 1
+                if nightAssistVisible {
+                    withAnimation(ShutterMotion.chrome) { nightAssistVisible = false }
+                }
+            }
         } else {
             nightAssistDarkStreak = 0
+            sceneAssistPick = nil
             if nightAssistVisible {
                 withAnimation(ShutterMotion.chrome) { nightAssistVisible = false }
             }
             return
         }
-        // ~3 samples at 0.4s probe ≈ 1.2s of stable dark before prompting.
+        // ~3 samples at 0.4s probe ≈ 1.2s of stable conditions before prompting.
         if nightAssistDarkStreak >= 3, !nightAssistVisible {
             withAnimation(ShutterMotion.chrome) { nightAssistVisible = true }
         }
     }
 
-    private func applyNightAssistFromChip() {
+    /// Back-compat alias — stress suite / older call sites.
+    private func evaluateNightAssist() { evaluateSceneAssist() }
+
+    private func applySceneAssistFromChip() {
         guard !isCapturing, !isBurstHolding, !camera.isLongExposureCapturing else { return }
+        guard let pick = sceneAssistPick else { return }
         nightAssistVisible = false
+        sceneAssistPick = nil
         nightAssistDismissedUntil = Date().addingTimeInterval(180)
-        applyShootMode(.night)
-        showStatusToast("Night · 1/15 · ISO 1600")
+        applyShootMode(pick.mode)
+        showStatusToast(pick.toast)
     }
 
+    private func applyNightAssistFromChip() { applySceneAssistFromChip() }
+
     private func isLowLightAUTO(iso: Float, shutterLabel: String) -> Bool {
-        if iso >= 1000 { return true }
-        guard let seconds = Self.parseShutterSeconds(shutterLabel) else { return false }
-        // AE slower than ~1/30 in AUTO → scene is dark enough for Night assist.
-        return seconds >= (1.0 / 30.0) - 0.0005
+        AutoSceneAdvisor.pick(iso: iso, shutterLabel: shutterLabel) == .night
     }
 
     private static func parseShutterSeconds(_ label: String) -> Double? {
-        let t = label.trimmingCharacters(in: .whitespaces)
-        guard !t.isEmpty, t != "AUTO" else { return nil }
-        if t.hasSuffix("\"") {
-            return Double(t.dropLast())
-        }
-        if t.hasPrefix("1/") {
-            let denom = Double(t.dropFirst(2)) ?? 0
-            guard denom > 0 else { return nil }
-            return 1.0 / denom
-        }
-        return Double(t)
+        AutoSceneAdvisor.parseShutterSeconds(label)
     }
 
     private func beginBurstHold() {
@@ -1348,8 +1370,25 @@ struct ContentView: View {
     }
 
     private func applyShootMode(_ mode: ShootMode) {
+        let previous = shootModeRaw
         shootModeRaw = mode.rawValue
         switch mode {
+        case .auto:
+            // Arm SCENE Auto — continuous AE + soft tips (Build 105).
+            isLocked = false
+            isManualFocusEnabled = false
+            exposureValue = 0
+            shutterSpeedIndex = 9
+            isoValue = 400
+            nightAssistVisible = false
+            nightAssistDarkStreak = 0
+            sceneAssistPick = nil
+            nightAssistDismissedUntil = nil
+            camera.returnToAuto()
+            // Toast when entering Auto from a preset — not on every A-chip tap.
+            if previous != "auto", previous != ShootMode.auto.rawValue {
+                showStatusToast("AUTO · watching light")
+            }
         case .street:
             showGrid = true
             focusPeaking = false
@@ -1415,18 +1454,10 @@ struct ContentView: View {
 
     private func returnToAuto() {
         Haptics.medium()
-        isLocked = false
-        isManualFocusEnabled = false
-        exposureValue = 0
-        // Reset UI stops so a leftover Night "1\"" doesn't still trigger LE while
-        // the glass bar says AUTO.
-        shutterSpeedIndex = 9 // 1/125 (display only until next manual set)
-        isoValue = 400
-        // Clear SCENE highlight — no preset owns AUTO exposure.
-        shootModeRaw = "auto"
-        nightAssistVisible = false
-        nightAssistDarkStreak = 0
-        camera.returnToAuto()
+        // A chip → SCENE Auto (highlights in FILM menu + soft SCENE tips).
+        // applyShootMode(.auto) resets shutterSpeedIndex so a leftover Night
+        // "1\"" doesn't still trigger LE while the glass bar says AUTO.
+        applyShootMode(.auto)
     }
 
     private func applyDeepLink(_ link: ShutterDeepLink) {
@@ -1468,6 +1499,13 @@ struct ContentView: View {
                     lensFX = fx
                 }
                 // Unknown fxName: leave current FX (don't wipe a live look).
+            }
+        case .scene(let modeName):
+            showPhotoBook = false
+            if let mode = ShootMode(rawValue: modeName.lowercased()) {
+                applyShootMode(mode)
+            } else if modeName.compare("auto", options: .caseInsensitive) == .orderedSame {
+                applyShootMode(.auto)
             }
         case .timer(let seconds):
             timerSeconds = [0, 3, 10].contains(seconds) ? seconds : 0
@@ -2465,6 +2503,9 @@ struct FinderStatusOverlays: View {
     let safeTop: CGFloat
     let toast: String?
     let nightAssistVisible: Bool
+    /// Condition rationale on the soft SCENE tip (DARK / BRIGHT / DAY).
+    var sceneAssistLead: String = "LOW LIGHT"
+    var sceneAssistAction: String = "TAP FOR NIGHT"
     let cameraError: String?
     let onApplyNight: () -> Void
     let onDismissNight: () -> Void
@@ -2491,12 +2532,12 @@ struct FinderStatusOverlays: View {
                 HStack(spacing: 10) {
                     Button(action: onApplyNight) {
                         HStack(spacing: 8) {
-                            Text("LOW LIGHT")
+                            Text(sceneAssistLead)
                                 .font(.system(size: 10, weight: .bold, design: .monospaced))
                                 .tracking(1.2)
                             Text("·")
                                 .foregroundColor(.white.opacity(0.35))
-                            Text("TAP FOR NIGHT")
+                            Text(sceneAssistAction)
                                 .font(.system(size: 10, weight: .semibold, design: .monospaced))
                         }
                         .foregroundColor(Color(red: 1.0, green: 0.78, blue: 0.35))

@@ -39,6 +39,23 @@ enum ShutterTimerSecondsEntity: Int, AppEnum {
     ]
 }
 
+enum ShutterSceneEntity: String, AppEnum {
+    case auto = "auto"
+    case street = "street"
+    case night = "night"
+    case studio = "studio"
+    case film = "film"
+
+    static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "Scene")
+    static var caseDisplayRepresentations: [ShutterSceneEntity: DisplayRepresentation] = [
+        .auto: "Auto",
+        .street: "Street",
+        .night: "Night",
+        .studio: "Studio",
+        .film: "Film"
+    ]
+}
+
 // MARK: - Shortcuts / Siri App Intents (main app)
 
 struct OpenShutterCamIntent: AppIntent {
@@ -109,6 +126,23 @@ struct ApplyShutterLookIntent: AppIntent {
     }
 }
 
+struct ApplyShutterSceneIntent: AppIntent {
+    static var title: LocalizedStringResource = "Set Shutter Scene"
+    static var description = IntentDescription(
+        "Pick a SCENE mode — Auto watches light and soft-suggests Night, Street, or Film."
+    )
+    static var openAppWhenRun: Bool = true
+
+    @Parameter(title: "Scene")
+    var scene: ShutterSceneEntity
+
+    @MainActor
+    func perform() async throws -> some IntentResult {
+        ShutterDeepLinkCenter.post(.scene(mode: scene.rawValue))
+        return .result()
+    }
+}
+
 struct SetShutterTimerIntent: AppIntent {
     static var title: LocalizedStringResource = "Set Shutter Timer"
     static var description = IntentDescription("Set the self-timer (0, 3, or 10 seconds).")
@@ -171,6 +205,16 @@ struct ShutterAppShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "Apply Look",
             systemImageName: "camera.filters"
+        )
+        AppShortcut(
+            intent: ApplyShutterSceneIntent(),
+            phrases: [
+                "Set scene in \(.applicationName)",
+                "Auto scene with \(.applicationName)",
+                "Night mode in \(.applicationName)"
+            ],
+            shortTitle: "Set Scene",
+            systemImageName: "camera.metering.spot"
         )
         AppShortcut(
             intent: SetShutterTimerIntent(),

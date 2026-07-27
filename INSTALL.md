@@ -8,13 +8,15 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 104 phone test pack (FX stuck / washout guards):**
+**Build 105 phone test pack (SCENE Auto advisor):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **104**.
-Verified: Dream/Liquid/Instant/Mirror can no longer stick the finder on
-cream-grain or white wash; washed frames fall back to live AV; grain is tiled.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **105**.
+Verified: SCENE → Auto watches ISO/shutter/hist and soft-suggests Night,
+Street, or Film (tap to apply). Shortcuts: Set Scene / shuttercam://scene.
+
+Build 104: FX stuck / washout guards.
 
 Build 103: arch dial yellow only on active value + tick.
 

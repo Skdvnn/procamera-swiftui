@@ -4,12 +4,15 @@ import AVFoundation
 // MARK: - Shoot modes (not fake P/A/S/M — practical presets)
 
 enum ShootMode: String, CaseIterable, Identifiable {
+    /// Continuous AE that watches light and soft-suggests a SCENE (Build 105).
+    case auto
     case street, night, studio, film
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
+        case .auto: return "Auto"
         case .street: return "Street"
         case .night: return "Night"
         case .studio: return "Studio"
@@ -19,6 +22,7 @@ enum ShootMode: String, CaseIterable, Identifiable {
 
     var blurb: String {
         switch self {
+        case .auto: return "Watch light · suggest SCENE"
         case .street: return "Fast shutter · grid on"
         case .night: return "1/15 · ISO 1600 · clean"
         case .studio: return "Manual lock · peaking"
@@ -28,11 +32,114 @@ enum ShootMode: String, CaseIterable, Identifiable {
 
     var icon: String {
         switch self {
+        case .auto: return "circle.lefthalf.filled"
         case .street: return "figure.walk"
         case .night: return "moon.stars"
         case .studio: return "lamp.desk"
         case .film: return "film"
         }
+    }
+}
+
+// MARK: - Auto SCENE advisor (ISO / shutter / hist → soft pick)
+
+/// Opt-in chip pick — never silent-applies mid-shoot (same contract as Night tip).
+enum AutoScenePick: String, Equatable {
+    case night, street, film
+
+    var mode: ShootMode {
+        switch self {
+        case .night: return .night
+        case .street: return .street
+        case .film: return .film
+        }
+    }
+
+    /// LCD chip lead — condition rationale, not the mode name.
+    var chipLead: String {
+        switch self {
+        case .night: return "DARK"
+        case .street: return "BRIGHT"
+        case .film: return "DAY"
+        }
+    }
+
+    var chipAction: String {
+        switch self {
+        case .night: return "TAP FOR NIGHT"
+        case .street: return "TAP FOR STREET"
+        case .film: return "TAP FOR FILM"
+        }
+    }
+
+    var toast: String {
+        switch self {
+        case .night: return "AUTO · NIGHT · 1/15 · ISO 1600"
+        case .street: return "AUTO · STREET · 1/250 · ISO 400"
+        case .film: return "AUTO · FILM · 1/60 · stock"
+        }
+    }
+}
+
+enum AutoSceneAdvisor {
+    /// Pick a SCENE from live AE + optional luminance histogram.
+    /// Returns nil when the scene is ambiguous (stay on AUTO).
+    static func pick(
+        iso: Float,
+        shutterLabel: String,
+        histogram: [Float] = []
+    ) -> AutoScenePick? {
+        let seconds = parseShutterSeconds(shutterLabel)
+        let lowKey = histogramBias(histogram) < -0.18
+        let highKey = histogramBias(histogram) > 0.22
+
+        // Night — same spine as the old Night tip, plus low-key hist boost.
+        let darkISO = iso >= 1000 || (lowKey && iso >= 640)
+        let darkShutter = (seconds ?? 0) >= (1.0 / 30.0) - 0.0005
+        if darkISO || darkShutter { return .night }
+
+        // Street — bright daylight / fast AE (freeze motion).
+        if let seconds,
+           iso > 0, iso <= 320,
+           seconds > 0, seconds <= (1.0 / 200.0) + 0.0005 {
+            return .street
+        }
+        if highKey, iso > 0, iso <= 400 { return .street }
+
+        // Film — moderate daylight; stock-first look without locking AE.
+        if let seconds,
+           iso >= 100, iso <= 800,
+           seconds >= (1.0 / 250.0) - 0.0005,
+           seconds <= (1.0 / 30.0) + 0.0005 {
+            return .film
+        }
+
+        return nil
+    }
+
+    /// −1…+1 — negative = crushed shadows, positive = blown highlights.
+    private static func histogramBias(_ bins: [Float]) -> Float {
+        guard bins.count >= 8 else { return 0 }
+        let n = bins.count
+        let low = bins.prefix(n / 4).reduce(0, +)
+        let high = bins.suffix(n / 4).reduce(0, +)
+        let mid = bins.dropFirst(n / 4).prefix(n / 2).reduce(0, +)
+        let total = max(0.001, low + mid + high)
+        return (high - low) / total
+    }
+
+    static func parseShutterSeconds(_ label: String) -> Double? {
+        let t = label.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty, t != "AUTO" else { return nil }
+        if t.hasSuffix("\"") {
+            return Double(t.dropLast())
+        }
+        if t.hasPrefix("1/") {
+            let denom = Double(t.dropFirst(2)) ?? 0
+            guard denom > 0 else { return nil }
+            return 1.0 / denom
+        }
+        return Double(t)
     }
 }
 
@@ -80,7 +187,11 @@ struct ShutterSettingsSheet: View {
                     }
 
                     dslrSection("Assist") {
-                        DSLRToggleRow(title: "Night tip", blurb: "Opt-in when AUTO is dark", isOn: $nightAssist)
+                        DSLRToggleRow(
+                            title: "Scene tip",
+                            blurb: "AUTO suggests Night · Street · Film",
+                            isOn: $nightAssist
+                        )
                         DSLRDivider()
                         DSLRToggleRow(title: "Hold burst", blurb: "Up to 6 stills while held", isOn: $holdBurst)
                     }
