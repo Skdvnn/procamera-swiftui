@@ -257,6 +257,11 @@ private struct LiveExposureChrome<Content: View>: View {
 
 struct ContentView: View {
     @StateObject private var camera = CameraManager()
+    private var captureChrome: CaptureChromeBus { CaptureChromeBus.shared }
+    private var sceneAssist: SceneAssistBus { SceneAssistBus.shared }
+    private var isCapturing: Bool { captureChrome.isCapturing }
+    private var isBurstHolding: Bool { captureChrome.isBurstHolding }
+    private var burstCaptured: Int { captureChrome.burstCaptured }
     @Environment(\.colorScheme) var colorScheme  // Track color scheme changes
 
     @AppStorage("cam.showGrid") private var showGrid = true
@@ -282,29 +287,20 @@ struct ContentView: View {
     @State private var lastShutterEventAt: CFAbsoluteTime = 0
     @State private var photoCount = 0
     @State private var lastCapturedImage: UIImage?
-    @State private var showFlash = false
-    /// Brief dark shutter curtain (burst / clap) — not the white flash wash.
-    @State private var showShutterCurtain = false
     /// Brief chrome toast for failed capture / Photos denial / LE cancel — ToastBus (Build 109).
     /// Suppresses "Capture failed" toast when the user aborted LE.
     @State private var expectingLECancel = false
-    /// Soft Auto Night assist — opt-in chip when AUTO is hunting in the dark.
-    /// Soft SCENE tip while on AUTO (Build 105 — was Night-only).
-    @State private var nightAssistVisible = false
-    @State private var nightAssistDarkStreak = 0
-    @State private var nightAssistDismissedUntil: Date?
-    @State private var sceneAssistPick: AutoScenePick?
+    /// Soft SCENE tip lives on SceneAssistBus (Build 110).
     @AppStorage("cam.nightAssist") private var nightAssistEnabled = true
     /// Throttle device EV writes during sun-drag (UI still updates every frame).
     @State private var lastExposureApplyTime: CFAbsoluteTime = 0
     /// Hold-to-burst is opt-in — default off (Build 65).
     @AppStorage("cam.holdBurst") private var holdBurstEnabled = false
     /// Hold-to-burst: finger still down after long-press threshold.
-    @State private var isBurstHolding = false
     /// Suppresses the Button tap that fires when a long-press burst ends.
     @State private var burstConsumedTap = false
-    @State private var burstCaptured = 0
     @State private var burstNilRetries = 0
+    // isBurstHolding / burstCaptured → CaptureChromeBus (Build 110)
     private let burstMaxFrames = 6
     private let burstMaxNilRetries = 60
     @State private var showFocusPoint = false
@@ -320,8 +316,10 @@ struct ContentView: View {
     @State private var focusHideWorkItem: DispatchWorkItem?
     @State private var lastExposureHapticStep: Int = 0
     @State private var macroEnabled = false
-    @State private var isCapturing = false
+    // isCapturing → CaptureChromeBus.shared (Build 110)
     @State private var whiteBalanceIndex: Int = 0
+    /// Flash pill — local so cycleFlash doesn't publish through CameraManager (Build 110).
+    @State private var flashMode: AVCaptureDevice.FlashMode = .off
     @State private var isManualFocusEnabled = false
     @State private var isLocked = false
     @State private var focusPosition: Float = 0.5
@@ -351,7 +349,9 @@ struct ContentView: View {
     @State private var scrubEdgeValue: String = ""
     @StateObject private var galleryOwner = GalleryStoreOwner()
     private var gallery: GalleryStore { galleryOwner.store }
-    @StateObject private var volumeShutter = VolumeShutterObserver()
+    /// Volume shutter — not ObservableObject (Build 110); holder avoids ContentView thrash.
+    @State private var volumeShutterOwner = VolumeShutterOwner()
+    private var volumeShutter: VolumeShutterObserver { volumeShutterOwner.observer }
     @State private var showPhotoBook = false
     /// Field Book deep link — applied when CullLibraryView appears (not a racy Notification).
     @State private var pendingOpenFieldBook = false
@@ -504,9 +504,9 @@ struct ContentView: View {
             cancelTimerCountdown()
             if camera.isLongExposureCapturing {
                 camera.cancelLongExposure()
-                isCapturing = false
+                captureChrome.setCapturing(false)
             }
-            isBurstHolding = false
+            captureChrome.setBurstHolding(false)
         }
         .onReceive(NotificationCenter.default.publisher(for: .shutterDeepLink)) { note in
             if let link = note.userInfo?["link"] as? ShutterDeepLink {
@@ -754,7 +754,7 @@ struct ContentView: View {
                             isoIsAuto: !camera.isManualExposure,
                             shutterLabel: liveShutter,
                             shutterIsAuto: !camera.isManualExposure,
-                            flashMode: flashModeLabel(camera.flashMode),
+                            flashMode: flashModeLabel(flashMode),
                             macroEnabled: macroEnabled,
                             isAutoFocus: !isManualFocusEnabled,
                             compact: effectiveTopCollapsed,
@@ -957,36 +957,19 @@ struct ContentView: View {
                 // Animate only chrome commits via withAnimation(ShutterMotion.deck) —
                 // never attach .animation to this VStack (it owns the Metal preview).
 
-                // Soft clap wash — brief, low white (not a phone-camera flash bang).
-                Color.white
-                    .ignoresSafeArea()
-                    .opacity(showFlash ? 0.28 : 0)
-                    .allowsHitTesting(false)
-                    .animation(ShutterMotion.flash, value: showFlash)
-
-                // Subtle shutter curtain (burst clap) — dark, brief, no blue glow.
-                Color.black
-                    .ignoresSafeArea()
-                    .opacity(showShutterCurtain ? 0.78 : 0)
-                    .allowsHitTesting(false)
-                    .animation(.easeOut(duration: 0.05), value: showShutterCurtain)
+                // Soft clap / curtain — leaf hosts so capture @State doesn't rebuild Metal.
+                CaptureFlashWashHost()
+                CaptureCurtainHost()
 
                 FinderStatusOverlays(
                     safeTop: safeTop,
-                    nightAssistVisible: nightAssistVisible,
-                    sceneAssistLead: sceneAssistPick?.chipLead ?? "AUTO",
-                    sceneAssistAction: sceneAssistPick?.chipAction ?? "TAP FOR NIGHT",
                     cameraError: camera.error?.localizedDescription,
                     onApplyNight: { applySceneAssistFromChip() },
                     onDismissNight: {
                         Haptics.click()
-                        nightAssistVisible = false
-                        sceneAssistPick = nil
-                        nightAssistDismissedUntil = Date().addingTimeInterval(300)
+                        sceneAssist.applyDismiss(for: 300)
                     }
                 )
-                .animation(ShutterMotion.chrome, value: nightAssistVisible)
-                .animation(ShutterMotion.chrome, value: sceneAssistPick)
             }
             .ignoresSafeArea()
             // NEVER attach .animation to this ZStack — it owns Metal preview + shutter.
@@ -1046,6 +1029,7 @@ struct ContentView: View {
         // Seed widget overlapping recents from gallery if App Group is empty.
         seedWidgetRecentsIfNeeded()
         apertureValue = camera.lensAperture
+        flashMode = camera.flashMode
         camera.naturalCaptureEnabled = naturalCapture
         if let fmt = CaptureFormat(rawValue: captureFormatRaw) {
             captureFormat = fmt
@@ -1146,72 +1130,22 @@ struct ContentView: View {
     }
 
     /// Soft Auto SCENE — suggest Night / Street / Film from live AE + hist.
-    /// Opt-in chip only (never silent-applies mid-shoot). Build 105/106.
+    /// Opt-in chip only (never silent-applies mid-shoot). State on SceneAssistBus (Build 110).
     private func evaluateSceneAssist() {
-        guard nightAssistEnabled else {
-            clearSceneAssistState()
-            return
-        }
-        // Never prompt / keep chip up while a capture owns the pipeline.
-        if isCapturing || isBurstHolding || camera.isLongExposureCapturing {
-            if nightAssistVisible {
-                withAnimation(ShutterMotion.chrome) { nightAssistVisible = false }
-            }
-            // Don't zero streak/@State every capture frame — that rebuilds Metal.
-            return
-        }
-        guard !camera.isManualExposure else {
-            clearSceneAssistState()
-            return
-        }
-        // Only while SCENE Auto (or legacy "auto" sentinel) owns the dial.
         let armed = ShootMode(rawValue: shootModeRaw) == .auto || shootModeRaw == "auto"
-        guard armed else {
-            clearSceneAssistState()
-            return
-        }
-        if let until = nightAssistDismissedUntil, Date() < until {
-            if nightAssistVisible { nightAssistVisible = false }
-            return
-        }
-        let pick = AutoSceneAdvisor.pick(
-            iso: LiveExposureBus.shared.iso,
-            shutterLabel: LiveExposureBus.shared.shutterLabel,
-            histogram: HistogramBus.shared.bins
+        sceneAssist.evaluate(
+            enabled: nightAssistEnabled,
+            capturing: isCapturing,
+            bursting: isBurstHolding,
+            longExposure: camera.isLongExposureCapturing,
+            manualExposure: camera.isManualExposure,
+            armedAuto: armed
         )
-        guard let pick else {
-            if sceneAssistPick != nil || nightAssistVisible || nightAssistDarkStreak != 0 {
-                nightAssistDarkStreak = 0
-                sceneAssistPick = nil
-                if nightAssistVisible {
-                    withAnimation(ShutterMotion.chrome) { nightAssistVisible = false }
-                }
-            }
-            return
-        }
-        if sceneAssistPick == pick {
-            // Chip already up (or streak saturated) — no @State write (Build 106).
-            if nightAssistVisible || nightAssistDarkStreak >= 3 { return }
-            nightAssistDarkStreak += 1
-        } else {
-            sceneAssistPick = pick
-            nightAssistDarkStreak = 1
-            if nightAssistVisible {
-                withAnimation(ShutterMotion.chrome) { nightAssistVisible = false }
-            }
-        }
-        // ~3 samples at 0.4s probe ≈ 1.2s of stable conditions before prompting.
-        if nightAssistDarkStreak >= 3, !nightAssistVisible {
-            withAnimation(ShutterMotion.chrome) { nightAssistVisible = true }
-        }
     }
 
     /// Clear tip state only when something is actually set — avoids no-op rebuilds.
     private func clearSceneAssistState() {
-        guard nightAssistVisible || sceneAssistPick != nil || nightAssistDarkStreak != 0 else { return }
-        nightAssistVisible = false
-        nightAssistDarkStreak = 0
-        sceneAssistPick = nil
+        sceneAssist.clear()
     }
 
     /// Back-compat alias — stress suite / older call sites.
@@ -1219,10 +1153,8 @@ struct ContentView: View {
 
     private func applySceneAssistFromChip() {
         guard !isCapturing, !isBurstHolding, !camera.isLongExposureCapturing else { return }
-        guard let pick = sceneAssistPick else { return }
-        nightAssistVisible = false
-        sceneAssistPick = nil
-        nightAssistDismissedUntil = Date().addingTimeInterval(180)
+        guard let pick = sceneAssist.pick else { return }
+        sceneAssist.applyDismiss(for: 180)
         applyShootMode(pick.mode)
         showStatusToast(pick.toast)
     }
@@ -1248,14 +1180,14 @@ struct ContentView: View {
         if isLongExposureShutterIndex { return }
         // Only swallow the Button release when a real burst actually starts.
         burstConsumedTap = true
-        isBurstHolding = true
-        burstCaptured = 0
+        captureChrome.setBurstHolding(true)
+        captureChrome.setBurstCaptured(0)
         burstNilRetries = 0
         fireBurstFrame()
     }
 
     private func endBurstHold() {
-        isBurstHolding = false
+        captureChrome.setBurstHolding(false)
         if burstCaptured > 1 {
             showStatusToast("Burst · \(burstCaptured)")
         }
@@ -1272,7 +1204,7 @@ struct ContentView: View {
 
     private func fireBurstFrame() {
         guard isBurstHolding, burstCaptured < burstMaxFrames else {
-            isBurstHolding = false
+            captureChrome.setBurstHolding(false)
             if burstCaptured > 1 {
                 showStatusToast("Burst · \(burstCaptured)")
             }
@@ -1282,7 +1214,7 @@ struct ContentView: View {
         if isCapturing {
             burstNilRetries += 1
             guard burstNilRetries < burstMaxNilRetries else {
-                isBurstHolding = false
+                captureChrome.setBurstHolding(false)
                 showStatusToast(burstCaptured > 0 ? "Burst · \(burstCaptured)" : "Burst stopped")
                 return
             }
@@ -1292,7 +1224,7 @@ struct ContentView: View {
             return
         }
         burstNilRetries = 0
-        isCapturing = true
+        captureChrome.setCapturing(true)
         syncCaptureControlsToCamera()
         let shutterFilm = cameraFilmFilter(from: filmFilter)
         let shutterFX = lensFX
@@ -1302,8 +1234,7 @@ struct ContentView: View {
         if burstCaptured == 0 {
             // Subtle clap + dark curtain — not the gnarly white/blue wash.
             Haptics.medium()
-            showShutterCurtain = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { showShutterCurtain = false }
+            captureChrome.curtain()
         } else {
             Haptics.light()
         }
@@ -1312,16 +1243,16 @@ struct ContentView: View {
             lensFX: shutterFX,
             morphTouch: morphTouch
         ) { img in
-            isCapturing = false
+            captureChrome.setCapturing(false)
             if let img {
                 finishCapturedImage(img)
-                burstCaptured += 1
+                captureChrome.bumpBurstCaptured()
                 if isBurstHolding && burstCaptured < burstMaxFrames {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
                         fireBurstFrame()
                     }
                 } else {
-                    isBurstHolding = false
+                    captureChrome.setBurstHolding(false)
                     if burstCaptured > 1 {
                         showStatusToast("Burst · \(burstCaptured)")
                     }
@@ -1329,7 +1260,7 @@ struct ContentView: View {
             } else if isBurstHolding && burstCaptured < burstMaxFrames {
                 burstNilRetries += 1
                 guard burstNilRetries < burstMaxNilRetries else {
-                    isBurstHolding = false
+                    captureChrome.setBurstHolding(false)
                     showStatusToast(burstCaptured > 0 ? "Burst · \(burstCaptured)" : "Burst stopped")
                     return
                 }
@@ -1338,7 +1269,7 @@ struct ContentView: View {
                     fireBurstFrame()
                 }
             } else {
-                isBurstHolding = false
+                captureChrome.setBurstHolding(false)
                 if burstCaptured == 0 {
                     showStatusToast("Capture failed")
                 } else if burstCaptured > 1 {
@@ -1383,10 +1314,8 @@ struct ContentView: View {
             exposureValue = 0
             shutterSpeedIndex = 9
             isoValue = 400
-            nightAssistVisible = false
-            nightAssistDarkStreak = 0
-            sceneAssistPick = nil
-            nightAssistDismissedUntil = nil
+            sceneAssist.clear()
+            sceneAssist.dismissedUntil = nil
             camera.returnToAuto()
             // Toast when entering Auto from a preset — not on every A-chip tap.
             if previous != "auto", previous != ShootMode.auto.rawValue {
@@ -2084,10 +2013,9 @@ struct ContentView: View {
             Spacer(minLength: 8)
 
             ShutterButton(
-                isBusy: isCapturing && !isBurstHolding && !burstConsumedTap,
                 timerCountdown: timerCountdown,
                 compact: compact,
-                burstCount: isBurstHolding ? max(burstCaptured, 1) : 0,
+                stayEnabledForBurstTap: burstConsumedTap,
                 onBurstStart: holdBurstEnabled ? { beginBurstHold() } : nil,
                 onBurstEnd: holdBurstEnabled ? { endBurstHold() } : nil
             ) {
@@ -2177,9 +2105,10 @@ struct ContentView: View {
             // ROW 3: Flash | Format (true center above shutter) | Settings/Macro/Timer
             ZStack {
                 HStack(alignment: .center, spacing: 0) {
-                    FlashButtonPill(flashMode: camera.flashMode) {
+                    FlashButtonPill(flashMode: flashMode) {
                         Haptics.click()
                         camera.cycleFlash()
+                        flashMode = camera.flashMode
                     }
                     .frame(width: 84, alignment: .leading)
 
@@ -2239,9 +2168,8 @@ struct ContentView: View {
                 Spacer(minLength: 8)
 
                 ShutterButton(
-                    isBusy: isCapturing && !isBurstHolding && !burstConsumedTap,
                     timerCountdown: timerCountdown,
-                    burstCount: isBurstHolding ? max(burstCaptured, 1) : 0,
+                    stayEnabledForBurstTap: burstConsumedTap,
                     onBurstStart: holdBurstEnabled ? { beginBurstHold() } : nil,
                     onBurstEnd: holdBurstEnabled ? { endBurstHold() } : nil
                 ) {
@@ -2281,7 +2209,7 @@ struct ContentView: View {
             Haptics.click()
             expectingLECancel = true
             camera.cancelLongExposure()
-            isCapturing = false
+            captureChrome.setCapturing(false)
             showStatusToast("Long exposure cancelled")
             return
         }
@@ -2348,7 +2276,7 @@ struct ContentView: View {
     }
 
     private func captureNow() {
-        isCapturing = true
+        captureChrome.setCapturing(true)
         Haptics.heavy()
         // Prefer looks frozen at timer arm; otherwise live viewfinder state.
         let shutterFilm = cameraFilmFilter(from: frozenFilmFilter ?? filmFilter)
@@ -2381,14 +2309,14 @@ struct ContentView: View {
 
         if isLongExposure, let duration = duration {
 
-            isCapturing = true
+            captureChrome.setCapturing(true)
             camera.captureLongExposure(
                 durationSeconds: duration,
                 filmFilter: shutterFilm,
                 lensFX: shutterFX,
                 morphTouch: morphTouch
             ) { img in
-                isCapturing = false
+                captureChrome.setCapturing(false)
                 if let img = img {
                     expectingLECancel = false
                     finishCapturedImage(img)
@@ -2401,15 +2329,14 @@ struct ContentView: View {
             }
         } else {
             // Normal capture with flash wash (opacity eases via ShutterMotion.flash)
-            isCapturing = true
-            showFlash = true
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) { showFlash = false }
+            captureChrome.setCapturing(true)
+            captureChrome.flash()
             camera.capturePhoto(
                 filmFilter: shutterFilm,
                 lensFX: shutterFX,
                 morphTouch: morphTouch
             ) { img in
-                isCapturing = false
+                captureChrome.setCapturing(false)
                 if let img = img {
                     finishCapturedImage(img)
                 } else {
@@ -2530,21 +2457,46 @@ private struct SceneAssistProbe: View {
     }
 }
 
+// MARK: - Capture flash / curtain (leaf — keeps wash off Metal-owning @State)
+private struct CaptureFlashWashHost: View {
+    @ObservedObject private var bus = CaptureChromeBus.shared
+
+    var body: some View {
+        Color.white
+            .ignoresSafeArea()
+            .opacity(bus.showFlash ? 0.28 : 0)
+            .allowsHitTesting(false)
+            .animation(ShutterMotion.flash, value: bus.showFlash)
+    }
+}
+
+private struct CaptureCurtainHost: View {
+    @ObservedObject private var bus = CaptureChromeBus.shared
+
+    var body: some View {
+        Color.black
+            .ignoresSafeArea()
+            .opacity(bus.showCurtain ? 0.78 : 0)
+            .allowsHitTesting(false)
+            .animation(.easeOut(duration: 0.05), value: bus.showCurtain)
+    }
+}
+
 // MARK: - Finder status overlays (toast / Night assist / permission)
 /// Pulled out of ContentView so the archive type-checker can finish.
 /// Hit-testing rule: never enable a full-bleed wrapper (that ate the shutter
 /// with the old Street chip). Only the Night capsule itself is tappable.
 struct FinderStatusOverlays: View {
     let safeTop: CGFloat
-    let nightAssistVisible: Bool
-    /// Condition rationale on the soft SCENE tip (DARK / BRIGHT / DAY).
-    var sceneAssistLead: String = "LOW LIGHT"
-    var sceneAssistAction: String = "TAP FOR NIGHT"
     let cameraError: String?
     let onApplyNight: () -> Void
     let onDismissNight: () -> Void
 
     @ObservedObject private var toastBus = ToastBus.shared
+    @ObservedObject private var sceneAssist = SceneAssistBus.shared
+
+    private var sceneAssistLead: String { sceneAssist.pick?.chipLead ?? "AUTO" }
+    private var sceneAssistAction: String { sceneAssist.pick?.chipAction ?? "TAP FOR NIGHT" }
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -2563,7 +2515,7 @@ struct FinderStatusOverlays: View {
                     .animation(ShutterMotion.chrome, value: toastBus.message)
             }
 
-            if nightAssistVisible {
+            if sceneAssist.visible {
                 // Chip is naturally sized — ZStack(alignment:.top) centers it horizontally.
                 // No frame(maxWidth:.infinity) so the transparent space never eats shutter taps.
                 HStack(spacing: 10) {
@@ -2593,6 +2545,8 @@ struct FinderStatusOverlays: View {
                 .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.6))
                 .padding(.top, safeTop + (toastBus.message == nil ? 8 : 44))
                 .transition(.opacity.combined(with: .move(edge: .top)))
+                .animation(ShutterMotion.chrome, value: sceneAssist.visible)
+                .animation(ShutterMotion.chrome, value: sceneAssist.pick)
                 .zIndex(51)
             }
 
@@ -2629,6 +2583,9 @@ private struct ContentViewLifecycle: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onChange(of: camera.isSessionRunning) { _, running in
+                if running {
+                    apertureValue = camera.lensAperture
+                }
                 guard running, pendingCaptureWhenReady else { return }
                 pendingCaptureWhenReady = false
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: onCapture)
@@ -2639,8 +2596,8 @@ private struct ContentViewLifecycle: ViewModifier {
             .onChange(of: zebraEnabled) { _, on in
                 camera.zebraEnabled = on
             }
-            .onChange(of: camera.lensAperture) { _, value in
-                apertureValue = value
+            .onChange(of: camera.currentCamera) { _, _ in
+                apertureValue = camera.lensAperture
             }
             .onChange(of: naturalCapture) { _, on in
                 camera.naturalCaptureEnabled = on
@@ -2655,9 +2612,6 @@ private struct ContentViewLifecycle: ViewModifier {
             }
             .onChange(of: camera.maxISO) { _, maxISO in
                 onClampISO(maxISO)
-            }
-            .onChange(of: camera.isAEAFLocked) { _, locked in
-                isLocked = locked
             }
             .onChange(of: filmFilter) { _, newFilter in
                 var t = Transaction()
@@ -3643,26 +3597,28 @@ struct Triangle: Shape {
 /// stitchable Metal params (EXC_BAD_ACCESS / MetadataCache on press & capture).
 /// Press travel, busy rings, and timer digits are SwiftUI-only overlays.
 struct ShutterButton: View {
-    /// True while a still / LE bake owns the pipeline (disables the button).
-    var isBusy: Bool = false
     /// Countdown seconds remaining; >0 keeps the button enabled for cancel.
     var timerCountdown: Int = 0
     /// Keep shutter enabled so the user can abort LE.
     var allowCancelWhileBusy: Bool = false
     /// Landscape / short deck — slightly smaller chrome.
     var compact: Bool = false
-    /// Frames captured in the current hold-burst (0 = not bursting).
-    var burstCount: Int = 0
     /// Hold past threshold → burst (optional).
     var onBurstStart: (() -> Void)? = nil
     var onBurstEnd: (() -> Void)? = nil
+    /// Parent still swallowing the Button tap after a hold-burst (Build 65/110).
+    var stayEnabledForBurstTap: Bool = false
     let action: () -> Void
 
     @GestureState private var burstPressing = false
     /// LE ring progress — leaf bus so ContentView doesn't rebuild at 12Hz (Build 108).
     @ObservedObject private var leBus = LongExposureProgressBus.shared
+    /// Capture busy / burst count — leaf bus (Build 110).
+    @ObservedObject private var captureChrome = CaptureChromeBus.shared
 
     private var isTimerArmed: Bool { timerCountdown > 0 }
+    private var isBusy: Bool { captureChrome.shutterBusy && !stayEnabledForBurstTap }
+    private var burstCount: Int { captureChrome.burstCount }
     private var canCancel: Bool { isTimerArmed || leBus.isCapturing || allowCancelWhileBusy }
     private var longExposureProgress: Float? {
         leBus.isCapturing || allowCancelWhileBusy ? leBus.progress : nil

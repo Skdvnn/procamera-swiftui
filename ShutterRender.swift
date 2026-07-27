@@ -1,6 +1,7 @@
 import Combine
 import CoreImage
 import Metal
+import SwiftUI
 
 /// Shared GPU resources. Preview/bake share a Metal CIContext but ALL access
 /// goes through `ciQueue` so concurrent render/createCGImage cannot race.
@@ -138,5 +139,152 @@ final class ToastBus: ObservableObject {
         clearWork?.cancel()
         clearWork = nil
         message = nil
+    }
+}
+
+/// Capture / burst / flash chrome — leaf observers only (Build 110).
+/// `isCapturing` used to be ContentView `@State` and rebuilt Metal every still.
+final class CaptureChromeBus: ObservableObject {
+    static let shared = CaptureChromeBus()
+
+    /// Pipeline ownership — plain fields so ContentView can read without observing.
+    private(set) var isCapturing = false
+    private(set) var isBurstHolding = false
+    private(set) var burstCaptured = 0
+
+    /// Shutter button busy ring (not busy while hold-burst is firing).
+    @Published private(set) var shutterBusy = false
+    @Published private(set) var burstCount = 0
+    @Published private(set) var showFlash = false
+    @Published private(set) var showCurtain = false
+
+    func setCapturing(_ value: Bool) {
+        isCapturing = value
+        refreshShutterBusy()
+    }
+
+    func setBurstHolding(_ value: Bool) {
+        isBurstHolding = value
+        // Keep burstCaptured until the next begin so end handlers can toast the total.
+        publishBurstCount()
+        refreshShutterBusy()
+    }
+
+    func setBurstCaptured(_ value: Int) {
+        burstCaptured = value
+        publishBurstCount()
+    }
+
+    func bumpBurstCaptured() {
+        burstCaptured += 1
+        publishBurstCount()
+    }
+
+    func flash(duration: TimeInterval = 0.09) {
+        showFlash = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+            self?.showFlash = false
+        }
+    }
+
+    func curtain(duration: TimeInterval = 0.05) {
+        showCurtain = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration) { [weak self] in
+            self?.showCurtain = false
+        }
+    }
+
+    private func refreshShutterBusy() {
+        // Match prior ContentView: busy unless hold-burst owns the shutter.
+        let next = isCapturing && !isBurstHolding
+        if shutterBusy != next { shutterBusy = next }
+    }
+
+    private func publishBurstCount() {
+        let next = isBurstHolding ? max(burstCaptured, 1) : 0
+        if burstCount != next { burstCount = next }
+    }
+}
+
+/// Soft SCENE Auto tip — leaf chrome only (Build 110).
+final class SceneAssistBus: ObservableObject {
+    static let shared = SceneAssistBus()
+
+    @Published private(set) var visible = false
+    @Published private(set) var pick: AutoScenePick?
+    private(set) var darkStreak = 0
+    var dismissedUntil: Date?
+
+    func hideChip() {
+        if visible { visible = false }
+    }
+
+    func clear() {
+        guard visible || pick != nil || darkStreak != 0 else { return }
+        visible = false
+        darkStreak = 0
+        pick = nil
+    }
+
+    func applyDismiss(for seconds: TimeInterval) {
+        visible = false
+        pick = nil
+        darkStreak = 0
+        dismissedUntil = Date().addingTimeInterval(seconds)
+    }
+
+    /// Soft suggest from AE + hist. Returns toast string when chip applied externally.
+    func evaluate(
+        enabled: Bool,
+        capturing: Bool,
+        bursting: Bool,
+        longExposure: Bool,
+        manualExposure: Bool,
+        armedAuto: Bool
+    ) {
+        guard enabled else {
+            clear()
+            return
+        }
+        if capturing || bursting || longExposure {
+            hideChip()
+            return
+        }
+        guard !manualExposure else {
+            clear()
+            return
+        }
+        guard armedAuto else {
+            clear()
+            return
+        }
+        if let until = dismissedUntil, Date() < until {
+            hideChip()
+            return
+        }
+        let next = AutoSceneAdvisor.pick(
+            iso: LiveExposureBus.shared.iso,
+            shutterLabel: LiveExposureBus.shared.shutterLabel,
+            histogram: HistogramBus.shared.bins
+        )
+        guard let next else {
+            if pick != nil || visible || darkStreak != 0 {
+                darkStreak = 0
+                pick = nil
+                hideChip()
+            }
+            return
+        }
+        if pick == next {
+            if visible || darkStreak >= 3 { return }
+            darkStreak += 1
+        } else {
+            pick = next
+            darkStreak = 1
+            hideChip()
+        }
+        if darkStreak >= 3, !visible {
+            visible = true
+        }
     }
 }

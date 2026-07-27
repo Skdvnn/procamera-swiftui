@@ -104,7 +104,7 @@ final class LookRecipeStore: ObservableObject {
 /// Steals volume-button presses for shutter (system HUD suppressed via offscreen MPVolumeView).
 /// Also listens for connected game-controller / HID remotes that expose a digital shutter button.
 @MainActor
-final class VolumeShutterObserver: NSObject, ObservableObject {
+final class VolumeShutterObserver: NSObject {
     var onShutter: (() -> Void)?
 
     private var observation: NSKeyValueObservation?

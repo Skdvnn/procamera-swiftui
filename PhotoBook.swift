@@ -45,6 +45,11 @@ final class GalleryStoreOwner: ObservableObject {
     let store = GalleryStore()
 }
 
+/// Holds VolumeShutterObserver without ObservableObject thrash (Build 110).
+final class VolumeShutterOwner {
+    let observer = VolumeShutterObserver()
+}
+
 final class GalleryStore: ObservableObject {
     @Published private(set) var shots: [ShotMetadata] = []
     @Published private(set) var books: [Book] = []
