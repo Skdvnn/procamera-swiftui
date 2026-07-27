@@ -553,6 +553,37 @@ def test_source_guards() -> None:
         "captureDevicePointConverted" in preview
         and "devicePoint:" in content,
     )
+    # Build 114 — tap-to-focus must work while AE/AF was locked; clear manual.
+    check(
+        "tap focus unlocks AEAF",
+        "Tap always retargets AF" in content
+        and "camera.setAEAFLocked(false)" in content[content.find("func handleFocusTap"):content.find("func handleFocusTap")+900],
+    )
+    check(
+        "setFocus clears manual flag",
+        "if self.isManualFocus { self.isManualFocus = false }" in cam
+        and "isSubjectAreaChangeMonitoringEnabled" in cam[cam.find("func setFocus(at"):cam.find("func setManualFocus")],
+    )
+    check(
+        "exposure pan slop for taps",
+        "abs(translation.y) > 14" in preview
+        and "panMode == .undecided" in preview[preview.find("func handleTap"):preview.find("func handleTap")+400],
+    )
+    check(
+        "scrub edge generation close",
+        "scrubEdgeGeneration" in content
+        and "beginScrubEdgeClose" in content
+        and "forceCloseScrubEdge" in content,
+    )
+    check(
+        "scrubber disappear closes edge",
+        "Scrubber teardown used to skip onActiveChanged(false)" in content
+        and "onActiveChanged?(false)" in content[content.find("Scrubber teardown used to skip"):content.find("Scrubber teardown used to skip")+400],
+    )
+    check(
+        "deck collapse closes scrub edge",
+        "forceCloseScrubEdge()" in content[content.find("onChange(of: bottomCollapsed)"):content.find("onChange(of: bottomCollapsed)")+350],
+    )
     check(
         "STACK LE upright",
         "longExposureInterfaceOrientation" in cam
