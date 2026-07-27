@@ -374,7 +374,7 @@ def test_source_guards() -> None:
 
     # Build 51 — deep device-breaker guards (not just "string exists")
     overlays = source_chunk(content, "struct FinderStatusOverlays", "struct ContentViewLifecycle")
-    night = source_chunk(overlays, "if nightAssistVisible", "if let cameraError")
+    night = source_chunk(overlays, "if sceneAssist.visible", "if let cameraError")
     check("Night chip has no maxHeight infinity hit sink", "maxHeight: .infinity" not in night)
     check("Night chip not full-bleed width frame", ".frame(maxWidth: .infinity" not in night)
     check("Night chip dismiss is 44pt", "minWidth: 44, minHeight: 44" in night)
@@ -383,7 +383,7 @@ def test_source_guards() -> None:
     check("burst reschedules when busy", "Pipeline still owned — reschedule" in content)
     check("burst retries serialize reject", "Serialize reject / bake busy" in content)
     check("handleCapture ignores volume during burst", "if isBurstHolding { return }" in content)
-    check("Night assist hidden while capturing", "Never prompt / keep chip up while a capture" in content)
+    check("Night assist hidden while capturing", "capturing || bursting || longExposure" in (ROOT / "ShutterRender.swift").read_text())
     check("Night apply gated on idle", "func applyNightAssistFromChip" in content and "guard !isCapturing, !isBurstHolding" in content)
     check("Field Book open via appear flag", "openFieldBooksOnAppear" in content and "pendingOpenFieldBook" in content)
     check("Field Book not only 0.35 notification", "pendingOpenFieldBook = true" in content)
@@ -422,7 +422,7 @@ def test_source_guards() -> None:
     check("hist materialize skips Metal syncCI", "histogramContext.createCGImage" in cam)
     check("hist materialize comment", "never stalls live FX createCGImage" in cam)
     check("scene assist no hist onReceive", "do NOT observe HistogramBus here" in content)
-    check("scene assist no-op when chip up", "Chip already up (or streak saturated)" in content)
+    check("scene assist no-op when chip up", "if visible || darkStreak >= 3 { return }" in (ROOT / "ShutterRender.swift").read_text())
     check("settings suspends live preview", "Park live film/FX Metal while Settings" in content)
     check("EV drag throttled device writes", "~30Hz device writes" in content)
     check("EV drag hide only on end", "Hide timer only on drag end" in content)
@@ -453,6 +453,21 @@ def test_source_guards() -> None:
     check("wash check Instant/FX only", "shouldWashCheckPreview" in cam)
     check("peaking-only preview 6fps", "Peaking/zebra alone" in cam)
     check("scrub edge skip no-op value", "Skip no-op value writes" in content)
+    # Build 110 — capture chrome / scene tip / demotes
+    check("capture chrome bus", "final class CaptureChromeBus" in render)
+    check("scene assist bus", "final class SceneAssistBus" in render)
+    check("flash wash leaf host", "struct CaptureFlashWashHost" in content)
+    check("curtain leaf host", "struct CaptureCurtainHost" in content)
+    check("overlays observe SceneAssistBus", "@ObservedObject private var sceneAssist = SceneAssistBus.shared" in content)
+    check("shutter observes CaptureChromeBus", "@ObservedObject private var captureChrome = CaptureChromeBus.shared" in content)
+    check("film filter not Published", "@Published var selectedFilmFilter" not in cam)
+    check("lens FX not Published", "@Published var selectedLensFX" not in cam)
+    check("flash mode not Published", "@Published var flashMode" not in cam)
+    check("session is let", "let session = AVCaptureSession()" in cam)
+    check("manual focus not Published", "@Published var isManualFocus" not in cam)
+    check("AEAF lock not Published", "@Published var isAEAFLocked" not in cam)
+    check("volume shutter non-observing", "final class VolumeShutterOwner" in (ROOT / "PhotoBook.swift").read_text())
+    check("volume shutter not ObservableObject", "class VolumeShutterObserver: NSObject, ObservableObject" not in (ROOT / "LookRecipes.swift").read_text())
     check(
         "prefer 30fps preview format",
         "maxFps >= 29" in cam and "activeVideoMinFrameDuration = thirty" in cam,
@@ -465,7 +480,7 @@ def test_source_guards() -> None:
     check("Metal preview freezes animation", ".transaction { $0.animation = nil }" in content)
     check("no picker entrance over Metal", "struct PickerEntrance" not in (ROOT / "ViewfinderOverlay.swift").read_text())
     check("deck uses ShutterMotion", "withAnimation(ShutterMotion.deck)" in content)
-    check("flash opacity wash", "opacity(showFlash ? 0.28 : 0)" in content)
+    check("flash opacity wash", "opacity(bus.showFlash ? 0.28 : 0)" in content)
     check("scrub no bounce spring", "withAnimation(ShutterMotion.scrub)" in content)
     check("no Street chip overlay", "cycleShootMode" not in content)
     check("scenes in film dock", "sectionLabel(\"SCENE\")" in (ROOT / "ViewfinderOverlay.swift").read_text())
@@ -604,10 +619,10 @@ def test_source_guards() -> None:
     check("STACK accumulate autoreleasepool", "autoreleasepool" in cam[cam.find("accumulationFrame"):cam.find("accumulationFrame")+500] or "autoreleasepool" in cam)
     check("clearStickyTouch API", "func clearStickyTouch" in (ROOT / "LensFXEngine.swift").read_text())
     # Scope to the chip's view, not the visibility state machine that shares
-    # the `if nightAssistVisible` spelling higher up the file.
+    # the `if sceneAssist.visible` spelling higher up the file.
     night_chip = source_chunk(
         source_chunk(content, "struct FinderStatusOverlays", "struct ContentViewLifecycle"),
-        "if nightAssistVisible",
+        "if sceneAssist.visible",
         "if let cameraError",
     )
     check("Night chip not full-width hit", ".frame(maxWidth: .infinity" not in night_chip)
@@ -762,7 +777,7 @@ def test_source_guards() -> None:
     check("applyExclusiveLook helper", "func applyExclusiveLook" in content)
     check("settings saved looks", "Saved looks" in (ROOT / "ShutterSettings.swift").read_text())
     check("burst default off", 'holdBurstEnabled = false' in content)
-    check("shutter curtain state", "showShutterCurtain" in content)
+    check("shutter curtain state", "showCurtain" in render and "CaptureCurtainHost" in content)
     check("no cyan burstAccent", "0.55, green: 0.82, blue: 1.0" not in content)
     check(
         "compact scrubbers no outer box",

@@ -8,14 +8,15 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 109 phone test pack (toast / gallery / LE / wash):**
+**Build 110 phone test pack (capture chrome / scene tip / demotes):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **109**.
-Verified: toasts on ToastBus (no Metal rebuild); gallery owned without observing;
-`isLongExposureCapturing` demoted; peaking/zebra demoted; Instant/wash FX only
-pay area-average; peaking-only preview at 6fps; scrub edge value no-ops skipped.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **110**.
+Verified: capture/burst/flash on CaptureChromeBus; SCENE tip on SceneAssistBus;
+film/FX/flash/session/manual-focus demoted; volume shutter non-observing.
+
+Build 109: toast / gallery / LE / wash.
 
 Build 108: LE bus + dial publish thrash.
 

@@ -7,13 +7,15 @@ import CoreImage.CIFilterBuiltins
 import Combine
 
 class CameraManager: NSObject, ObservableObject {
-    @Published var session = AVCaptureSession()
+    /// Not @Published — session identity never changes after init (Build 110).
+    let session = AVCaptureSession()
     @Published var isSessionRunning = false
     @Published var error: CameraError?
 
     // Camera properties
     @Published var currentCamera: AVCaptureDevice.Position = .back
-    @Published var flashMode: AVCaptureDevice.FlashMode = .off
+    /// Not @Published — ContentView owns flash pill via @State (Build 110).
+    var flashMode: AVCaptureDevice.FlashMode = .off
     /// Not @Published — ContentView owns EV UI via @State (Build 106).
     var exposureValue: Float = 0.0
     /// Not @Published — ContentView owns ISO dial via @State (Build 108).
@@ -22,21 +24,23 @@ class CameraManager: NSObject, ObservableObject {
     var shutterSpeed: CMTime = CMTime(value: 1, timescale: 125)
     /// Not @Published — reticle uses ContentView @State focus point.
     var focusPoint: CGPoint = CGPoint(x: 0.5, y: 0.5)
-    @Published var isManualFocus: Bool = false
+    /// Not @Published — ContentView owns `isManualFocusEnabled` (Build 110).
+    var isManualFocus: Bool = false
     /// Not @Published — ContentView owns focus scrubber via @State.
     var lensPosition: Float = 0.5
-    @Published var whiteBalance: AVCaptureDevice.WhiteBalanceGains?
     /// Not @Published — ContentView owns zoom via @State; pinch was thrashing Metal.
     var zoomFactor: CGFloat = 1.0
     @Published var isManualExposure: Bool = false
-    @Published var isAEAFLocked: Bool = false
+    /// Not @Published — ContentView owns `isLocked` (Build 110).
+    var isAEAFLocked: Bool = false
     /// Live sensor ISO while AUTO (0 when unknown / manual owns the dial).
     /// Mirrored to `LiveExposureBus` so ContentView does not rebuild every probe.
     var liveISO: Float = 0
     /// Live shutter readout while AUTO (e.g. "1/125").
     var liveShutterLabel: String = "AUTO"
     /// Hardware lens aperture (read-only; phones don't stop down).
-    @Published var lensAperture: Float = 0
+    /// Not @Published — copied into ContentView on lens/session changes (Build 110).
+    var lensAperture: Float = 0
     /// Not @Published — ContentView owns peaking via @AppStorage; pipeline syncs in didSet.
     var focusPeakingEnabled: Bool = false {
         didSet {
@@ -53,14 +57,18 @@ class CameraManager: NSObject, ObservableObject {
             refreshLivePreviewState()
         }
     }
-    @Published var selectedFilmFilter: FilmFilter = .none {
+    /// Not @Published — ContentView owns filmFilter @State; pipeline syncs in didSet (Build 110).
+    var selectedFilmFilter: FilmFilter = .none {
         didSet {
+            guard oldValue != selectedFilmFilter else { return }
             syncPipelineSelection()
             refreshLivePreviewState()
         }
     }
-    @Published var selectedLensFX: LensFXMode = .none {
+    /// Not @Published — ContentView owns lensFX @State (Build 110).
+    var selectedLensFX: LensFXMode = .none {
         didSet {
+            guard oldValue != selectedLensFX else { return }
             syncPipelineSelection()
             refreshLivePreviewState()
         }
