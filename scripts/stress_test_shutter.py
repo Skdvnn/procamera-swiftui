@@ -553,6 +553,11 @@ def test_source_guards() -> None:
         "captureDevicePointConverted" in preview
         and "devicePoint:" in content,
     )
+    # Build 115 — CameraManager must stay free of illegal control bytes (Xcode
+    # "Invalid character in source file").
+    cam_bytes = (ROOT / "CameraManager.swift").read_bytes()
+    illegal = [b for b in cam_bytes if b < 0x20 and b not in (0x09, 0x0A, 0x0D)]
+    check("CameraManager no illegal control bytes", not illegal, f"{len(illegal)} found")
     # Build 114 — tap-to-focus must work while AE/AF was locked; clear manual.
     check(
         "tap focus unlocks AEAF",
