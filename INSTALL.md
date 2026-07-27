@@ -8,13 +8,15 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 103 phone test pack (arch yellow = active only):**
+**Build 104 phone test pack (FX stuck / washout guards):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **103**.
-Verified: peel-arch rail/end caps stay steel; yellow only on live value,
-focused tick, and needle pip (same contract as bottom scrubbers / level).
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **104**.
+Verified: Dream/Liquid/Instant/Mirror can no longer stick the finder on
+cream-grain or white wash; washed frames fall back to live AV; grain is tiled.
+
+Build 103: arch dial yellow only on active value + tick.
 
 Build 102: widget shared 14pt pad + fun photo previews.
 
