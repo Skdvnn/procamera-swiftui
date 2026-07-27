@@ -8,16 +8,16 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 115 phone test pack (CameraManager compile fix):**
+**Build 116 phone test pack (GalleryStore MainActor):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **115**.
-Verified: stripped five illegal SOH control bytes from CameraManager.swift
-that caused "Invalid character in source file" on device builds.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **116**.
+Verified: GalleryStoreOwner / VolumeShutterOwner are @MainActor so Xcode
+no longer errors on main-actor-isolated init in a nonisolated context.
 
+Build 115: CameraManager control-byte compile fix.
 Build 114: focus + scrub close.
-Build 113: suppress deck swipe during scrub.
 Build 112: straight scrub rail.
 Build 111: darkroom page-turn + finder thrash.
 
