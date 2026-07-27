@@ -441,39 +441,40 @@ final class HorizonMotion: ObservableObject {
     }
 }
 
-// MARK: - Curved edge readout (collapse + fullscreen scrub vibe)
+// MARK: - Edge readout (straight rail between FX + histogram)
 
-/// Trailing-edge peel used for collapse ƒ theater and fullscreen FOCUS/EV scrub.
+/// Trailing-edge readout used for collapse ƒ theater and fullscreen FOCUS/EV scrub.
+/// Build 112 drops the oversized arch for a slimmer straight rail.
 struct CurvedParamEdgeReadout: View {
     let title: String
     let value: String
     var subtitle: String = ""
     /// 0…1 peel intensity.
     let progress: CGFloat
-    /// 0…1 dial needle along the arch (top → bottom). Snaps to half-stop ticks.
+    /// 0…1 dial needle along the rail (top → bottom). Snaps to half-stop ticks.
     var needle: CGFloat = 0.5
     /// Serif value (ƒ) vs mono LCD (ISO / S / EV / FOCUS).
     var serifValue: Bool = false
 
     private let accent = Color(red: 1.0, green: 0.85, blue: 0.35)
-    /// Arc column width — must clear the max bulge + tick stems.
-    private let arcColumn: CGFloat = 48
-    /// Air between the value's trailing edge and the innermost tick tip.
-    private let valueClearance: CGFloat = 14
+    /// Slimmer rail column — starts below FX buttons, ends above histogram.
+    private let railColumn: CGFloat = 34
+    /// Air between the value's trailing edge and the rail ticks.
+    private let valueClearance: CGFloat = 12
 
     var body: some View {
         GeometryReader { geo in
             let h = geo.size.height
             let w = geo.size.width
-            let inset = 8 + (1 - progress) * 26
-            // Numbers sit entirely left of the arc column — never on the stroke.
-            let valueTrailing = inset + arcColumn + valueClearance
-            // Keep the LCD stacked near the moving needle so the dial feels linked.
-            let valueY = (needle - 0.5) * (h * 0.55)
+            let inset = 10 + (1 - progress) * 14
+            // Numbers sit entirely left of the rail column — never on the stroke.
+            let valueTrailing = inset + railColumn + valueClearance
+            // Keep the LCD stacked near the moving needle so the readout feels linked.
+            let valueY = (needle - 0.5) * (h * 0.64)
 
             ZStack(alignment: .trailing) {
-                EdgeParamArcDetail(progress: progress, needle: needle, accent: accent)
-                    .frame(width: arcColumn)
+                EdgeParamRailDetail(progress: progress, needle: needle, accent: accent)
+                    .frame(width: railColumn)
                     .padding(.trailing, inset)
                     .opacity(Double(min(1, progress * 1.4)))
 
@@ -530,84 +531,37 @@ struct CurvedFStopEdgeReadout: View {
     }
 }
 
-struct EdgeParamCurve: Shape {
-    var progress: CGFloat
-
-    var animatableData: CGFloat {
-        get { progress }
-        set { progress = newValue }
-    }
-
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        let geom = EdgeParamArcGeometry(rect: rect, progress: progress)
-        path.move(to: geom.top)
-        path.addCurve(
-            to: geom.bottom,
-            control1: geom.control1,
-            control2: geom.control2
-        )
-        return path
-    }
-}
-
-/// Shared geometry for the peel arc — curve, ticks, and end caps all sample it.
-private struct EdgeParamArcGeometry {
+/// Shared geometry for the rail — guide, ticks, and end caps all sample it.
+private struct EdgeParamRailGeometry {
     let top: CGPoint
     let bottom: CGPoint
-    let control1: CGPoint
-    let control2: CGPoint
-    let xRight: CGFloat
-    let bulge: CGFloat
-    let midY: CGFloat
+    let xRail: CGFloat
 
     init(rect: CGRect, progress: CGFloat) {
-        let topY = rect.minY + 20
-        let bottomY = rect.maxY - 20
-        midY = rect.midY
-        xRight = rect.maxX - 4
-        bulge = 12 + progress * 20
-        top = CGPoint(x: xRight, y: topY)
-        bottom = CGPoint(x: xRight, y: bottomY)
-        control1 = CGPoint(x: xRight - bulge, y: midY - 44)
-        control2 = CGPoint(x: xRight - bulge, y: midY + 44)
+        let topY = rect.minY + 12 + (1 - progress) * 10
+        let bottomY = rect.maxY - 12 - (1 - progress) * 10
+        xRail = rect.maxX - 6
+        top = CGPoint(x: xRail, y: topY)
+        bottom = CGPoint(x: xRail, y: bottomY)
     }
 
-    /// Point on the cubic at t ∈ 0…1.
+    /// Point on the vertical rail at t ∈ 0…1.
     func point(at t: CGFloat) -> CGPoint {
-        let u = 1 - t
-        let x = u * u * u * top.x
-            + 3 * u * u * t * control1.x
-            + 3 * u * t * t * control2.x
-            + t * t * t * bottom.x
-        let y = u * u * u * top.y
-            + 3 * u * u * t * control1.y
-            + 3 * u * t * t * control2.y
-            + t * t * t * bottom.y
-        return CGPoint(x: x, y: y)
+        CGPoint(x: xRail, y: top.y + (bottom.y - top.y) * t)
     }
 
     /// Unit tangent at t, used to aim tick stems inward (toward the numbers).
     func tangent(at t: CGFloat) -> CGPoint {
-        let u = 1 - t
-        // dB/dt of the cubic
-        let dx = 3 * u * u * (control1.x - top.x)
-            + 6 * u * t * (control2.x - control1.x)
-            + 3 * t * t * (bottom.x - control2.x)
-        let dy = 3 * u * u * (control1.y - top.y)
-            + 6 * u * t * (control2.y - control1.y)
-            + 3 * t * t * (bottom.y - control2.y)
-        let len = max(0.001, hypot(dx, dy))
-        return CGPoint(x: dx / len, y: dy / len)
+        _ = t
+        return CGPoint(x: 0, y: 1)
     }
 }
 
-/// Single-rail peel arc with half-stop ticks + traveling needle (Build 94/103).
-/// Yellow is reserved for the focused tick + needle — the rail stays steel
-/// (same contract as bottom scrubbers / level: never paint the whole dial amber).
-struct EdgeParamArcDetail: View {
+/// Single-rail detail with half-stop ticks + traveling needle (Build 112).
+/// Yellow is reserved for the focused tick + needle — the rail stays steel.
+struct EdgeParamRailDetail: View {
     let progress: CGFloat
-    /// 0…1 along the cubic (top → bottom). Snapped to the nearest tick.
+    /// 0…1 along the rail (top → bottom). Snapped to the nearest tick.
     var needle: CGFloat = 0.5
     let accent: Color
 
@@ -617,43 +571,40 @@ struct EdgeParamArcDetail: View {
     var body: some View {
         Canvas { ctx, size in
             let rect = CGRect(origin: .zero, size: size)
-            let geom = EdgeParamArcGeometry(rect: rect, progress: progress)
+            let geom = EdgeParamRailGeometry(rect: rect, progress: progress)
             let p = max(0, min(1, progress))
             let last = CGFloat(tickCount - 1)
             let needleT = (needle * last).rounded() / last
             let needleTClamped = max(0, min(1, needleT))
 
-            var curve = Path()
-            curve.move(to: geom.top)
-            curve.addCurve(to: geom.bottom, control1: geom.control1, control2: geom.control2)
+            var rail = Path()
+            rail.move(to: geom.top)
+            rail.addLine(to: geom.bottom)
 
-            // Soft under-glow only — muted steel, not yellow (Build 103).
+            // Soft under-glow only — muted steel, not yellow.
             ctx.stroke(
-                curve,
+                rail,
                 with: .color(Color.white.opacity(0.04 + 0.08 * p)),
-                style: StrokeStyle(lineWidth: 4.5 + p * 1.5, lineCap: .round)
+                style: StrokeStyle(lineWidth: 4.0 + p * 1.2, lineCap: .round)
             )
             // One steel rail — the dial track (not accent).
             ctx.stroke(
-                curve,
+                rail,
                 with: .color(Color.white.opacity(0.28 + 0.32 * p)),
-                style: StrokeStyle(lineWidth: 1.55 + p * 0.45, lineCap: .round)
+                style: StrokeStyle(lineWidth: 1.45 + p * 0.4, lineCap: .round)
             )
 
-            // Half-stop ticks — stems aim left (inward), like a cut dial face.
+            // Half-stop ticks — stems aim left (inward), like a cut meter rail.
             // Yellow only on the focused tick under the needle.
             for i in 0..<tickCount {
                 let t = CGFloat(i) / last
                 let pt = geom.point(at: t)
-                let tan = geom.tangent(at: t)
-                let nx = tan.y
-                let ny = -tan.x
                 let major = i % 2 == 0
                 let atNeedle = abs(t - needleTClamped) < 0.001
-                let stem: CGFloat = atNeedle ? 11 : (major ? 7.5 : 4.0)
+                let stem: CGFloat = atNeedle ? 10 : (major ? 7.0 : 4.0)
                 var tick = Path()
                 tick.move(to: pt)
-                tick.addLine(to: CGPoint(x: pt.x + nx * stem, y: pt.y + ny * stem))
+                tick.addLine(to: CGPoint(x: pt.x - stem, y: pt.y))
                 let tickColor: Color = atNeedle
                     ? accent.opacity(0.85 + 0.15 * p)
                     : Color.white.opacity((major ? 0.42 : 0.20) + 0.18 * p)

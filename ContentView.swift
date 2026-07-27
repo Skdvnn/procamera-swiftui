@@ -1842,7 +1842,7 @@ struct ContentView: View {
                 }
                 .animation(ShutterMotion.press, value: showingCleanCompare)
 
-                // Trailing-edge peel: collapse ƒ theater, or active scrub vibe (Build 71).
+                // Trailing-edge readout: straight rail between FX stack and histogram (Build 112).
                 if let edge = activeEdgeReadout {
                     CurvedParamEdgeReadout(
                         title: edge.title,
@@ -1852,8 +1852,12 @@ struct ContentView: View {
                         needle: edge.needle,
                         serifValue: edge.serif
                     )
-                    .padding(.vertical, 36)
-                    .padding(.trailing, 2)
+                    .padding(.top, 86)
+                    .padding(.bottom, showHistogram
+                        ? (CollapsedChrome.expandedHistogramBottomPad + CollapsedChrome.infoBarHeight + 8)
+                        : 28
+                    )
+                    .padding(.trailing, 6)
                     .allowsHitTesting(false)
                     .zIndex(6)
                     .transition(.opacity)

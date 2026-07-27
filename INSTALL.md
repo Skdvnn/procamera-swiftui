@@ -8,13 +8,15 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 111 phone test pack (darkroom page-turn + finder thrash):**
+**Build 112 phone test pack (straight scrub rail):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **111**.
-Verified: softer paper peel; filmstrip/press timing; quieter cull chrome;
-debounced widget pack on mark; ±1 prefetch; MANUAL demoted; capture thumb bus.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **112**.
+Verified: edge scrubber is now a slimmer straight rail, starting below the FX
+buttons and ending above the histogram; value still tracks the active needle.
+
+Build 111: darkroom page-turn + finder thrash.
 
 Build 110: capture chrome / scene tip / demotes.
 
