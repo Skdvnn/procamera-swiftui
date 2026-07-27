@@ -8,11 +8,11 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 112 phone test pack (straight scrub rail):**
+**Build 113 phone test pack (straight scrub rail):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **112**.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **113**.
 Verified: edge scrubber is now a slimmer straight rail, starting below the FX
 buttons and ending above the histogram; value still tracks the active needle.
 

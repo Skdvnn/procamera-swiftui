@@ -345,6 +345,9 @@ struct ContentView: View {
     @State private var bottomCollapsed = true
     /// Live vertical drag on the bottom deck (positive = pulling down / collapsing).
     @State private var bottomDeckDrag: CGFloat = 0
+    /// True while the shutter/ISO scrubbers are actively being dragged.
+    /// Used to prevent accidental deck collapse/expand while scrubbing.
+    @State private var deckSwipeSuppressedByScrub: Bool = false
     /// Fullscreen scrub arch — FOCUS/EV (and expanded ISO/S) peel the trailing edge.
     @State private var scrubEdgeKind: ScrubEdgeKind? = nil
     @State private var scrubEdgeProgress: CGFloat = 0
@@ -2008,6 +2011,14 @@ struct ContentView: View {
                 // a vertical pull still wins over ISO/S horizontal scrubs (Build 96).
                 let bias: CGFloat = bottomCollapsed ? 1.6 : 1.25
                 guard abs(dy) > abs(dx) * bias else { return }
+
+                // While the shutter/ISO scrubbers are active, require a more
+                // deliberate vertical gesture so scrubbing doesn't collapse.
+                if deckSwipeSuppressedByScrub {
+                    // Allow diagonal "dig" gestures, but don't let mostly-horizontal
+                    // scrub drags flip the whole deck.
+                    guard abs(dy) > 38, abs(dx) < abs(dy) / 2.8 else { return }
+                }
                 // Use visible collapsed state (landscape forces compact chrome).
                 let collapsed = bottomCollapsed
                 if collapsed {
@@ -2029,7 +2040,13 @@ struct ContentView: View {
                 let bias: CGFloat = bottomCollapsed ? 1.6 : 1.25
                 withAnimation(ShutterMotion.deck) {
                     bottomDeckDrag = 0
-                    guard abs(effective) > abs(dx) * bias else { return }
+                    if deckSwipeSuppressedByScrub {
+                        // Same stricter filter as onChanged.
+                        guard abs(effective) > abs(dx) * (bias + 0.9),
+                              abs(effective) > 46 else { return }
+                    } else {
+                        guard abs(effective) > abs(dx) * bias else { return }
+                    }
                     if bottomCollapsed {
                         // Swipe up (negative) expands out of fullscreen finder.
                         if effective < -20 || committedDrag < -18 {
@@ -2123,6 +2140,9 @@ struct ContentView: View {
                         // Pass UI ISO; shutter and EV stay independent.
                         isManualExposure = true
                         camera.setShutterSpeed(index: idx, iso: Float(isoValue))
+                    },
+                    onActiveChanged: { active in
+                        deckSwipeSuppressedByScrub = active
                     }
                 )
 
@@ -2134,6 +2154,9 @@ struct ContentView: View {
                         if capped != isoValue { isoValue = capped }
                         isManualExposure = true
                         camera.setISO(Float(capped))
+                    },
+                    onActiveChanged: { active in
+                        deckSwipeSuppressedByScrub = active
                     }
                 )
             }
