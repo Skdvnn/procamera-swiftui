@@ -273,7 +273,8 @@ struct InfoBarMetalLevel: View {
         step: Float,
         labels: Bool
     ) -> some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 15.0)) { timeline in
+        // 8Hz pulse clock — was 15Hz stacked on motion publishes (Build 106).
+        TimelineView(.animation(minimumInterval: 1.0 / 8.0)) { timeline in
             let phase = timeline.date.timeIntervalSinceReferenceDate
             let pulse = 0.5 + 0.5 * sin(phase * 4.2)
 
@@ -422,13 +423,13 @@ final class HorizonMotion: ObservableObject {
         subscribers += 1
         guard subscribers == 1 else { return }
         guard manager.isDeviceMotionAvailable, !manager.isDeviceMotionActive else { return }
-        // 20Hz — tick sweep needs a smoother chase than the old 10Hz deadband.
-        manager.deviceMotionUpdateInterval = 1.0 / 20.0
+        // 12Hz — enough for tick chase without 20Hz SwiftUI republish (Build 106).
+        manager.deviceMotionUpdateInterval = 1.0 / 12.0
         manager.startDeviceMotionUpdates(to: .main) { [weak self] motion, _ in
             guard let self, let attitude = motion?.attitude else { return }
             let roll = max(-45, min(45, Float(attitude.roll * 180.0 / .pi)))
-            // Finer deadband so ticks animate while still calm for SwiftUI.
-            guard abs(roll - self.rollDegrees) >= 0.2 else { return }
+            // Wider deadband — calm the top strip while still reading tilt.
+            guard abs(roll - self.rollDegrees) >= 0.35 else { return }
             self.rollDegrees = roll
         }
     }

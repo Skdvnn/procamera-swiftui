@@ -8,13 +8,15 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 105 phone test pack (SCENE Auto advisor):**
+**Build 106 phone test pack (stability / lag pass):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **105**.
-Verified: SCENE → Auto watches ISO/shutter/hist and soft-suggests Night,
-Street, or Film (tap to apply). Shortcuts: Set Scene / shuttercam://scene.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **106**.
+Verified: Scene tip no longer rebuilds Metal every AE sample; hist stays off
+the Metal queue; Settings parks live FX; sun-drag EV is throttled; level is calmer.
+
+Build 105: SCENE Auto advisor.
 
 Build 104: FX stuck / washout guards.
 
