@@ -830,6 +830,7 @@ def test_source_guards() -> None:
     check("widget tight contentPad 8", "Tight outer pad" in widgets)
     check("widget medium bigger sheet", ".frame(width: 136, height: 108)" in widgets)
     check("widget small keep count", "KEEP" in widgets and "stats.keepers" in widgets)
+    check("widget contentMarginsDisabled", "contentMarginsDisabled()" in widgets)
 
     # Build 71 — fun scrubbers + fullscreen arch vibe
     aids = (ROOT / "ViewfinderAids.swift").read_text()

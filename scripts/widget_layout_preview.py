@@ -270,8 +270,10 @@ def launch_small(g) -> Image.Image:
     p, gap = g["small_pad"], g["small_gap"]
     x, y, w = p, p, SMALL[0] - p * 2
     f.text(x, y, "SHUTTER", pt=9, alpha=235)
-    f.text(x + w, y + 1, "TDY", pt=7, alpha=90, anchor="ra")
-    f.text(x + w - 18, y, f"{STATS['today']}", pt=11, fill=ACCENT, anchor="ra")
+    f.text(x + w, y + 1, "KEEP", pt=7, alpha=90, anchor="ra")
+    f.text(x + w - 26, y, f"{STATS['keepers']}", pt=10, fill=ACCENT, anchor="ra")
+    f.text(x + w - 48, y + 1, "TDY", pt=7, alpha=90, anchor="ra")
+    f.text(x + w - 66, y, f"{STATS['today']}", pt=11, fill=ACCENT, anchor="ra")
     y += 11 + gap
 
     # Fan of recent stills + viewfinder gate (matches WidgetRecentStack).
@@ -305,7 +307,7 @@ def launch_small(g) -> Image.Image:
     y += g["small_bars"] + gap
     f.text(x, y, EXPOSURE.replace(" · ƒ1.8", ""), pt=8.5, fill=ACCENT)
     y += 11
-    f.text(x, y, f"9m · {STATS['week_total']} THIS WEEK", pt=8, alpha=120)
+    f.text(x, y, f"9m · {STATS['week_total']} WK · {STATS['unculled']} OPEN", pt=8, alpha=120)
     return f.save("launch-small.png")
 
 

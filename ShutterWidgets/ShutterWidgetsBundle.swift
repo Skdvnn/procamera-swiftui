@@ -560,6 +560,8 @@ struct ShutterLaunchWidget: Widget {
         .configurationDisplayName("Shutter Cam")
         .description("Contact sheet, week of frames, and tap to shoot.")
         .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+        // Own the edge inset — system margins stacked on contentPad made sides huge (Build 107).
+        .contentMarginsDisabled()
     }
 }
 
@@ -965,6 +967,7 @@ struct ShutterLooksWidget: Widget {
         .configurationDisplayName("Shutter Looks")
         .description("One-tap film + FX looks, armed look, and recent frames.")
         .supportedFamilies([.systemMedium, .systemLarge])
+        .contentMarginsDisabled()
     }
 }
 
