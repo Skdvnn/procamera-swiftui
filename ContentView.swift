@@ -285,9 +285,7 @@ struct ContentView: View {
     @State private var showFlash = false
     /// Brief dark shutter curtain (burst / clap) — not the white flash wash.
     @State private var showShutterCurtain = false
-    /// Brief chrome toast for failed capture / Photos denial / LE cancel.
-    @State private var statusToast: String?
-    @State private var statusToastWork: DispatchWorkItem?
+    /// Brief chrome toast for failed capture / Photos denial / LE cancel — ToastBus (Build 109).
     /// Suppresses "Capture failed" toast when the user aborted LE.
     @State private var expectingLECancel = false
     /// Soft Auto Night assist — opt-in chip when AUTO is hunting in the dark.
@@ -351,7 +349,8 @@ struct ContentView: View {
     @State private var scrubEdgeKind: ScrubEdgeKind? = nil
     @State private var scrubEdgeProgress: CGFloat = 0
     @State private var scrubEdgeValue: String = ""
-    @StateObject private var gallery = GalleryStore()
+    @StateObject private var galleryOwner = GalleryStoreOwner()
+    private var gallery: GalleryStore { galleryOwner.store }
     @StateObject private var volumeShutter = VolumeShutterObserver()
     @State private var showPhotoBook = false
     /// Field Book deep link — applied when CullLibraryView appears (not a racy Notification).
@@ -448,7 +447,8 @@ struct ContentView: View {
         if active {
             let first = scrubEdgeKind != kind || scrubEdgeProgress < 0.4
             scrubEdgeKind = kind
-            scrubEdgeValue = value
+            // Skip no-op value writes — every ISO/FOCUS sample rebuilt Metal (Build 109).
+            if scrubEdgeValue != value { scrubEdgeValue = value }
             if first {
                 withAnimation(ShutterMotion.deck) { scrubEdgeProgress = 0.92 }
             }
@@ -532,7 +532,6 @@ struct ContentView: View {
             lensFX: lensFX,
             onCapture: { handleCapture() },
             onClampISO: { clampISOToDevice(maxISO: $0) },
-            onToast: { showStatusToast($0) },
             onSyncFilm: { syncFilmFilter($0) },
             onSyncContext: { syncCaptureContextToSystem() }
         ))
@@ -974,7 +973,6 @@ struct ContentView: View {
 
                 FinderStatusOverlays(
                     safeTop: safeTop,
-                    toast: statusToast,
                     nightAssistVisible: nightAssistVisible,
                     sceneAssistLead: sceneAssistPick?.chipLead ?? "AUTO",
                     sceneAssistAction: sceneAssistPick?.chipAction ?? "TAP FOR NIGHT",
@@ -987,7 +985,6 @@ struct ContentView: View {
                         nightAssistDismissedUntil = Date().addingTimeInterval(300)
                     }
                 )
-                .animation(ShutterMotion.chrome, value: statusToast)
                 .animation(ShutterMotion.chrome, value: nightAssistVisible)
                 .animation(ShutterMotion.chrome, value: sceneAssistPick)
             }
@@ -1145,13 +1142,7 @@ struct ContentView: View {
     }
 
     private func showStatusToast(_ message: String) {
-        statusToastWork?.cancel()
-        statusToast = message
-        let work = DispatchWorkItem {
-            statusToast = nil
-        }
-        statusToastWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2, execute: work)
+        ToastBus.shared.show(message)
     }
 
     /// Soft Auto SCENE — suggest Night / Street / Film from live AE + hist.
@@ -1867,13 +1858,7 @@ struct ContentView: View {
                 }
                 .animation(ShutterMotion.tick, value: timerCountdown)
 
-                Group {
-                    if camera.isLongExposureCapturing {
-                        LongExposureProgressOverlay(onCancel: { handleCapture() })
-                        .transition(.opacity)
-                    }
-                }
-                .animation(ShutterMotion.chrome, value: camera.isLongExposureCapturing)
+                LongExposureProgressHost(onCancel: { handleCapture() })
 
                 Group {
                     if showingCleanCompare {
@@ -1906,9 +1891,8 @@ struct ContentView: View {
                     .allowsHitTesting(false)
                     .zIndex(6)
                     .transition(.opacity)
-                    .animation(ShutterMotion.scrub, value: edge.value)
-                    .animation(ShutterMotion.scrub, value: edge.needle)
                     .animation(ShutterMotion.deck, value: edge.progress)
+                    // Skip scrub springs on value/needle — every detent rebuilt Metal (Build 109).
                 }
 
                 // Histogram inside frame only when expanded — sits above the deck
@@ -2102,7 +2086,6 @@ struct ContentView: View {
             ShutterButton(
                 isBusy: isCapturing && !isBurstHolding && !burstConsumedTap,
                 timerCountdown: timerCountdown,
-                allowCancelWhileBusy: camera.isLongExposureCapturing,
                 compact: compact,
                 burstCount: isBurstHolding ? max(burstCaptured, 1) : 0,
                 onBurstStart: holdBurstEnabled ? { beginBurstHold() } : nil,
@@ -2258,7 +2241,6 @@ struct ContentView: View {
                 ShutterButton(
                     isBusy: isCapturing && !isBurstHolding && !burstConsumedTap,
                     timerCountdown: timerCountdown,
-                    allowCancelWhileBusy: camera.isLongExposureCapturing,
                     burstCount: isBurstHolding ? max(burstCaptured, 1) : 0,
                     onBurstStart: holdBurstEnabled ? { beginBurstHold() } : nil,
                     onBurstEnd: holdBurstEnabled ? { endBurstHold() } : nil
@@ -2455,6 +2437,22 @@ struct ViewfinderVignette: View {
 }
 
 // MARK: - Long Exposure Progress (viewfinder ring during computational LE)
+/// Host observes the leaf bus so ContentView doesn't rebuild on LE start/end (Build 109).
+struct LongExposureProgressHost: View {
+    @ObservedObject private var leBus = LongExposureProgressBus.shared
+    var onCancel: (() -> Void)? = nil
+
+    var body: some View {
+        Group {
+            if leBus.isCapturing {
+                LongExposureProgressOverlay(onCancel: onCancel)
+                    .transition(.opacity)
+            }
+        }
+        .animation(ShutterMotion.chrome, value: leBus.isCapturing)
+    }
+}
+
 struct LongExposureProgressOverlay: View {
     /// Leaf-observed — progress must not ride CameraManager @Published (Build 108).
     @ObservedObject private var leBus = LongExposureProgressBus.shared
@@ -2538,7 +2536,6 @@ private struct SceneAssistProbe: View {
 /// with the old Street chip). Only the Night capsule itself is tappable.
 struct FinderStatusOverlays: View {
     let safeTop: CGFloat
-    let toast: String?
     let nightAssistVisible: Bool
     /// Condition rationale on the soft SCENE tip (DARK / BRIGHT / DAY).
     var sceneAssistLead: String = "LOW LIGHT"
@@ -2547,9 +2544,11 @@ struct FinderStatusOverlays: View {
     let onApplyNight: () -> Void
     let onDismissNight: () -> Void
 
+    @ObservedObject private var toastBus = ToastBus.shared
+
     var body: some View {
         ZStack(alignment: .top) {
-            if let toast {
+            if let toast = toastBus.message {
                 Text(toast)
                     .font(.system(size: 12, weight: .semibold, design: .monospaced))
                     .foregroundColor(.white)
@@ -2561,6 +2560,7 @@ struct FinderStatusOverlays: View {
                     .transition(.opacity.combined(with: .move(edge: .top)))
                     .allowsHitTesting(false)
                     .zIndex(50)
+                    .animation(ShutterMotion.chrome, value: toastBus.message)
             }
 
             if nightAssistVisible {
@@ -2591,7 +2591,7 @@ struct FinderStatusOverlays: View {
                 .padding(.vertical, 8)
                 .background(Capsule().fill(Color.black.opacity(0.78)))
                 .overlay(Capsule().stroke(Color.white.opacity(0.12), lineWidth: 0.6))
-                .padding(.top, safeTop + (toast == nil ? 8 : 44))
+                .padding(.top, safeTop + (toastBus.message == nil ? 8 : 44))
                 .transition(.opacity.combined(with: .move(edge: .top)))
                 .zIndex(51)
             }
@@ -2623,7 +2623,6 @@ private struct ContentViewLifecycle: ViewModifier {
     var lensFX: LensFXMode
     var onCapture: () -> Void
     var onClampISO: (Float) -> Void
-    var onToast: (String) -> Void
     var onSyncFilm: (FilmFilterMode) -> Void
     var onSyncContext: () -> Void
 
@@ -2656,11 +2655,6 @@ private struct ContentViewLifecycle: ViewModifier {
             }
             .onChange(of: camera.maxISO) { _, maxISO in
                 onClampISO(maxISO)
-            }
-            .onChange(of: camera.captureNote) { _, note in
-                guard let note else { return }
-                onToast(note)
-                camera.captureNote = nil
             }
             .onChange(of: camera.isAEAFLocked) { _, locked in
                 isLocked = locked
@@ -3669,9 +3663,9 @@ struct ShutterButton: View {
     @ObservedObject private var leBus = LongExposureProgressBus.shared
 
     private var isTimerArmed: Bool { timerCountdown > 0 }
-    private var canCancel: Bool { isTimerArmed || allowCancelWhileBusy }
+    private var canCancel: Bool { isTimerArmed || leBus.isCapturing || allowCancelWhileBusy }
     private var longExposureProgress: Float? {
-        allowCancelWhileBusy || leBus.isCapturing ? leBus.progress : nil
+        leBus.isCapturing || allowCancelWhileBusy ? leBus.progress : nil
     }
 
     var body: some View {
@@ -3705,7 +3699,7 @@ struct ShutterButton: View {
         }
         .accessibilityLabel(
             isTimerArmed ? "Cancel timer"
-                : allowCancelWhileBusy ? "Cancel long exposure"
+                : leBus.isCapturing || allowCancelWhileBusy ? "Cancel long exposure"
                 : "Shutter"
         )
         .accessibilityHint(onBurstStart == nil ? "" : "Hold for burst")

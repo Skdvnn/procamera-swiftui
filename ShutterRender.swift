@@ -115,3 +115,28 @@ final class LongExposureProgressBus: ObservableObject {
         isCapturing = false
     }
 }
+
+/// One-shot finder toasts — leaf chrome only (Build 109).
+/// Publishing through CameraManager.captureNote / ContentView @State rebuilt Metal.
+final class ToastBus: ObservableObject {
+    static let shared = ToastBus()
+
+    @Published private(set) var message: String?
+    private var clearWork: DispatchWorkItem?
+
+    func show(_ text: String, duration: TimeInterval = 2.2) {
+        clearWork?.cancel()
+        message = text
+        let work = DispatchWorkItem { [weak self] in
+            self?.message = nil
+        }
+        clearWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + duration, execute: work)
+    }
+
+    func clear() {
+        clearWork?.cancel()
+        clearWork = nil
+        message = nil
+    }
+}

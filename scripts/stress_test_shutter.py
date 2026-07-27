@@ -398,7 +398,12 @@ def test_source_guards() -> None:
     check("Apply Look None passes None string", 'film.map(\\ .rawValue)'.replace(' ', '') in (ROOT / "ShutterAppIntents.swift").read_text().replace(' ', '') or "film.map(\\.rawValue)" in (ROOT / "ShutterAppIntents.swift").read_text())
 
 
-    check("bake failure note", "bakeLooksForCapture" in cam and "captureNote" in cam and "captureNote" in content)
+    check(
+        "bake failure note",
+        "bakeLooksForCapture" in cam
+        and "ToastBus.shared.show" in cam
+        and "ToastBus.shared.show" in content,
+    )
     check("album export failure surfaced", "Album export failed — keepers in Field Book" in (ROOT / "CullGallery.swift").read_text())
     check("comic fallback", "func applyToon" in (ROOT / "LensFXEngine.swift").read_text())
     check("film grain bake", "func applyFilmGrain" in cam)
@@ -436,6 +441,18 @@ def test_source_guards() -> None:
     check("compare bypass not Published", "@Published var previewLooksBypassed" not in cam)
     check("scene assist probe leaf", "struct SceneAssistProbe" in content)
     check("scrubber label no spring", ".animation(.easeOut(duration: 0.12), value: selection)" in content)
+    # Build 109 — toast/gallery/LE flag/wash/peaking
+    check("toast bus isolated", "final class ToastBus" in render)
+    check("captureNote not Published", "@Published var captureNote" not in cam)
+    check("overlays observe ToastBus", "@ObservedObject private var toastBus = ToastBus.shared" in content)
+    check("LE capturing not Published", "@Published var isLongExposureCapturing" not in cam)
+    check("LE progress host leaf", "struct LongExposureProgressHost" in content)
+    check("gallery owner isolates publishes", "final class GalleryStoreOwner" in (ROOT / "PhotoBook.swift").read_text())
+    check("peaking not Published", "@Published var focusPeakingEnabled" not in cam)
+    check("zebra not Published", "@Published var zebraEnabled" not in cam)
+    check("wash check Instant/FX only", "shouldWashCheckPreview" in cam)
+    check("peaking-only preview 6fps", "Peaking/zebra alone" in cam)
+    check("scrub edge skip no-op value", "Skip no-op value writes" in content)
     check(
         "prefer 30fps preview format",
         "maxFps >= 29" in cam and "activeVideoMinFrameDuration = thirty" in cam,
