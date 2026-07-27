@@ -238,6 +238,8 @@ struct FilteredCameraPreview: UIViewRepresentable {
         }
 
         @objc func handleTap(_ gesture: UITapGestureRecognizer) {
+            // Lift at the end of an EV/morph scrub must not also retarget AF.
+            guard panMode == .undecided else { return }
             let location = gesture.location(in: gesture.view)
             guard let view = gesture.view as? FilteredPreviewView,
                   view.bounds.width > 0, view.bounds.height > 0 else { return }
@@ -312,11 +314,12 @@ struct FilteredCameraPreview: UIViewRepresentable {
 
             case .changed:
                 if panMode == .undecided {
-                    // Prefer vertical EV sooner (3pt) so brightness feels instant.
-                    let verticalEnough = exposureDragEnabled && abs(translation.y) > 3
-                    let horizontalEnough = abs(translation.x) > 8
+                    // Keep slop high enough that a focus tap's finger jitter
+                    // never claims sun-drag / morph (Build 114; was 3pt).
+                    let verticalEnough = exposureDragEnabled && abs(translation.y) > 14
+                    let horizontalEnough = abs(translation.x) > 14
                     // Morph also accepts a short press-drag (liquid wants any motion).
-                    let morphEnough = morphTouchEnabled && (abs(translation.x) > 4 || abs(translation.y) > 4)
+                    let morphEnough = morphTouchEnabled && (abs(translation.x) > 12 || abs(translation.y) > 12)
                     guard verticalEnough || horizontalEnough || morphEnough else { break }
 
                     let verticalDominant = abs(translation.y) >= abs(translation.x) * 0.6

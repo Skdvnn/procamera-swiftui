@@ -1492,20 +1492,37 @@ class CameraManager: NSObject, ObservableObject {
             do {
                 try device.lockForConfiguration()
 
+                // Leave manual lens lock so the POI hunt can run (Build 114).
                 if device.isFocusPointOfInterestSupported {
                     device.focusPointOfInterest = point
-                    device.focusMode = .autoFocus
+                    // One-shot AF at the tap — continuous alone often won't
+                    // restart a hunt when already continuous at another POI.
+                    if device.isFocusModeSupported(.autoFocus) {
+                        device.focusMode = .autoFocus
+                    } else if device.isFocusModeSupported(.continuousAutoFocus) {
+                        device.focusMode = .continuousAutoFocus
+                    }
                 }
 
                 if device.isExposurePointOfInterestSupported && !self.isManualExposure {
                     device.exposurePointOfInterest = point
-                    device.exposureMode = .autoExpose
+                    if device.isExposureModeSupported(.autoExpose) {
+                        device.exposureMode = .autoExpose
+                    } else if device.isExposureModeSupported(.continuousAutoExposure) {
+                        device.exposureMode = .continuousAutoExposure
+                    }
+                }
+
+                if device.isSubjectAreaChangeMonitoringEnabled == false {
+                    device.isSubjectAreaChangeMonitoringEnabled = true
                 }
 
                 device.unlockForConfiguration()
 
                 DispatchQueue.main.async {
                     self.focusPoint = point
+                    if self.isManualFocus { self.isManualFocus = false }
+                    if self.isAEAFLocked { self.isAEAFLocked = false }
                 }
             } catch {
                 print("Error setting focus: \(error)")

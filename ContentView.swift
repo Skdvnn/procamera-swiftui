@@ -352,6 +352,10 @@ struct ContentView: View {
     @State private var scrubEdgeKind: ScrubEdgeKind? = nil
     @State private var scrubEdgeProgress: CGFloat = 0
     @State private var scrubEdgeValue: String = ""
+    /// Bumped on every open/refresh so stale close timers cannot wipe a live peel,
+    /// and so idle watchdogs can dismiss dial-only opens that never get a matching close.
+    @State private var scrubEdgeGeneration: Int = 0
+    @State private var scrubEdgeLastActiveAt: CFAbsoluteTime = 0
     @StateObject private var galleryOwner = GalleryStoreOwner()
     private var gallery: GalleryStore { galleryOwner.store }
     /// Volume shutter — not ObservableObject (Build 110); holder avoids ContentView thrash.
@@ -450,6 +454,9 @@ struct ContentView: View {
 
     private func setScrubEdge(_ kind: ScrubEdgeKind?, active: Bool, value: String) {
         if active {
+            scrubEdgeGeneration += 1
+            let gen = scrubEdgeGeneration
+            scrubEdgeLastActiveAt = CFAbsoluteTimeGetCurrent()
             let first = scrubEdgeKind != kind || scrubEdgeProgress < 0.4
             scrubEdgeKind = kind
             // Skip no-op value writes — every ISO/FOCUS sample rebuilt Metal (Build 109).
@@ -457,11 +464,34 @@ struct ContentView: View {
             if first {
                 withAnimation(ShutterMotion.deck) { scrubEdgeProgress = 0.92 }
             }
-        } else if scrubEdgeKind == kind {
-            withAnimation(ShutterMotion.scrub) { scrubEdgeProgress = 0 }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
-                if scrubEdgeProgress < 0.08 { scrubEdgeKind = nil }
+            // Idle watchdog — FocusDial / accessibility / lost onActiveChanged(false)
+            // used to leave the side rail peeled open forever (Build 114).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.75) {
+                guard gen == scrubEdgeGeneration, scrubEdgeKind != nil else { return }
+                guard CFAbsoluteTimeGetCurrent() - scrubEdgeLastActiveAt >= 0.70 else { return }
+                beginScrubEdgeClose(expectedGeneration: gen)
             }
+        } else if scrubEdgeKind == kind {
+            beginScrubEdgeClose(expectedGeneration: scrubEdgeGeneration)
+        }
+    }
+
+    private func beginScrubEdgeClose(expectedGeneration: Int) {
+        withAnimation(ShutterMotion.scrub) { scrubEdgeProgress = 0 }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.22) {
+            // Ignore stale closes if a newer scrub reopened the rail.
+            guard expectedGeneration == scrubEdgeGeneration else { return }
+            guard scrubEdgeProgress < 0.08 else { return }
+            scrubEdgeKind = nil
+        }
+    }
+
+    private func forceCloseScrubEdge() {
+        scrubEdgeGeneration += 1
+        scrubEdgeLastActiveAt = 0
+        withAnimation(ShutterMotion.scrub) {
+            scrubEdgeProgress = 0
+            scrubEdgeKind = nil
         }
     }
 
@@ -588,12 +618,23 @@ struct ContentView: View {
         .onChange(of: bottomCollapsed) { _, _ in
             // Collapse/expand must not leave a UIKit picker orphaned over the finder.
             ChromePickerGate.dismiss()
+            forceCloseScrubEdge()
+        }
+        .onChange(of: topCollapsed) { _, _ in
+            // FocusDial ↔ compact scrubber swap must not leave the side rail stuck.
+            forceCloseScrubEdge()
         }
         .onChange(of: showPhotoBook) { _, open in
-            if open { ChromePickerGate.dismiss() }
+            if open {
+                ChromePickerGate.dismiss()
+                forceCloseScrubEdge()
+            }
         }
         .onChange(of: showSettings) { _, open in
-            if open { ChromePickerGate.dismiss() }
+            if open {
+                ChromePickerGate.dismiss()
+                forceCloseScrubEdge()
+            }
             // Park live film/FX Metal while Settings scrolls — same contract as
             // the chrome picker (Build 106). Avoids GPU fight + finder jank.
             camera.setChromePickerPreviewSuspended(open)
@@ -1595,7 +1636,12 @@ struct ContentView: View {
     }
 
     private func handleFocusTap(_ viewNorm: CGPoint, devicePoint: CGPoint, in size: CGSize) {
-        guard !isLocked else { return }
+        // Tap always retargets AF — Studio / AE-AF lock used to swallow every tap
+        // (Build 114). Unlock first so setFocus can leave locked lens position.
+        if isLocked {
+            isLocked = false
+            camera.setAEAFLocked(false)
+        }
         Haptics.light()
         camera.setFocus(at: devicePoint)
         isManualFocusEnabled = false
@@ -3292,6 +3338,15 @@ struct NativeSnapScrubber<Value: Hashable>: View {
             }
         }
         .sensoryFeedback(.selection, trigger: selection)
+        .onDisappear {
+            // Scrubber teardown used to skip onActiveChanged(false) when a
+            // pending generation timeout was invalidated by a rebuild (Build 114).
+            scrollGeneration += 1
+            if isScrolling {
+                isScrolling = false
+                onActiveChanged?(false)
+            }
+        }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label)
         .accessibilityValue(title(selection) + (suffix.map { " \($0)" } ?? ""))
