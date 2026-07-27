@@ -8,15 +8,17 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 117 phone test pack (shutter arg order):**
+**Build 118 phone test pack (Minimalism mode):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **117**.
-Verified: ShutterButton call sites pass onBurstStart before stayEnabledForBurstTap.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **118**.
+Verified: Settings → Minimalism strips finder chrome to a quiet Minolta
+vibe (brackets · shutter · gestures); default UI unchanged when off.
+SAVE LOOK chips hug their text.
 
+Build 117: shutter arg order.
 Build 116: GalleryStore MainActor.
-Build 115: CameraManager control-byte compile fix.
 Build 112: straight scrub rail.
 Build 111: darkroom page-turn + finder thrash.
 

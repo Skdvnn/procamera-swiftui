@@ -568,6 +568,16 @@ def test_source_guards() -> None:
         "VolumeShutterOwner is MainActor",
         "@MainActor" in photobook[photobook.find("final class VolumeShutterOwner")-40:photobook.find("final class VolumeShutterOwner")+80],
     )
+    # Build 118 — Minimalism mode (opt-in) + Save button hugs label.
+    settings = (ROOT / "ShutterSettings.swift").read_text()
+    vf = (ROOT / "ViewfinderOverlay.swift").read_text()
+    check("minimalism AppStorage", '@AppStorage("cam.minimalism")' in content)
+    check("minimalism settings toggle", 'title: "Minimalism"' in settings)
+    check("minimalChrome on overlay", "minimalChrome: minimalismMode" in content)
+    check("minimal hides top strip", "hideTopStrip = minimalismMode" in content)
+    check("minimal gear escape hatch", 'icon: "gearshape"' in content[content.find("if minimalismMode"):content.find("if minimalismMode")+350])
+    check("save look fixedSize hug", "SAVE LOOK" in vf and "fixedSize(horizontal: true, vertical: true)" in vf)
+    check("settings save hugs text", "Save current look" in settings and "fixedSize(horizontal: true, vertical: true)" in settings)
     # Build 117 — labeled ShutterButton args must follow declaration order.
     import re as _re
     for m in _re.finditer(r"ShutterButton\(([\s\S]*?)\)\s*\{", content):
