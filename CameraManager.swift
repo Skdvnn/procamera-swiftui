@@ -14,7 +14,8 @@ class CameraManager: NSObject, ObservableObject {
     // Camera properties
     @Published var currentCamera: AVCaptureDevice.Position = .back
     @Published var flashMode: AVCaptureDevice.FlashMode = .off
-    @Published var exposureValue: Float = 0.0
+    /// Not @Published — ContentView owns EV UI via @State (Build 106).
+    var exposureValue: Float = 0.0
     @Published var isoValue: Float = 100
     @Published var shutterSpeed: CMTime = CMTime(value: 1, timescale: 125)
     @Published var focusPoint: CGPoint = CGPoint(x: 0.5, y: 0.5)
@@ -1278,9 +1279,9 @@ class CameraManager: NSObject, ObservableObject {
                 try device.lockForConfiguration()
                 device.setExposureTargetBias(value) { _ in }
                 device.unlockForConfiguration()
-                DispatchQueue.main.async {
-                    self.exposureValue = value
-                }
+                // ContentView owns EV via @State — do not republish through
+                // @Published camera (that rebuilt the whole Metal finder).
+                self.exposureValue = value
             } catch {
                 print("Error setting exposure: \(error)")
             }
@@ -2923,17 +2924,14 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         if wantsHistogram {
             lastHistogramTime = now
             // Copy a tiny bitmap NOW — the CVPixelBuffer is recycled after this callback.
-            // Use the serialized Metal context here; keep histogramContext exclusive
-            // to histogramQueue inside updateHistogram.
+            // Use the dedicated histogram CIContext (not Metal syncCI) so hist
+            // never stalls live FX createCGImage (Build 106).
             let tiny = downscaled(ciImage, longEdge: 160)
-            var owned: CIImage = tiny
-            if let cg = ShutterRender.syncCI({
-                ciContext.createCGImage(tiny, from: tiny.extent)
-            }) {
-                owned = CIImage(cgImage: cg)
-            }
-            histogramQueue.async { [weak self] in
-                self?.updateHistogram(from: owned)
+            if let cg = ShutterRender.histogramContext.createCGImage(tiny, from: tiny.extent) {
+                let owned = CIImage(cgImage: cg)
+                histogramQueue.async { [weak self] in
+                    self?.updateHistogram(from: owned)
+                }
             }
         }
 

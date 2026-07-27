@@ -409,6 +409,15 @@ def test_source_guards() -> None:
     check("shared ShutterRender CIContext", "enum ShutterRender" in render and "static let ciContext" in render)
     check("histogram bus isolated", "final class HistogramBus" in render and "@Published var histogramBins" not in cam)
     check("histogram off video queue", "camera.histogram" in cam and "histogramQueue.async" in cam)
+    # Build 106 — lag / stability pass
+    check("hist materialize skips Metal syncCI", "histogramContext.createCGImage" in cam)
+    check("hist materialize comment", "never stalls live FX createCGImage" in cam)
+    check("scene assist no hist onReceive", "do NOT observe HistogramBus here" in content)
+    check("scene assist no-op when chip up", "Chip already up (or streak saturated)" in content)
+    check("settings suspends live preview", "Park live film/FX Metal while Settings" in content)
+    check("EV drag throttled device writes", "~30Hz device writes" in content)
+    check("EV drag hide only on end", "Hide timer only on drag end" in content)
+    check("camera EV not Published", "Not @Published — ContentView owns EV UI" in cam)
     check(
         "prefer 30fps preview format",
         "maxFps >= 29" in cam and "activeVideoMinFrameDuration = thirty" in cam,
@@ -1025,7 +1034,7 @@ def test_source_guards() -> None:
     check("level precision readout", 'String(format: "%+.1f°", roll)' in aids)
     check("level Nikon yellow lock", 'Text(isLevel ? "LEVEL"' in aids)
     check("level lock haptic", "UIImpactFeedbackGenerator(style: .rigid)" in aids)
-    check("level 20hz motion", "1.0 / 20.0" in aids)
+    check("level 12hz motion", "1.0 / 12.0" in aids)
 
     # Build 97 — yellow only on focused/leading tick (no swept yellow run)
     check("level tick canvas", "func tickScale" in aids and "Canvas { ctx, size in" in aids)
@@ -1034,7 +1043,7 @@ def test_source_guards() -> None:
         "Yellow only on the focused/leading mark" in aids
         and "let swept = deg <= max(0, roll)" not in aids,
     )
-    check("level leading tick pulse", "let leading = abs(deg - roll)" in aids and "TimelineView(.animation(minimumInterval: 1.0 / 15.0))" in aids)
+    check("level leading tick pulse", "let leading = abs(deg - roll)" in aids and "TimelineView(.animation(minimumInterval: 1.0 / 8.0))" in aids)
     check("level beam still tilts", "Tilting horizon beam" in aids)
     check("level shared motion source", "static let shared = HorizonMotion()" in aids and "subscribers" in aids)
     check("level views share motion", "@StateObject private var motion = HorizonMotion()" not in aids)

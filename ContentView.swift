@@ -297,6 +297,8 @@ struct ContentView: View {
     @State private var nightAssistDismissedUntil: Date?
     @State private var sceneAssistPick: AutoScenePick?
     @AppStorage("cam.nightAssist") private var nightAssistEnabled = true
+    /// Throttle device EV writes during sun-drag (UI still updates every frame).
+    @State private var lastExposureApplyTime: CFAbsoluteTime = 0
     /// Hold-to-burst is opt-in — default off (Build 65).
     @AppStorage("cam.holdBurst") private var holdBurstEnabled = false
     /// Hold-to-burst: finger still down after long-press threshold.
@@ -587,6 +589,9 @@ struct ContentView: View {
         }
         .onChange(of: showSettings) { _, open in
             if open { ChromePickerGate.dismiss() }
+            // Park live film/FX Metal while Settings scrolls — same contract as
+            // the chrome picker (Build 106). Avoids GPU fight + finder jank.
+            camera.setChromePickerPreviewSuspended(open)
         }
     }
 
@@ -989,14 +994,13 @@ struct ContentView: View {
             .ignoresSafeArea()
             // NEVER attach .animation to this ZStack — it owns Metal preview + shutter.
             // Toast/night chrome animate inside FinderStatusOverlays only.
+            // AE bus only — do NOT observe HistogramBus here (that rebuilt the
+            // whole Metal finder ~2Hz). Pick still *reads* bins when evaluating.
             .onReceive(LiveExposureBus.shared.$iso) { _ in evaluateSceneAssist() }
             .onReceive(LiveExposureBus.shared.$shutterLabel) { _ in evaluateSceneAssist() }
-            .onReceive(HistogramBus.shared.$bins) { _ in evaluateSceneAssist() }
             .onChange(of: camera.isManualExposure) { _, manual in
                 if manual {
-                    nightAssistVisible = false
-                    nightAssistDarkStreak = 0
-                    sceneAssistPick = nil
+                    clearSceneAssistState()
                 } else {
                     evaluateSceneAssist()
                 }
@@ -1148,12 +1152,10 @@ struct ContentView: View {
     }
 
     /// Soft Auto SCENE — suggest Night / Street / Film from live AE + hist.
-    /// Opt-in chip only (never silent-applies mid-shoot). Build 105.
+    /// Opt-in chip only (never silent-applies mid-shoot). Build 105/106.
     private func evaluateSceneAssist() {
         guard nightAssistEnabled else {
-            nightAssistVisible = false
-            nightAssistDarkStreak = 0
-            sceneAssistPick = nil
+            clearSceneAssistState()
             return
         }
         // Never prompt / keep chip up while a capture owns the pipeline.
@@ -1161,25 +1163,21 @@ struct ContentView: View {
             if nightAssistVisible {
                 withAnimation(ShutterMotion.chrome) { nightAssistVisible = false }
             }
-            nightAssistDarkStreak = 0
+            // Don't zero streak/@State every capture frame — that rebuilds Metal.
             return
         }
         guard !camera.isManualExposure else {
-            nightAssistVisible = false
-            nightAssistDarkStreak = 0
-            sceneAssistPick = nil
+            clearSceneAssistState()
             return
         }
         // Only while SCENE Auto (or legacy "auto" sentinel) owns the dial.
         let armed = ShootMode(rawValue: shootModeRaw) == .auto || shootModeRaw == "auto"
         guard armed else {
-            nightAssistVisible = false
-            nightAssistDarkStreak = 0
-            sceneAssistPick = nil
+            clearSceneAssistState()
             return
         }
         if let until = nightAssistDismissedUntil, Date() < until {
-            nightAssistVisible = false
+            if nightAssistVisible { nightAssistVisible = false }
             return
         }
         let pick = AutoSceneAdvisor.pick(
@@ -1187,28 +1185,39 @@ struct ContentView: View {
             shutterLabel: LiveExposureBus.shared.shutterLabel,
             histogram: HistogramBus.shared.bins
         )
-        if let pick {
-            if sceneAssistPick == pick {
-                nightAssistDarkStreak += 1
-            } else {
-                sceneAssistPick = pick
-                nightAssistDarkStreak = 1
+        guard let pick else {
+            if sceneAssistPick != nil || nightAssistVisible || nightAssistDarkStreak != 0 {
+                nightAssistDarkStreak = 0
+                sceneAssistPick = nil
                 if nightAssistVisible {
                     withAnimation(ShutterMotion.chrome) { nightAssistVisible = false }
                 }
             }
+            return
+        }
+        if sceneAssistPick == pick {
+            // Chip already up (or streak saturated) — no @State write (Build 106).
+            if nightAssistVisible || nightAssistDarkStreak >= 3 { return }
+            nightAssistDarkStreak += 1
         } else {
-            nightAssistDarkStreak = 0
-            sceneAssistPick = nil
+            sceneAssistPick = pick
+            nightAssistDarkStreak = 1
             if nightAssistVisible {
                 withAnimation(ShutterMotion.chrome) { nightAssistVisible = false }
             }
-            return
         }
         // ~3 samples at 0.4s probe ≈ 1.2s of stable conditions before prompting.
         if nightAssistDarkStreak >= 3, !nightAssistVisible {
             withAnimation(ShutterMotion.chrome) { nightAssistVisible = true }
         }
+    }
+
+    /// Clear tip state only when something is actually set — avoids no-op rebuilds.
+    private func clearSceneAssistState() {
+        guard nightAssistVisible || sceneAssistPick != nil || nightAssistDarkStreak != 0 else { return }
+        nightAssistVisible = false
+        nightAssistDarkStreak = 0
+        sceneAssistPick = nil
     }
 
     /// Back-compat alias — stress suite / older call sites.
@@ -1657,6 +1666,12 @@ struct ContentView: View {
             focusStartEV = exposureValue
             isDraggingExposure = false
             setScrubEdge(manual ? .iso : .ev, active: false, value: scrubEdgeValue)
+            // Flush final EV/ISO to the device (drag path may have throttled).
+            if manual {
+                camera.setISO(Float(isoValue))
+            } else {
+                camera.setExposure(exposureValue)
+            }
             scheduleFocusHide(after: 2.2)
             return
         }
@@ -1670,9 +1685,9 @@ struct ContentView: View {
             if !showFocusPoint, viewfinderSize.width > 1, viewfinderSize.height > 1 {
                 focusPoint = CGPoint(x: viewfinderSize.width / 2, y: viewfinderSize.height / 2)
             }
+            showFocusPoint = true
         }
         isDraggingExposure = true
-        showFocusPoint = true
 
         // ~140pt per stop, up is brighter.
         let stops = -Float(translationY) / 140.0
@@ -1682,7 +1697,12 @@ struct ContentView: View {
             let capped = Int(max(camera.minISO, min(camera.maxISO, target)).rounded())
             if capped != isoValue {
                 isoValue = capped
-                camera.setISO(Float(capped))
+                // ~30Hz device writes — UI updates every pan sample (Build 106).
+                let now = CFAbsoluteTimeGetCurrent()
+                if now - lastExposureApplyTime >= 1.0 / 30.0 {
+                    lastExposureApplyTime = now
+                    camera.setISO(Float(capped))
+                }
             }
             // Detent off the gain that actually landed, so the finger stops
             // ticking once ISO is pinned at either rail.
@@ -1691,11 +1711,15 @@ struct ContentView: View {
         } else {
             let newEV = max(camera.minExposure, min(camera.maxExposure, focusStartEV + stops))
             exposureValue = newEV
-            camera.setExposure(newEV)
+            let now = CFAbsoluteTimeGetCurrent()
+            if now - lastExposureApplyTime >= 1.0 / 30.0 {
+                lastExposureApplyTime = now
+                camera.setExposure(newEV)
+            }
             exposureDetentHaptic(newEV)
             setScrubEdge(.ev, active: true, value: String(format: "%+.1f", newEV))
         }
-        scheduleFocusHide(after: 2.8)
+        // Hide timer only on drag end — rescheduling every pan sample thrashed main.
     }
 
     /// Half-stop detents — the arch reads in half stops, so the finger should too.
