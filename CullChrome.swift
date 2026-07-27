@@ -174,9 +174,9 @@ struct CompareFramesView: View {
                             .font(.system(size: 9, weight: .bold, design: .monospaced))
                             .tracking(2.5)
                             .foregroundColor(CullPalette.amber.opacity(0.75))
-                        Text("Pinch · double-tap reset · KEEP A/B below")
-                            .font(.system(size: 11, weight: .medium, design: .serif))
-                            .foregroundColor(.white.opacity(0.7))
+                        Text("KEEP A / B below")
+                            .font(.system(size: 12, weight: .medium, design: .serif))
+                            .foregroundColor(.white.opacity(0.55))
                     }
                     Spacer()
                     Button(action: onDismiss) {
@@ -281,13 +281,7 @@ struct CompareFramesView: View {
                     .accessibilityLabel("Keep frame B")
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, 10)
-
-                Text("ZOOM & PAN ARE LOCKED TOGETHER")
-                    .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                    .tracking(1.4)
-                    .foregroundColor(.white.opacity(0.28))
-                    .padding(.bottom, 18)
+                .padding(.bottom, 18)
             }
         }
         .preferredColorScheme(.dark)
@@ -313,8 +307,16 @@ struct CompareFramesView: View {
                     .foregroundColor(.white.opacity(0.7))
                     .lineLimit(2)
             }
-            .padding(8)
-            .background(Color.black.opacity(0.5))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                LinearGradient(
+                    colors: [Color.black.opacity(0.55), Color.black.opacity(0)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
         }
         .clipShape(Rectangle())
         .overlay(

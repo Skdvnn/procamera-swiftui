@@ -468,6 +468,21 @@ def test_source_guards() -> None:
     check("AEAF lock not Published", "@Published var isAEAFLocked" not in cam)
     check("volume shutter non-observing", "final class VolumeShutterOwner" in (ROOT / "PhotoBook.swift").read_text())
     check("volume shutter not ObservableObject", "class VolumeShutterObserver: NSObject, ObservableObject" not in (ROOT / "LookRecipes.swift").read_text())
+    # Build 111 — darkroom page-turn + MANUAL demote + widget debounce
+    cull = (ROOT / "CullGallery.swift").read_text()
+    check("page turn duration constant", "static let pageTurnDuration" in cull)
+    check("page turn uses duration constant", "CullMotion.pageTurnDuration" in cull)
+    check("paper peel angle softened", "-86" in cull and "perspective: 0.48" in cull)
+    check("filmstrip uses press scroll", "Filmstrip shouldn't ride the full page-turn" in cull)
+    check("cull hint first-run only", "First-run only — coach covers the rest" in cull)
+    check("cull prefetch ±1", "func prefetch(around" in cull)
+    check("mark widget debounce", "debounce: true" in cull)
+    check("push unculled debounce API", "debounce: Bool = false" in content)
+    check("manual exposure not Published", "@Published var isManualExposure" not in cam)
+    check("capture thumb on chrome bus", "lastThumb" in render and "bumpPhotoCount" in render)
+    chrome = (ROOT / "CullChrome.swift").read_text()
+    check("compare chrome quieted", "ZOOM & PAN ARE LOCKED TOGETHER" not in chrome)
+    check("compare keep subtitle short", "KEEP A / B below" in chrome)
     check(
         "prefer 30fps preview format",
         "maxFps >= 29" in cam and "activeVideoMinFrameDuration = thirty" in cam,

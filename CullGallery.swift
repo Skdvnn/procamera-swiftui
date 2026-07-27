@@ -8,24 +8,29 @@ import CoreLocation
 enum CullMotion {
     /// Snap-back after a drag miss
     static let flick = Animation.timingCurve(0.2, 0.8, 0.2, 1.0, duration: 0.16)
-    /// Page leaf curling away (keep / reject / swipe)
-    static let pageTurn = Animation.timingCurve(0.22, 0.7, 0.18, 1.0, duration: 0.46)
+    /// Page leaf curling away (keep / reject / swipe) — paper peel, not card flip (Build 111).
+    static let pageTurnDuration: TimeInterval = 0.40
+    static let pageTurn = Animation.timingCurve(0.2, 0.68, 0.16, 1.0, duration: pageTurnDuration)
     /// Cancelled peel settling back
-    static let pageCancel = Animation.timingCurve(0.2, 0.85, 0.2, 1.0, duration: 0.22)
+    static let pageCancel = Animation.timingCurve(0.2, 0.85, 0.2, 1.0, duration: 0.20)
     /// Grease-pencil draw-on
     static let draw = Animation.timingCurve(0.25, 0.1, 0.25, 1.0, duration: 0.28)
     /// KEEP / OUT stamp punch
     static let stamp = Animation.timingCurve(0.1, 0.8, 0.2, 1.0, duration: 0.14)
     static let stampFade = Animation.easeOut(duration: 0.18)
+    static let stampHold: TimeInterval = 0.24
     /// Loupe raise / drop
     static let loupeIn = Animation.timingCurve(0.2, 0.75, 0.2, 1.0, duration: 0.16)
     static let loupeOut = Animation.easeOut(duration: 0.12)
     /// Sheet / chrome settle
     static let settle = Animation.timingCurve(0.22, 0.7, 0.2, 1.0, duration: 0.32)
-    /// Chip / press micro
+    /// Chip / press micro / filmstrip scroll
     static let press = Animation.easeOut(duration: 0.1)
     /// Drag wash tracking (near-instant)
     static let wash = Animation.easeOut(duration: 0.08)
+    /// Seat mark before page curl
+    static let markAdvanceLifted: TimeInterval = 0.14
+    static let markAdvanceFresh: TimeInterval = 0.24
 }
 
 // MARK: - Darkroom ground
@@ -771,6 +776,15 @@ struct SessionContactSheet: View {
                         Text("\(session.shots.count) FRAMES")
                         Text("·")
                         Text(spanText.uppercased())
+                        Text("·")
+                        Text("\(progress.kept) KEEP")
+                            .foregroundColor(CullPalette.amber.opacity(0.85))
+                        Text("\(progress.rejected) OUT")
+                            .foregroundColor(CullPalette.safelight.opacity(0.85))
+                        if progress.unmarked > 0 {
+                            Text("\(progress.unmarked) OPEN")
+                                .foregroundColor(.white.opacity(0.45))
+                        }
                     }
                     .font(.system(size: 9, weight: .medium, design: .monospaced))
                     .foregroundColor(.white.opacity(0.38))
@@ -783,13 +797,6 @@ struct SessionContactSheet: View {
                     )
                     .padding(.top, 6)
                     .padding(.trailing, 40)
-
-                    HStack(spacing: 10) {
-                        tally(progress.kept, "KEPT", CullPalette.amber)
-                        tally(progress.rejected, "OUT", CullPalette.safelight)
-                        tally(progress.unmarked, "OPEN", Color.white.opacity(0.45))
-                    }
-                    .padding(.top, 4)
 
                     if let coord = session.mapCoordinate {
                         SessionMapChip(
@@ -879,20 +886,7 @@ struct SessionContactSheet: View {
                         lineWidth: 0.7
                     )
             )
-            .shadow(color: .black.opacity(0.45), radius: 16, y: 10)
-        }
-    }
-
-    private func tally(_ n: Int, _ label: String, _ color: Color) -> some View {
-        HStack(spacing: 4) {
-            Text("\(n)")
-                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                .foregroundColor(color)
-                .contentTransition(.numericText())
-            Text(label)
-                .font(.system(size: 8, weight: .semibold, design: .monospaced))
-                .tracking(0.8)
-                .foregroundColor(color.opacity(0.55))
+            .shadow(color: .black.opacity(0.35), radius: 8, y: 6)
         }
     }
 
@@ -1050,6 +1044,16 @@ final class CullDisplayCache {
         return store.thumbnail(for: shot)
     }
 
+    /// Warm ±1 so the next peel doesn't stall on first decode (Build 111).
+    func prefetch(around index: Int, shots: [ShotMetadata], store: GalleryStore) {
+        let targets = [index - 1, index, index + 1].filter { shots.indices.contains($0) }
+        DispatchQueue.global(qos: .utility).async {
+            for i in targets {
+                _ = self.image(for: shots[i], store: store)
+            }
+        }
+    }
+
     func purge() { cache.removeAllObjects() }
 }
 
@@ -1118,7 +1122,7 @@ struct CullSessionView: View {
             ZStack {
                 Color.black.ignoresSafeArea()
 
-                // Safelight / amber wash while dragging
+                // Safelight / amber wash — drive opacity from drag, no implicit animation thrash.
                 Group {
                     if dragOffset.height < -20 {
                         CullPalette.amber
@@ -1132,7 +1136,6 @@ struct CullSessionView: View {
                 }
                 .ignoresSafeArea()
                 .allowsHitTesting(false)
-                .animation(CullMotion.wash, value: dragOffset.height)
 
                 if let shot = current {
                     cullCanvas(shot: shot, size: geo.size)
@@ -1173,6 +1176,7 @@ struct CullSessionView: View {
         .statusBarHidden(true)
         .onAppear {
             index = startIndex
+            CullDisplayCache.shared.prefetch(around: startIndex, shots: session.shots, store: store)
             if !coachSeen {
                 withAnimation(CullMotion.settle.delay(0.35)) { showCoach = true }
             }
@@ -1371,26 +1375,25 @@ struct CullSessionView: View {
         VStack(spacing: 0) {
             // Filmstrip scrubber
             filmStrip
-                .padding(.bottom, 8)
+                .padding(.bottom, 6)
 
             if let shot = current {
                 metadataStrip(shot)
                     .id(shot.id)
-                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    .opacity(isAdvancing || dragProgress > 0.2 ? 0.35 : 1)
                     .animation(CullMotion.press, value: shot.id)
+                    .animation(CullMotion.wash, value: isAdvancing)
             }
 
             // Thumb-zone hint + accessible controls
-            VStack(spacing: 12) {
+            VStack(spacing: 10) {
                 // Drag intent label
                 Text(dragLabel)
                     .font(.system(size: 11, weight: .bold, design: .monospaced))
                     .tracking(3)
                     .foregroundColor(dragLabelColor)
                     .frame(height: 16)
-                    .opacity(dragProgress > 0.15 ? 1 : 0.35)
-                    .scaleEffect(dragProgress > 0.15 ? 1.0 + dragProgress * 0.06 : 1.0)
-                    .animation(CullMotion.wash, value: dragProgress)
+                    .opacity(dragProgress > 0.15 ? 1 : 0.28)
 
                 HStack(spacing: 14) {
                     Button { applyMark(.reject) } label: {
@@ -1406,13 +1409,17 @@ struct CullSessionView: View {
                     .accessibilityLabel("Keep frame")
                 }
 
-                Text("HOLD TO LOUPE  ·  SWIPE TO MARK  ·  PAGE TURNS NEXT  ·  DOUBLE-TAP UNDO")
-                    .font(.system(size: 7, weight: .semibold, design: .monospaced))
-                    .tracking(1.0)
-                    .foregroundColor(.white.opacity(0.22))
+                // First-run only — coach covers the rest (Build 111).
+                if !coachSeen {
+                    Text("HOLD TO LOUPE  ·  SWIPE TO MARK  ·  PAGE TURNS NEXT")
+                        .font(.system(size: 7, weight: .semibold, design: .monospaced))
+                        .tracking(1.0)
+                        .foregroundColor(.white.opacity(0.22))
+                        .transition(.opacity)
+                }
             }
-            .padding(.top, 10)
-            .padding(.bottom, 16)
+            .padding(.top, 8)
+            .padding(.bottom, 14)
             .frame(maxWidth: .infinity)
             .background(
                 LinearGradient(
@@ -1468,7 +1475,7 @@ struct CullSessionView: View {
                                             lineWidth: i == index ? 1.2 : 0.4
                                         )
                                 )
-                                .scaleEffect(i == index ? 1.08 : 1.0)
+                                .scaleEffect(i == index ? 1.04 : 1.0)
                                 .animation(CullMotion.press, value: index)
                             }
                             .buttonStyle(.plain)
@@ -1480,7 +1487,8 @@ struct CullSessionView: View {
                 }
                 .background(Color(hex: "14110e"))
                 .onChange(of: index) { _, new in
-                    withAnimation(CullMotion.pageTurn) {
+                    // Filmstrip shouldn't ride the full page-turn curve (Build 111).
+                    withAnimation(CullMotion.press) {
                         proxy.scrollTo(new, anchor: .center)
                     }
                 }
@@ -1580,29 +1588,30 @@ struct CullSessionView: View {
             .contentShape(Rectangle())
             .offset(y: isAdvancing ? 0 : dragOffset.height)
             .rotation3DEffect(
-                .degrees(Double(peel) * (forward ? -118 : 118)),
+                // Soft paper peel — was -118° / 0.62 perspective (card flip). Build 111.
+                .degrees(Double(peel) * (forward ? -86 : 86)),
                 axis: (x: 0, y: 1, z: 0),
                 anchor: forward ? .leading : .trailing,
-                perspective: 0.62
+                perspective: 0.48
             )
             .overlay(alignment: forward ? .leading : .trailing) {
                 LinearGradient(
                     colors: [
-                        Color.black.opacity(0.55 * Double(peel)),
-                        Color.black.opacity(0.12 * Double(peel)),
+                        Color.black.opacity(0.42 * Double(peel)),
+                        Color.black.opacity(0.08 * Double(peel)),
                         .clear
                     ],
                     startPoint: forward ? .leading : .trailing,
                     endPoint: forward ? .trailing : .leading
                 )
-                .frame(width: size.width * 0.22)
+                .frame(width: size.width * 0.18)
                 .allowsHitTesting(false)
             }
             .shadow(
-                color: Color.black.opacity(0.45 * Double(min(1, peel * 1.4))),
-                radius: 18 * peel,
-                x: forward ? 10 * peel : -10 * peel,
-                y: 4
+                color: Color.black.opacity(0.28 * Double(min(1, peel * 1.2))),
+                radius: 8,
+                x: forward ? 4 * peel : -4 * peel,
+                y: 2
             )
             .gesture(cullDrag(in: size))
             .simultaneousGesture(
@@ -1779,8 +1788,9 @@ struct CullSessionView: View {
             assetLocalIdentifier: shot.photosAssetLocalIdentifier,
             favorite: state == .keep
         )
-        // Drop rejects from Home Screen widget stack (Build 74).
-        ContentView.pushUnculledWidgetRecents(from: store, marks: marks)
+        // Drop rejects from Home Screen widget stack — debounced so mark spam
+        // doesn't pack JPEGs mid page-turn (Build 111).
+        ContentView.pushUnculledWidgetRecents(from: store, marks: marks, debounce: true)
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
 
         // Dismiss coach after first real mark
@@ -1791,12 +1801,12 @@ struct CullSessionView: View {
 
         markDrawKey &+= 1
         withAnimation(CullMotion.stamp) { flashMark = state }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.26) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + CullMotion.stampHold) {
             withAnimation(CullMotion.stampFade) { flashMark = nil }
         }
 
         // Seat the mark, then curl the leaf to the next frame
-        let delay: TimeInterval = alreadyLifted ? 0.16 : 0.28
+        let delay = alreadyLifted ? CullMotion.markAdvanceLifted : CullMotion.markAdvanceFresh
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
             advance(1)
         }
@@ -1816,7 +1826,7 @@ struct CullSessionView: View {
             assetLocalIdentifier: shot.photosAssetLocalIdentifier,
             favorite: action.previous == .keep
         )
-        ContentView.pushUnculledWidgetRecents(from: store, marks: marks)
+        ContentView.pushUnculledWidgetRecents(from: store, marks: marks, debounce: true)
         if let i = shots.firstIndex(where: { $0.id == action.shotID }) {
             advance(to: i)
         }
@@ -1871,7 +1881,7 @@ struct CullSessionView: View {
 
         // Keep the outgoing leaf bound to the old index until the curl finishes,
         // then seat the next page face-up with no reverse spin.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.46) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + CullMotion.pageTurnDuration) {
             var end = Transaction()
             end.disablesAnimations = true
             withTransaction(end) {
@@ -1880,6 +1890,7 @@ struct CullSessionView: View {
                 incomingIndex = nil
                 isAdvancing = false
             }
+            CullDisplayCache.shared.prefetch(around: next, shots: shots, store: store)
             UISelectionFeedbackGenerator().selectionChanged()
         }
     }
@@ -2103,15 +2114,14 @@ struct FinishDoneSheet: View {
             Spacer()
         }
         .foregroundColor(accent ? CullPalette.amber : .white.opacity(0.9))
-        .padding(14)
-        .background(accent ? CullPalette.amber.opacity(0.1) : Color.white.opacity(0.06))
-        .overlay(
-            RoundedRectangle(cornerRadius: 2)
-                .stroke(
-                    accent ? CullPalette.amber.opacity(0.5) : CullPalette.hairline.opacity(0.6),
-                    lineWidth: accent ? 0.8 : 0.6
-                )
-        )
+        .padding(.vertical, 14)
+        .padding(.horizontal, 4)
+        .background(Color.clear)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(accent ? CullPalette.amber.opacity(0.55) : CullPalette.hairline.opacity(0.45))
+                .frame(height: 0.6)
+        }
     }
 }
 
@@ -2160,63 +2170,30 @@ struct FinishSessionSheet: View {
                 )
                 .padding(.bottom, 28)
 
-                VStack(spacing: 12) {
+                VStack(spacing: 0) {
                     Button(action: onDeleteAndExport) {
-                        HStack {
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text("DELETE REJECTS · EXPORT KEEPERS")
-                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                    .tracking(0.8)
-                                Text("One Photos prompt · album + Field Book")
-                                    .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                    .foregroundColor(.white.opacity(0.45))
-                            }
-                            Spacer()
-                        }
-                        .foregroundColor(CullPalette.amber)
-                        .padding(14)
-                        .background(CullPalette.amber.opacity(0.1))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 2)
-                                .stroke(CullPalette.amber.opacity(0.5), lineWidth: 0.8)
+                        finishSheetRow(
+                            title: "DELETE REJECTS · EXPORT KEEPERS",
+                            subtitle: "One Photos prompt · album + Field Book",
+                            accent: true
                         )
                     }
 
                     if let onExportProof {
                         Button(action: onExportProof) {
-                            HStack {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text("EXPORT PROOF PDF")
-                                        .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                        .tracking(0.8)
-                                    Text("Contact sheet of keepers (or all frames)")
-                                        .font(.system(size: 9, weight: .medium, design: .monospaced))
-                                        .foregroundColor(.white.opacity(0.45))
-                                }
-                                Spacer()
-                            }
-                            .foregroundColor(.white.opacity(0.9))
-                            .padding(14)
-                            .background(Color.white.opacity(0.06))
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 2)
-                                    .stroke(CullPalette.hairline.opacity(0.6), lineWidth: 0.6)
+                            finishSheetRow(
+                                title: "EXPORT PROOF PDF",
+                                subtitle: "Contact sheet of keepers (or all frames)",
+                                accent: false
                             )
                         }
                     }
 
                     Button(action: onMarkOnly) {
-                        HStack {
-                            Text("KEEP REJECTS · JUST MARK THEM")
-                                .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                .tracking(0.8)
-                            Spacer()
-                        }
-                        .foregroundColor(.white.opacity(0.7))
-                        .padding(14)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 2)
-                                .stroke(Color.white.opacity(0.16), lineWidth: 0.8)
+                        finishSheetRow(
+                            title: "KEEP REJECTS · JUST MARK THEM",
+                            subtitle: nil,
+                            accent: false
                         )
                     }
 
@@ -2226,13 +2203,37 @@ struct FinishSessionSheet: View {
                             .tracking(1.5)
                             .foregroundColor(.white.opacity(0.35))
                             .frame(maxWidth: .infinity)
-                            .padding(.top, 4)
+                            .padding(.top, 12)
                     }
                 }
 
                 Spacer(minLength: 0)
             }
             .padding(24)
+        }
+    }
+
+    private func finishSheetRow(title: String, subtitle: String?, accent: Bool) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                    .tracking(0.8)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 9, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.45))
+                }
+            }
+            Spacer()
+        }
+        .foregroundColor(accent ? CullPalette.amber : .white.opacity(0.88))
+        .padding(.vertical, 14)
+        .padding(.horizontal, 4)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(accent ? CullPalette.amber.opacity(0.55) : CullPalette.hairline.opacity(0.4))
+                .frame(height: 0.6)
         }
     }
 
