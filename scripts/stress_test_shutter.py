@@ -348,7 +348,11 @@ def test_source_guards() -> None:
     check("scene deep link", 'case "scene", "mode"' in (ROOT / "ShutterDeepLink.swift").read_text())
     check("ApplyShutterSceneIntent", "struct ApplyShutterSceneIntent" in (ROOT / "ShutterAppIntents.swift").read_text())
     check("hold-to-burst shutter", "beginBurstHold" in content and "onBurstStart" in content and "Hold for burst" in content)
-    check("widget timeline reload", "WidgetCenter.shared.reloadAllTimelines" in content)
+    check(
+        "widget timeline reload",
+        "WidgetReloadGate.reload" in content
+        or "WidgetCenter.shared.reloadAllTimelines" in content,
+    )
     check("keeper JPEG share packager", "KeeperSharePackager" in proof and "jpegFileURLs" in cull)
     check("finish share dismisses first", "Dismiss done sheet first" in cull)
     check("compare EXIF + skip + reset", "metaLine(for:" in chrome and "SKIP" in chrome and "double-tap reset" in chrome)
@@ -418,6 +422,20 @@ def test_source_guards() -> None:
     check("EV drag throttled device writes", "~30Hz device writes" in content)
     check("EV drag hide only on end", "Hide timer only on drag end" in content)
     check("camera EV not Published", "Not @Published — ContentView owns EV UI" in cam)
+    # Build 108 — LE progress bus + demote dial publishes + debounce widgets
+    check("LE progress bus isolated", "final class LongExposureProgressBus" in render)
+    check("LE progress not Published on camera", "@Published var longExposureProgress" not in cam)
+    check("LE overlay observes bus", "@ObservedObject private var leBus = LongExposureProgressBus.shared" in content)
+    check("camera ISO not Published", "Not @Published — ContentView owns ISO dial" in cam)
+    check("camera zoom not Published", "Not @Published — ContentView owns zoom via @State" in cam)
+    check("widget reload gated", "enum WidgetReloadGate" in (ROOT / "ShutterDeepLink.swift").read_text())
+    check("widget reload debounced", "WidgetReloadGate.reload(minInterval: 1.5)" in content)
+    check("scrubber tickPhase no spring", "Snap ticks without stacking scrub springs" in content)
+    check("manual exposure publish guarded", "if !self.isManualExposure { self.isManualExposure = true }" in cam)
+    check("manual focus publish guarded", "if !self.isManualFocus { self.isManualFocus = true }" in cam)
+    check("compare bypass not Published", "@Published var previewLooksBypassed" not in cam)
+    check("scene assist probe leaf", "struct SceneAssistProbe" in content)
+    check("scrubber label no spring", ".animation(.easeOut(duration: 0.12), value: selection)" in content)
     check(
         "prefer 30fps preview format",
         "maxFps >= 29" in cam and "activeVideoMinFrameDuration = thirty" in cam,

@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import UIKit
 import Photos
+import WidgetKit
 
 // MARK: - Deep links (Shortcuts, widgets, quick actions)
 
@@ -150,6 +151,21 @@ enum ShutterDeepLinkCenter {
         pending.removeAll()
         isReceiving = false
         lock.unlock()
+    }
+}
+
+/// Debounce WidgetKit timeline reloads across look-sync + album mirror (Build 108).
+enum WidgetReloadGate {
+    private static var lastAt: CFAbsoluteTime = 0
+    private static let lock = NSLock()
+
+    static func reload(minInterval: CFAbsoluteTime = 1.5, force: Bool = false) {
+        lock.lock()
+        defer { lock.unlock() }
+        let now = CFAbsoluteTimeGetCurrent()
+        if !force, now - lastAt < minInterval { return }
+        lastAt = now
+        WidgetCenter.shared.reloadAllTimelines()
     }
 }
 
