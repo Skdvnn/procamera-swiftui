@@ -41,13 +41,23 @@ struct Book: Codable, Identifiable, Equatable {
 
 /// Holds GalleryStore without forwarding @Published into ContentView (Build 109).
 /// Shot appends used to rebuild the Metal finder on every capture / Photos ID attach.
+@MainActor
 final class GalleryStoreOwner: ObservableObject {
-    let store = GalleryStore()
+    let store: GalleryStore
+
+    init() {
+        store = GalleryStore()
+    }
 }
 
 /// Holds VolumeShutterObserver without ObservableObject thrash (Build 110).
+@MainActor
 final class VolumeShutterOwner {
-    let observer = VolumeShutterObserver()
+    let observer: VolumeShutterObserver
+
+    init() {
+        observer = VolumeShutterObserver()
+    }
 }
 
 final class GalleryStore: ObservableObject {

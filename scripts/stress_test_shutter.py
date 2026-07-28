@@ -558,6 +558,16 @@ def test_source_guards() -> None:
     cam_bytes = (ROOT / "CameraManager.swift").read_bytes()
     illegal = [b for b in cam_bytes if b < 0x20 and b not in (0x09, 0x0A, 0x0D)]
     check("CameraManager no illegal control bytes", not illegal, f"{len(illegal)} found")
+    # Build 116 — owners that construct MainActor types must themselves be MainActor.
+    photobook = (ROOT / "PhotoBook.swift").read_text()
+    check(
+        "GalleryStoreOwner is MainActor",
+        "@MainActor" in photobook[photobook.find("final class GalleryStoreOwner")-40:photobook.find("final class GalleryStoreOwner")+80],
+    )
+    check(
+        "VolumeShutterOwner is MainActor",
+        "@MainActor" in photobook[photobook.find("final class VolumeShutterOwner")-40:photobook.find("final class VolumeShutterOwner")+80],
+    )
     # Build 114 — tap-to-focus must work while AE/AF was locked; clear manual.
     check(
         "tap focus unlocks AEAF",
