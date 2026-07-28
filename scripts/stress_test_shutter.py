@@ -582,6 +582,14 @@ def test_source_guards() -> None:
     check("compactTop locks strip", "lockCompactTop = compactTop" in content)
     check("compactTop keeps dials path", "Classic FOCUS + shutter dials stay" in content)
     check("compactTop shows level in strip", "stripShowsLevel = showLevel || lockCompactTop" in content)
+    # Build 121 — Level must stay under EV in the big expanded dial panel.
+    check("expanded top grows for level", "expandedTopHeight" in content and "stripShowsLevel ? 146" in content)
+    check("compactTop arms horizon level", "if !showLevel { showLevel = true }" in content)
+    gauge_lvl = (ROOT / "AnalogGaugeView.swift").read_text()
+    expanded_panel = gauge_lvl[gauge_lvl.find("} else {"):gauge_lvl.find("private static let speedLabels")]
+    check("expanded dials keep level under EV", "showLevel: showLevel" in expanded_panel and "InfoBarMetalLevel(compact: false)" in gauge_lvl)
+    check("expanded level fixedSize", "fixedSize(horizontal: false, vertical: true)" in gauge_lvl[gauge_lvl.find("struct HorizontalExposureMeter"):gauge_lvl.find("struct CenterDisplay")])
+    check("expanded dials shrink for level", "showLevel ? 90 : 98" in gauge_lvl)
     check("save look fixedSize hug", "SAVE LOOK" in vf and "fixedSize(horizontal: true, vertical: true)" in vf)
     check("settings save hugs text", "Save current look" in settings and "fixedSize(horizontal: true, vertical: true)" in settings)
     # Build 117 — labeled ShutterButton args must follow declaration order.

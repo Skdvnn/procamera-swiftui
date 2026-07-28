@@ -646,6 +646,9 @@ struct ContentView: View {
             if on {
                 withAnimation(ShutterMotion.deck) { topCollapsed = true }
                 forceCloseScrubEdge()
+                // Compact top features Level — arm Horizon level so the classic
+                // expanded dials still show it under EV when Compact top is off.
+                if !showLevel { showLevel = true }
             }
         }
         .onChange(of: showPhotoBook) { _, open in
@@ -801,16 +804,19 @@ struct ContentView: View {
             // Top FOCUS/EV strip — 38pt with air so scrubbers don't crush the finder
             // (Build 100 restores bezel + spacing after the 34pt crush).
             // Compact-top locks the short strip so the finder stays fuller.
+            // Compact-top always shows the spirit level beside FOCUS / EV.
+            let stripShowsLevel = showLevel || lockCompactTop
+            // Expanded dials + Level under EV need extra height (Build 121) —
+            // the old 110pt row compressed the spirit bar out of view.
+            let expandedTopHeight: CGFloat = stripShowsLevel ? 146 : 110
             let topPanelHeight: CGFloat = hideTopStrip
                 ? 0
-                : (effectiveTopCollapsed ? (isLandscape || lockCompactTop ? 44 : 50) : 110)
+                : (effectiveTopCollapsed ? (isLandscape || lockCompactTop ? 44 : 50) : expandedTopHeight)
             let gaugeToViewfinderSpacing: CGFloat = hideTopStrip
                 ? (isLandscape ? 4 : 6)
                 : (effectiveTopCollapsed ? (lockCompactTop ? 2 : 3) : 4)
             let viewfinderToControlsSpacing: CGFloat = max(2, CollapsedChrome.viewfinderToDeckGap - 2)
             let topStripPad: CGFloat = lockCompactTop ? 8 : DS.pageMargin
-            // Compact-top always shows the spirit level beside FOCUS / EV.
-            let stripShowsLevel = showLevel || lockCompactTop
 
             ZStack(alignment: .top) {
                 // Non-Metal grip texture — stitchable vulcaniteTexture in this tree

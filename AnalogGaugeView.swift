@@ -516,10 +516,13 @@ struct HorizontalExposureMeter: View {
             .clipped()
 
             // Level replaces ISO/S under the meter — those live in the hist bar.
+            // fixedSize: the 110pt dial row used to compress this away (Build 121).
             if showLevel {
                 InfoBarMetalLevel(compact: false)
+                    .fixedSize()
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
         .contentShape(Rectangle())
         .onTapGesture(count: 5) {
             NotificationCenter.default.post(name: .toggleFingerTips, object: nil)
@@ -626,6 +629,9 @@ struct AnalogDisplayPanel: View {
                     .frame(height: 38)
                 }
             } else {
+                // Expanded dials — Level under EV is required when armed (Build 121).
+                // Slightly shorter dials when Level is on so the stack clears the panel.
+                let dialSize: CGFloat = showLevel ? 90 : 98
                 ZStack {
                     RoundedRectangle(cornerRadius: cornerRadius)
                         .fill(Color.black)
@@ -638,11 +644,11 @@ struct AnalogDisplayPanel: View {
                         .stroke(Color(hex: "333333"), lineWidth: 0.5)
                         .padding(2)
 
-                    HStack(spacing: 0) {
+                    HStack(alignment: .center, spacing: 0) {
                         FocusDial(value: $focusPosition, onChanged: onFocusChanged)
-                            .frame(width: 98, height: 98)
+                            .frame(width: dialSize, height: dialSize)
 
-                        Spacer()
+                        Spacer(minLength: 4)
 
                         CenterDisplay(
                             timerSeconds: timerSeconds,
@@ -658,14 +664,15 @@ struct AnalogDisplayPanel: View {
                             onTimerTap: onTimerTap,
                             onMacroTap: onMacroTap
                         )
+                        .fixedSize()
 
-                        Spacer()
+                        Spacer(minLength: 4)
 
                         ShutterSpeedDial(value: $shutterSpeedIndex, onChanged: onShutterSpeedChanged)
-                            .frame(width: 98, height: 98)
+                            .frame(width: dialSize, height: dialSize)
                     }
                     .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, showLevel ? 4 : 6)
                 }
             }
         }
