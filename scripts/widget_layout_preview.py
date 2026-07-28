@@ -81,8 +81,8 @@ def parse_geometry() -> dict:
     small = chunk("private var smallBody", "private var footerLine")
     looks = chunk("struct ShutterLooksView", "// MARK: - Lock Screen")
 
-    # Shared outer pad (Build 107) — every Home face uses WidgetPalette.contentPad.
-    content_pad = num(src, r"static let contentPad: CGFloat = (\d+)", 8)
+    # Shared outer pad (Build 119) — every Home face uses WidgetPalette.contentPad.
+    content_pad = num(src, r"static let contentPad: CGFloat = (\d+)", 14)
 
     def body_pad(text: str, fallback: int) -> int:
         # Prefer shared contentPad; fall back to a literal .padding(N).
@@ -98,9 +98,9 @@ def parse_geometry() -> dict:
         "med_pad": body_pad(medium, 8),
         "med_gap": num(medium, r"VStack\(alignment: \.leading, spacing: (\d+)\)", 5),
         "med_bars": num(medium, r"barHeight: (\d+)", 26),
-        # Explicit 136×108 — don't confuse with the compact shoot chip's 18×18.
-        "med_sheet_w": num(medium, r"\.frame\(width: (136), height: \d+\)", 136),
-        "med_sheet_h": num(medium, r"\.frame\(width: 136, height: (\d+)\)", 108),
+        # Explicit sheet frame — don't confuse with the compact shoot chip's 18×18.
+        "med_sheet_w": num(medium, r"\.frame\(width: (128), height: \d+\)", 128),
+        "med_sheet_h": num(medium, r"\.frame\(width: 128, height: (\d+)\)", 100),
         "large_pad": body_pad(large, 8),
         "large_gap": num(large, r"VStack\(alignment: \.leading, spacing: (\d+)\)", 7),
         "large_bars": num(large, r"barHeight: (\d+)", 30),

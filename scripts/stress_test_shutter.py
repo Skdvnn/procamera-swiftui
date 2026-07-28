@@ -575,7 +575,7 @@ def test_source_guards() -> None:
     check("minimalism settings toggle", 'title: "Minimalism"' in settings)
     check("minimalChrome on overlay", "minimalChrome: minimalismMode" in content)
     check("minimal hides top strip", "hideTopStrip = minimalismMode" in content)
-    check("minimal gear escape hatch", 'icon: "gearshape"' in content[content.find("if minimalismMode"):content.find("if minimalismMode")+350])
+    check("minimal gear escape hatch", "Escape hatch — gear lives on the expanded deck" in content)
     check("save look fixedSize hug", "SAVE LOOK" in vf and "fixedSize(horizontal: true, vertical: true)" in vf)
     check("settings save hugs text", "Save current look" in settings and "fixedSize(horizontal: true, vertical: true)" in settings)
     # Build 117 — labeled ShutterButton args must follow declaration order.
@@ -946,8 +946,8 @@ def test_source_guards() -> None:
         ".supportedFamilies([.systemSmall, .systemMedium, .systemLarge])" in widgets,
     )
     check("looks large recents section", '"RECENTS"' in widgets and "darkroom.url" in widgets)
-    # Build 102 — matched outer pad + fun photo previews.
-    check("widget shared contentPad", "static let contentPad: CGFloat = 8" in widgets)
+    # Build 102/119 — matched outer pad + fun photo previews.
+    check("widget shared contentPad", "static let contentPad: CGFloat = 14" in widgets)
     check(
         "widget bodies use contentPad",
         widgets.count("padding(WidgetPalette.contentPad)") >= 4,
@@ -956,11 +956,16 @@ def test_source_guards() -> None:
     check("widget stack exposure stamp", "exposureStamp" in widgets)
     check("widget contact scan-line", "Soft scan-line" in widgets)
     check("widget empty emulsion ghost", "Unexposed emulsion ghost" in widgets)
-    # Build 107 — tighter pad + denser detail.
-    check("widget tight contentPad 8", "Tight outer pad" in widgets)
-    check("widget medium bigger sheet", ".frame(width: 136, height: 108)" in widgets)
+    # Build 119 — restore air after Build 107's 8pt crush; keep system margins off.
+    check("widget comfortable contentPad 14", "Comfortable outer pad" in widgets)
+    check("widget medium sheet for 14pt pad", ".frame(width: 128, height: 100)" in widgets)
     check("widget small keep count", "KEEP" in widgets and "stats.keepers" in widgets)
     check("widget contentMarginsDisabled", "contentMarginsDisabled()" in widgets)
+    # Build 119 — expanded EV meter stays on the −2…+2 rail.
+    gauge_src = (ROOT / "AnalogGaugeView.swift").read_text()
+    meter = gauge_src[gauge_src.find("struct HorizontalExposureMeter"):gauge_src.find("struct CenterDisplay")]
+    check("EV meter clamps to painted rail", "Pin to the painted" in meter)
+    check("EV meter panel clipped", ".clipped()" in meter)
 
     # Build 71/112 — fun scrubbers; edge readout is now a slimmer straight rail
     aids = (ROOT / "ViewfinderAids.swift").read_text()
@@ -1400,7 +1405,7 @@ def test_widget_content() -> None:
 
     # Build 102/107 — outer pad is WidgetPalette.contentPad on every Home face.
     content_pad = parse_int(
-        wsrc, r"static let contentPad: CGFloat = (\d+)", "shared contentPad", 8
+        wsrc, r"static let contentPad: CGFloat = (\d+)", "shared contentPad", 14
     )
 
     def face_pad(chunk: str, name: str, fallback: int) -> int:
@@ -1409,10 +1414,10 @@ def test_widget_content() -> None:
             return content_pad
         return parse_int(chunk, r"\.padding\((\d+)\)", name, fallback, last=True)
 
-    pad = face_pad(medium, "launch medium padding", 8)
+    pad = face_pad(medium, "launch medium padding", 14)
     gap = parse_int(medium, r"VStack\(alignment: \.leading, spacing: (\d+)\)", "launch medium gap", 5)
     bars = parse_int(medium, r"barHeight: (\d+)", "launch medium bar height", 26)
-    sheet = parse_int(medium, r"\.frame\(width: 136, height: (\d+)\)", "launch medium sheet", 108)
+    sheet = parse_int(medium, r"\.frame\(width: 128, height: (\d+)\)", "launch medium sheet", 100)
     left = (
         text_line(10)                       # SHUTTER / roll count row
         + bars + 3 + text_line(7)           # week bars + day letters
@@ -1426,7 +1431,7 @@ def test_widget_content() -> None:
     check("launch medium sheet fits", right <= budget, f"{right}pt in {budget}pt")
 
     looks = source_chunk(wsrc, "struct ShutterLooksView", "// MARK: - Lock Screen")
-    lpad = face_pad(looks, "looks padding", 8)
+    lpad = face_pad(looks, "looks padding", 14)
     lgap = parse_int(looks, r"spacing: family == \.systemLarge \? \d+ : (\d+)", "looks medium gap", 6)
     chip = parse_int(looks, r"minHeight: family == \.systemLarge \? \d+ : (\d+)", "looks chip", 30)
     strip = parse_int(looks, r"\.frame\(width: 132, height: (\d+)\)", "looks strip", 34)
