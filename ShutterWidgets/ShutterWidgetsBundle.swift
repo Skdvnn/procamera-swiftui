@@ -32,8 +32,9 @@ enum WidgetPalette {
     static let well = Color(red: 0x0A / 255.0, green: 0x0A / 255.0, blue: 0x0A / 255.0)
     static let paper = Color(red: 0x1A / 255.0, green: 0x16 / 255.0, blue: 0x12 / 255.0)
     static let hairline = accent.opacity(0.32)
-    /// Tight outer pad — sides + top match, edge-to-edge feel (Build 107).
-    static let contentPad: CGFloat = 8
+    /// Comfortable outer pad with system margins disabled (Build 107/119).
+    /// 8pt read too tight once Apple insets were removed; 14pt is the pre-107 air.
+    static let contentPad: CGFloat = 14
 
     static var vulcaniteBackground: some View {
         LinearGradient(
@@ -739,7 +740,7 @@ struct ShutterLaunchView: View {
 
             Link(destination: ShutterDeepLink.darkroom.url) {
                 VStack(spacing: 4) {
-                    // Bigger sheet — pad drop (14→8) buys photo real estate (Build 107).
+                    // Sheet sized for 14pt outer pad — still denser than pre-107 (Build 119).
                     WidgetContactSheet(
                         frames: Array(entry.frames.prefix(4)),
                         columns: 2,
@@ -747,7 +748,7 @@ struct ShutterLaunchView: View {
                         numbered: true,
                         showSprockets: true
                     )
-                    .frame(width: 136, height: 108)
+                    .frame(width: 128, height: 100)
 
                     Text(
                         stats.hasHistory

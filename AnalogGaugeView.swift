@@ -420,12 +420,16 @@ struct NeedleShape: Shape {
 // MARK: - Horizontal Exposure Meter (Nikon-style accurate scale)
 // Based on real camera meters: -2 to +2 scale with 1/3 stop increments
 struct HorizontalExposureMeter: View {
-    let value: Float // -2 to +2
+    let value: Float // typically −2…+2; device bias can exceed that
     /// Level sits under the EV scale — ISO/S live in the hist info bar (Build 73).
     var showLevel: Bool = false
 
     // Major marks at full stops, minor marks at 1/3 stops
     private let majorMarks = ["-2", "-1", "0", "+1", "+2"]
+    /// One third-stop slot — 13 marks × 8.5pt; full stop = 3 slots.
+    private let tickSlot: CGFloat = 8.5
+    private let scaleMin: Float = -2
+    private let scaleMax: Float = 2
 
     var body: some View {
         VStack(spacing: 6) {
@@ -449,7 +453,10 @@ struct HorizontalExposureMeter: View {
                             let isMajor = i % 3 == 0
                             let stopIndex = i / 3
                             let markEV = Float(i - 6) / 3.0
-                            let leading = abs(markEV - value) <= 1.0 / 6.0
+                            // Lead off the clamped display value so a +3 bias
+                            // still lights the +2 rail instead of nothing (Build 119).
+                            let displayEV = min(scaleMax, max(scaleMin, value))
+                            let leading = abs(markEV - displayEV) <= 1.0 / 6.0
                             let edgeFade: Double = {
                                 if stopIndex == 0 || stopIndex == 4 { return 0.5 }
                                 if stopIndex == 1 || stopIndex == 3 { return 0.75 }
@@ -481,15 +488,18 @@ struct HorizontalExposureMeter: View {
                                         )
                                 }
                             }
-                            .frame(width: 8.5)
+                            .frame(width: tickSlot)
                             .animation(.easeOut(duration: 0.12), value: leading)
                         }
                     }
 
                     // Moving indicator triangle (yellow/accent color)
                     ZStack {
-                        // Triangle position: value of -2 to +2 maps to full width
-                        let indicatorOffset = CGFloat(value) * 25.5 // 102px / 4 stops = 25.5px per stop
+                        // Pin to the painted −2…+2 rail — device bias can be ±3…±8
+                        // and used to send the pip off the panel (Build 119).
+                        let displayEV = min(scaleMax, max(scaleMin, value))
+                        let pxPerStop = tickSlot * 3 // 25.5
+                        let indicatorOffset = CGFloat(displayEV) * pxPerStop
 
                         // Yellow triangle indicator pointing up at the scale
                         Triangle()
@@ -503,6 +513,7 @@ struct HorizontalExposureMeter: View {
                 }
             }
             .frame(width: 120, height: 36)
+            .clipped()
 
             // Level replaces ISO/S under the meter — those live in the hist bar.
             if showLevel {
