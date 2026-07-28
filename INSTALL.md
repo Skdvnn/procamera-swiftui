@@ -8,14 +8,16 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 120 phone test pack (Compact top):**
+**Build 121 phone test pack (Level back under EV in expanded dials):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **120**.
-Verified: Settings → Compact top locks FOCUS · EV · level strip for a fuller
-finder; classic FOCUS + shutter dials remain when the setting is off.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **121**.
+Verified: Horizon level under EV returns in the classic expanded top dials
+(taller panel + fixedSize so it can't compress away). Compact top still arms
+Level in the strip and keeps Horizon level on when you leave that mode.
 
+Build 120: Compact top setting.
 Build 119: widget pad + EV rail.
 Build 118: Minimalism mode.
 Build 112: straight scrub rail.
