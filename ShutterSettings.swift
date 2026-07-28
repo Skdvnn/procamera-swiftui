@@ -155,6 +155,7 @@ struct ShutterSettingsSheet: View {
     @Binding var naturalCapture: Bool
     @Binding var nightAssist: Bool
     @Binding var holdBurst: Bool
+    @Binding var minimalismMode: Bool
     @Binding var filmFilter: FilmFilterMode
     @Binding var lensFX: LensFXMode
     var onLookApplied: (FilmFilterMode, LensFXMode) -> Void
@@ -177,6 +178,12 @@ struct ShutterSettingsSheet: View {
                     }
 
                     dslrSection("Viewfinder") {
+                        DSLRToggleRow(
+                            title: "Minimalism",
+                            blurb: "Finder · shutter · gestures — quiet Minolta",
+                            isOn: $minimalismMode
+                        )
+                        DSLRDivider()
                         DSLRToggleRow(title: "Grid", blurb: "Rule-of-thirds overlay", isOn: $showGrid)
                         DSLRDivider()
                         DSLRToggleRow(title: "Focus peaking", blurb: "Green edge aid — not a look", isOn: $focusPeaking)
@@ -202,23 +209,25 @@ struct ShutterSettingsSheet: View {
                                 LookRecipeStore.shared.saveCurrent(film: filmFilter, lensFX: lensFX)
                                 Haptics.medium()
                             } label: {
-                                HStack(spacing: 8) {
-                                    Text(">")
-                                        .font(DS.mono(12, weight: .bold))
-                                        .foregroundStyle(DS.accent)
-                                        .frame(width: 12)
-                                    Text("Save current look")
-                                        .font(DS.mono(12, weight: .semibold))
-                                        .foregroundStyle(DS.accent)
-                                    Spacer()
+                                HStack(spacing: 6) {
                                     Image(systemName: "bookmark.fill")
                                         .font(.system(size: 11))
-                                        .foregroundStyle(DS.accent.opacity(0.85))
+                                    Text("Save current look")
+                                        .font(DS.mono(12, weight: .semibold))
                                 }
+                                .foregroundStyle(DS.accent)
                                 .padding(.horizontal, 12)
-                                .padding(.vertical, 10)
+                                .padding(.vertical, 8)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 5, style: .continuous)
+                                        .stroke(DS.accent.opacity(0.45), lineWidth: 0.7)
+                                )
+                                .fixedSize(horizontal: true, vertical: true)
                             }
                             .buttonStyle(.plain)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
                             DSLRDivider()
                         } else {
                             Text("Apply film or FX on the finder, then save.")

@@ -523,9 +523,16 @@ final class ChromePickerViewController: UIViewController, UITableViewDataSource,
             cell.textLabel?.textAlignment = .center
             cell.textLabel?.font = .monospacedSystemFont(ofSize: 9, weight: .regular)
         case .save:
-            cell.textLabel?.text = session.menu == .looks ? "  SAVE" : "  SAVE LOOK"
+            // Hug the label — no leading pad / no tail truncate in the narrow LCD well.
+            let title = session.menu == .looks ? "SAVE" : "SAVE LOOK"
+            cell.textLabel?.text = title
+            cell.textLabel?.textAlignment = .right
+            cell.textLabel?.numberOfLines = 1
+            cell.textLabel?.lineBreakMode = .byClipping
             cell.textLabel?.textColor = yellow
             cell.textLabel?.font = .monospacedSystemFont(ofSize: 10, weight: .semibold)
+            cell.layoutMargins = UIEdgeInsets(top: 0, left: 10, bottom: 0, right: 12)
+            cell.separatorInset = .zero
         }
         return cell
     }
@@ -593,6 +600,8 @@ struct ViewfinderOverlay: View {
     @Binding var focusPeaking: Bool
     /// Landscape: tuck chrome padding.
     var compactChrome: Bool = false
+    /// Quiet Minolta finder — brackets only; no aspect/flip/film/FX stack (Build 118).
+    var minimalChrome: Bool = false
     var onFlipCamera: (() -> Void)? = nil
     /// Tap film / FX — ContentView presents via UIKit (no @State flip).
     var onTogglePicker: ((ChromePickerMenu) -> Void)? = nil
@@ -609,53 +618,55 @@ struct ViewfinderOverlay: View {
                 ZStack {
                     CenterFocusBrackets()
                         .position(x: geo.size.width / 2, y: geo.size.height / 2)
-                    if showGrid {
+                    if showGrid && !minimalChrome {
                         GridLines()
                     }
-                    if aspectRatio != .full {
+                    if aspectRatio != .full && !minimalChrome {
                         AspectRatioMask(mode: aspectRatio, size: geo.size)
                     }
                 }
             }
             .allowsHitTesting(false)
 
-            VStack {
-                HStack(alignment: .top) {
-                    VStack(spacing: 8) {
-                        chromeButton {
-                            aspectRatio = aspectRatio.next
-                        } label: {
-                            Text(aspectRatio.label)
-                                .font(.system(size: 9, weight: .bold, design: .monospaced))
-                                .foregroundColor(.white.opacity(0.9))
-                        }
+            if !minimalChrome {
+                VStack {
+                    HStack(alignment: .top) {
+                        VStack(spacing: 8) {
+                            chromeButton {
+                                aspectRatio = aspectRatio.next
+                            } label: {
+                                Text(aspectRatio.label)
+                                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                                    .foregroundColor(.white.opacity(0.9))
+                            }
 
-                        chromeButton {
-                            onFlipCamera?()
-                        } label: {
-                            Image(systemName: "arrow.triangle.2.circlepath.camera")
-                                .font(.system(size: 12, weight: .medium))
-                                .foregroundColor(.white.opacity(0.85))
+                            chromeButton {
+                                onFlipCamera?()
+                            } label: {
+                                Image(systemName: "arrow.triangle.2.circlepath.camera")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundColor(.white.opacity(0.85))
+                            }
                         }
+                        .padding(compactChrome ? 10 : 16)
+
+                        Spacer().allowsHitTesting(false)
+
+                        // Film + FX — tap opens, long-press clears (Build 73).
+                        UIKitChromeLookButtons(
+                            filmActive: filmFilter != .none,
+                            fxActive: lensFX != .none,
+                            peakingOnly: focusPeaking && lensFX == .none,
+                            onFilm: { onTogglePicker?(.film) },
+                            onFX: { onTogglePicker?(.fx) },
+                            onFilmClear: { onClearLook?(.film) },
+                            onFXClear: { onClearLook?(.fx) }
+                        )
+                        .frame(width: 32, height: 32 * 2 + 8)
+                        .padding(compactChrome ? 10 : 16)
                     }
-                    .padding(compactChrome ? 10 : 16)
-
                     Spacer().allowsHitTesting(false)
-
-                    // Film + FX — tap opens, long-press clears (Build 73).
-                    UIKitChromeLookButtons(
-                        filmActive: filmFilter != .none,
-                        fxActive: lensFX != .none,
-                        peakingOnly: focusPeaking && lensFX == .none,
-                        onFilm: { onTogglePicker?(.film) },
-                        onFX: { onTogglePicker?(.fx) },
-                        onFilmClear: { onClearLook?(.film) },
-                        onFXClear: { onClearLook?(.fx) }
-                    )
-                    .frame(width: 32, height: 32 * 2 + 8)
-                    .padding(compactChrome ? 10 : 16)
                 }
-                Spacer().allowsHitTesting(false)
             }
         }
         .transaction { $0.animation = nil }
@@ -1158,6 +1169,13 @@ struct LeicaFilmPicker: View {
                         Text("SAVE LOOK")
                             .font(.system(size: 8, weight: .semibold, design: .monospaced))
                             .foregroundColor(accent.opacity(0.9))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(
+                                RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                    .stroke(accent.opacity(0.35), lineWidth: 0.6)
+                            )
+                            .fixedSize(horizontal: true, vertical: true)
                     }
                     .buttonStyle(.plain)
                 } else {
@@ -1490,6 +1508,13 @@ struct LookRecipePicker: View {
                     Text("SAVE")
                         .font(.system(size: 8, weight: .semibold, design: .monospaced))
                         .foregroundColor(accent)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(
+                            RoundedRectangle(cornerRadius: 3, style: .continuous)
+                                .stroke(accent.opacity(0.35), lineWidth: 0.6)
+                        )
+                        .fixedSize(horizontal: true, vertical: true)
                 }
                 .buttonStyle(.plain)
             }

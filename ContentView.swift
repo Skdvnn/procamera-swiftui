@@ -269,6 +269,8 @@ struct ContentView: View {
     @AppStorage("cam.zebra") private var zebraEnabled = false
     /// Off by default — motion updates were fighting the camera UI for main-thread time.
     @AppStorage("cam.showLevel") private var showLevel = false
+    /// Quiet Minolta finder — opt-in mode; default chrome unchanged when off (Build 118).
+    @AppStorage("cam.minimalism") private var minimalismMode = false
     @AppStorage("cam.shootMode") private var shootModeRaw: String = ShootMode.auto.rawValue
     @AppStorage("cam.defaultFilm") private var defaultFilmRaw: Int = FilmFilterMode.none.rawValue
     @AppStorage("cam.captureFormat") private var captureFormatRaw: String = CaptureFormat.heic.rawValue
@@ -598,6 +600,7 @@ struct ContentView: View {
                 naturalCapture: $naturalCapture,
                 nightAssist: $nightAssistEnabled,
                 holdBurst: $holdBurstEnabled,
+                minimalismMode: $minimalismMode,
                 filmFilter: $filmFilter,
                 lensFX: $lensFX,
                 onLookApplied: { film, fx in
@@ -623,6 +626,17 @@ struct ContentView: View {
         .onChange(of: topCollapsed) { _, _ in
             // FocusDial ↔ compact scrubber swap must not leave the side rail stuck.
             forceCloseScrubEdge()
+        }
+        .onChange(of: minimalismMode) { _, on in
+            // Mode only — default chrome stays when off. On: quiet finder + decks in.
+            if on {
+                withAnimation(ShutterMotion.deck) {
+                    bottomCollapsed = true
+                    topCollapsed = true
+                }
+                forceCloseScrubEdge()
+                ChromePickerGate.dismiss()
+            }
         }
         .onChange(of: showPhotoBook) { _, open in
             if open {
@@ -766,13 +780,20 @@ struct ContentView: View {
             let isLandscape = geo.size.width > geo.size.height
             // Landscape: keep the top dial compact. Bottom deck can expand —
             // trapping it collapsed made swipe-up feel broken.
-            let effectiveTopCollapsed = topCollapsed || isLandscape
+            let effectiveTopCollapsed = topCollapsed || isLandscape || minimalismMode
             let effectiveBottomCollapsed = bottomCollapsed
+            // Minimalism: hide the FOCUS/EV strip entirely — gestures own exposure/focus.
+            // Deck swipe still expands for flash / format / S·ISO when needed.
+            let hideTopStrip = minimalismMode
 
             // Top FOCUS/EV strip — 38pt with air so scrubbers don't crush the finder
             // (Build 100 restores bezel + spacing after the 34pt crush).
-            let topPanelHeight: CGFloat = effectiveTopCollapsed ? (isLandscape ? 44 : 50) : 110
-            let gaugeToViewfinderSpacing: CGFloat = effectiveTopCollapsed ? 3 : 4
+            let topPanelHeight: CGFloat = hideTopStrip
+                ? 0
+                : (effectiveTopCollapsed ? (isLandscape ? 44 : 50) : 110)
+            let gaugeToViewfinderSpacing: CGFloat = hideTopStrip
+                ? (isLandscape ? 4 : 6)
+                : (effectiveTopCollapsed ? 3 : 4)
             let viewfinderToControlsSpacing: CGFloat = max(2, CollapsedChrome.viewfinderToDeckGap - 2)
 
             ZStack(alignment: .top) {
@@ -786,104 +807,107 @@ struct ContentView: View {
                 .allowsHitTesting(false)
 
                 VStack(spacing: 0) {
-                    // TOP: Analog Display Panel — FOCUS/EV when compact
-                    LiveExposureChrome(
-                        isManualExposure: isManualExposure,
-                        isoOverride: isoValue,
-                        shutterOverride: shutterSpeeds[safeShutterSpeedIndex]
-                    ) { liveISO, liveShutter in
-                        AnalogDisplayPanel(
-                            focusPosition: $focusPosition,
-                            exposureValue: $exposureValue,
-                            shutterSpeedIndex: $shutterSpeedIndex,
-                            timerSeconds: timerSeconds,
-                            iso: liveISO,
-                            isoIsAuto: !isManualExposure,
-                            shutterLabel: liveShutter,
-                            shutterIsAuto: !isManualExposure,
-                            flashMode: flashModeLabel(flashMode),
-                            macroEnabled: macroEnabled,
-                            isAutoFocus: !isManualFocusEnabled,
-                            compact: effectiveTopCollapsed,
-                            showLevel: showLevel,
-                            onFocusChanged: { val in
-                                guard !isLocked else { return }
-                                camera.setManualFocus(val)
-                                isManualFocusEnabled = true
-                                setScrubEdge(.focus, active: true, value: focusDistanceLabel(val))
-                            },
-                            onExposureChanged: { val in
-                                guard !isLocked, !isManualExposure else { return }
-                                camera.setExposure(val)
-                                setScrubEdge(.ev, active: true, value: String(format: "%+.1f", val))
-                            },
-                            onShutterSpeedChanged: { idx in
-                                guard !isLocked else { return }
-                                // Pass UI ISO so we don't lock shutter with CameraManager's stale 100.
-                                shutterSpeedIndex = idx
-                                isManualExposure = true
-                                camera.setShutterSpeed(index: idx, iso: Float(isoValue))
-                            },
-                            // Top FOCUS / EV scrubs peel the same dial as sun-drag (Build 94).
-                            onFocusScrubActive: { active in
-                                setScrubEdge(
-                                    .focus,
-                                    active: active,
-                                    value: focusDistanceLabel(focusPosition)
-                                )
-                            },
-                            onEVScrubActive: { active in
-                                setScrubEdge(
-                                    .ev,
-                                    active: active,
-                                    value: String(format: "%+.1f", exposureValue)
-                                )
-                            },
-                            onTimerTap: {
-                                Haptics.click()
-                                if timerSeconds == 0 { timerSeconds = 3 }
-                                else if timerSeconds == 3 { timerSeconds = 10 }
-                                else { timerSeconds = 0 }
-                            },
-                            onMacroTap: {
-                                Haptics.click()
-                                macroEnabled.toggle()
-                                if macroEnabled, isLocked {
-                                    isLocked = false
-                                    camera.setAEAFLocked(false)
+                    // TOP: Analog Display Panel — FOCUS/EV when compact.
+                    // Minimalism hides this strip; sun-drag + tap own exposure/focus.
+                    if !hideTopStrip {
+                        LiveExposureChrome(
+                            isManualExposure: isManualExposure,
+                            isoOverride: isoValue,
+                            shutterOverride: shutterSpeeds[safeShutterSpeedIndex]
+                        ) { liveISO, liveShutter in
+                            AnalogDisplayPanel(
+                                focusPosition: $focusPosition,
+                                exposureValue: $exposureValue,
+                                shutterSpeedIndex: $shutterSpeedIndex,
+                                timerSeconds: timerSeconds,
+                                iso: liveISO,
+                                isoIsAuto: !isManualExposure,
+                                shutterLabel: liveShutter,
+                                shutterIsAuto: !isManualExposure,
+                                flashMode: flashModeLabel(flashMode),
+                                macroEnabled: macroEnabled,
+                                isAutoFocus: !isManualFocusEnabled,
+                                compact: effectiveTopCollapsed,
+                                showLevel: showLevel,
+                                onFocusChanged: { val in
+                                    guard !isLocked else { return }
+                                    camera.setManualFocus(val)
+                                    isManualFocusEnabled = true
+                                    setScrubEdge(.focus, active: true, value: focusDistanceLabel(val))
+                                },
+                                onExposureChanged: { val in
+                                    guard !isLocked, !isManualExposure else { return }
+                                    camera.setExposure(val)
+                                    setScrubEdge(.ev, active: true, value: String(format: "%+.1f", val))
+                                },
+                                onShutterSpeedChanged: { idx in
+                                    guard !isLocked else { return }
+                                    // Pass UI ISO so we don't lock shutter with CameraManager's stale 100.
+                                    shutterSpeedIndex = idx
+                                    isManualExposure = true
+                                    camera.setShutterSpeed(index: idx, iso: Float(isoValue))
+                                },
+                                // Top FOCUS / EV scrubs peel the same dial as sun-drag (Build 94).
+                                onFocusScrubActive: { active in
+                                    setScrubEdge(
+                                        .focus,
+                                        active: active,
+                                        value: focusDistanceLabel(focusPosition)
+                                    )
+                                },
+                                onEVScrubActive: { active in
+                                    setScrubEdge(
+                                        .ev,
+                                        active: active,
+                                        value: String(format: "%+.1f", exposureValue)
+                                    )
+                                },
+                                onTimerTap: {
+                                    Haptics.click()
+                                    if timerSeconds == 0 { timerSeconds = 3 }
+                                    else if timerSeconds == 3 { timerSeconds = 10 }
+                                    else { timerSeconds = 0 }
+                                },
+                                onMacroTap: {
+                                    Haptics.click()
+                                    macroEnabled.toggle()
+                                    if macroEnabled, isLocked {
+                                        isLocked = false
+                                        camera.setAEAFLocked(false)
+                                    }
+                                    camera.setMacroEnabled(macroEnabled)
+                                    if macroEnabled {
+                                        isManualFocusEnabled = false
+                                    }
                                 }
-                                camera.setMacroEnabled(macroEnabled)
-                                if macroEnabled {
-                                    isManualFocusEnabled = false
-                                }
-                            }
+                            )
+                        }
+                        .frame(height: topPanelHeight)
+                        .padding(.horizontal, DS.pageMargin)
+                        // Higher threshold when dials are out so vertical dial drags
+                        // don't collapse the top deck.
+                        .simultaneousGesture(
+                            deckSwipe(
+                                collapseOnSwipeUp: true,
+                                // Compact scrubbers: require a clear vertical intent so
+                                // horizontal FOCUS/EV scrubs don't expand the dials.
+                                minDistance: effectiveTopCollapsed ? 48 : 56,
+                                verticalBias: effectiveTopCollapsed ? 2.8 : 1.15
+                            ) { topCollapsed = $0 }
                         )
                     }
-                    .frame(height: topPanelHeight)
-                    .padding(.horizontal, DS.pageMargin)
-                    // Higher threshold when dials are out so vertical dial drags
-                    // don't collapse the top deck.
-                    .simultaneousGesture(
-                        deckSwipe(
-                            collapseOnSwipeUp: true,
-                            // Compact scrubbers: require a clear vertical intent so
-                            // horizontal FOCUS/EV scrubs don't expand the dials.
-                            minDistance: effectiveTopCollapsed ? 48 : 56,
-                            verticalBias: effectiveTopCollapsed ? 2.8 : 1.15
-                        ) { topCollapsed = $0 }
-                    )
 
                     Spacer().frame(height: gaugeToViewfinderSpacing)
 
                     // VIEWFINDER — when bottom is collapsed, feed runs under the shutter
                     // with a bottom gradient + compact controls overlaid.
                     ZStack(alignment: .bottom) {
-                        viewfinderFrame(showHistogram: !effectiveBottomCollapsed)
+                        viewfinderFrame(showHistogram: !effectiveBottomCollapsed && !minimalismMode)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .layoutPriority(1)
                             .padding(.horizontal, effectiveBottomCollapsed ? 6 : DS.pageMargin)
 
-                        if effectiveBottomCollapsed {
+                        if effectiveBottomCollapsed && !minimalismMode {
                             // Histogram BELOW shutter in z-order. Never put contentShape
                             // on the bottom-padded frame — that invisible pad sat on top
                             // of the shutter and ate every tap.
@@ -948,6 +972,7 @@ struct ContentView: View {
                             lensFX: $lensFX,
                             focusPeaking: $focusPeaking,
                             compactChrome: isLandscape,
+                            minimalChrome: minimalismMode,
                             onFlipCamera: {
                                 Haptics.click()
                                 camera.switchCamera()
@@ -1183,7 +1208,7 @@ struct ContentView: View {
     private func evaluateSceneAssist() {
         let armed = ShootMode(rawValue: shootModeRaw) == .auto || shootModeRaw == "auto"
         sceneAssist.evaluate(
-            enabled: nightAssistEnabled,
+            enabled: nightAssistEnabled && !minimalismMode,
             capturing: isCapturing,
             bursting: isBurstHolding,
             longExposure: camera.isLongExposureCapturing,
@@ -1860,6 +1885,16 @@ struct ContentView: View {
 
                 ViewfinderVignette()
 
+                // Minimalism hides the top EV strip — keep the spirit level as a
+                // quiet finder tick when the setting is on (Build 118).
+                if minimalismMode && showLevel {
+                    InfoBarMetalLevel(compact: true)
+                        .frame(width: 120, height: 28)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .padding(.top, 10)
+                        .allowsHitTesting(false)
+                }
+
                 Group {
                     if timerCountdown > 0 {
                         Text("\(timerCountdown)")
@@ -2133,12 +2168,21 @@ struct ContentView: View {
 
             Spacer(minLength: 8)
 
-            WBPill(
-                whiteBalanceIndex: $whiteBalanceIndex,
-                onChanged: { mode in
-                    camera.setWhiteBalance(mode: mode)
+            if minimalismMode {
+                // Escape hatch — gear lives on the expanded deck otherwise.
+                ModeControl(icon: "gearshape", isActive: showSettings) {
+                    Haptics.click()
+                    showSettings = true
                 }
-            )
+                .frame(width: 84, alignment: .trailing)
+            } else {
+                WBPill(
+                    whiteBalanceIndex: $whiteBalanceIndex,
+                    onChanged: { mode in
+                        camera.setWhiteBalance(mode: mode)
+                    }
+                )
+            }
         }
         .padding(.horizontal, DS.pageMargin)
         .padding(.vertical, compact ? 4 : 6)
