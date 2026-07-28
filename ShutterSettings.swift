@@ -156,6 +156,7 @@ struct ShutterSettingsSheet: View {
     @Binding var nightAssist: Bool
     @Binding var holdBurst: Bool
     @Binding var minimalismMode: Bool
+    @Binding var compactTop: Bool
     @Binding var filmFilter: FilmFilterMode
     @Binding var lensFX: LensFXMode
     var onLookApplied: (FilmFilterMode, LensFXMode) -> Void
@@ -182,6 +183,12 @@ struct ShutterSettingsSheet: View {
                             title: "Minimalism",
                             blurb: "Finder · shutter · gestures — quiet Minolta",
                             isOn: $minimalismMode
+                        )
+                        DSLRDivider()
+                        DSLRToggleRow(
+                            title: "Compact top",
+                            blurb: "Focus · EV · level strip — fuller finder",
+                            isOn: $compactTop
                         )
                         DSLRDivider()
                         DSLRToggleRow(title: "Grid", blurb: "Rule-of-thirds overlay", isOn: $showGrid)

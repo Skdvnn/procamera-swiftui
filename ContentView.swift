@@ -271,6 +271,8 @@ struct ContentView: View {
     @AppStorage("cam.showLevel") private var showLevel = false
     /// Quiet Minolta finder — opt-in mode; default chrome unchanged when off (Build 118).
     @AppStorage("cam.minimalism") private var minimalismMode = false
+    /// Compact FOCUS · EV · level strip only — fuller finder; classic top dials stay when off (Build 120).
+    @AppStorage("cam.compactTop") private var compactTop = false
     @AppStorage("cam.shootMode") private var shootModeRaw: String = ShootMode.auto.rawValue
     @AppStorage("cam.defaultFilm") private var defaultFilmRaw: Int = FilmFilterMode.none.rawValue
     @AppStorage("cam.captureFormat") private var captureFormatRaw: String = CaptureFormat.heic.rawValue
@@ -601,6 +603,7 @@ struct ContentView: View {
                 nightAssist: $nightAssistEnabled,
                 holdBurst: $holdBurstEnabled,
                 minimalismMode: $minimalismMode,
+                compactTop: $compactTop,
                 filmFilter: $filmFilter,
                 lensFX: $lensFX,
                 onLookApplied: { film, fx in
@@ -636,6 +639,13 @@ struct ContentView: View {
                 }
                 forceCloseScrubEdge()
                 ChromePickerGate.dismiss()
+            }
+        }
+        .onChange(of: compactTop) { _, on in
+            // Lock the strip compact — classic FOCUS/S dials remain available when off.
+            if on {
+                withAnimation(ShutterMotion.deck) { topCollapsed = true }
+                forceCloseScrubEdge()
             }
         }
         .onChange(of: showPhotoBook) { _, open in
@@ -778,23 +788,29 @@ struct ContentView: View {
             let safeTop = geo.safeAreaInsets.top
             let safeBottom = geo.safeAreaInsets.bottom
             let isLandscape = geo.size.width > geo.size.height
-            // Landscape: keep the top dial compact. Bottom deck can expand —
-            // trapping it collapsed made swipe-up feel broken.
-            let effectiveTopCollapsed = topCollapsed || isLandscape || minimalismMode
+            // Landscape / Minimalism / Compact top: keep the strip compact.
+            // Classic FOCUS + shutter dials stay available when compactTop is off.
+            let effectiveTopCollapsed = topCollapsed || isLandscape || minimalismMode || compactTop
             let effectiveBottomCollapsed = bottomCollapsed
             // Minimalism: hide the FOCUS/EV strip entirely — gestures own exposure/focus.
             // Deck swipe still expands for flash / format / S·ISO when needed.
             let hideTopStrip = minimalismMode
+            // Compact top: no swipe-expand into the 110pt dial panel (Build 120).
+            let lockCompactTop = compactTop && !minimalismMode
 
             // Top FOCUS/EV strip — 38pt with air so scrubbers don't crush the finder
             // (Build 100 restores bezel + spacing after the 34pt crush).
+            // Compact-top locks the short strip so the finder stays fuller.
             let topPanelHeight: CGFloat = hideTopStrip
                 ? 0
-                : (effectiveTopCollapsed ? (isLandscape ? 44 : 50) : 110)
+                : (effectiveTopCollapsed ? (isLandscape || lockCompactTop ? 44 : 50) : 110)
             let gaugeToViewfinderSpacing: CGFloat = hideTopStrip
                 ? (isLandscape ? 4 : 6)
-                : (effectiveTopCollapsed ? 3 : 4)
+                : (effectiveTopCollapsed ? (lockCompactTop ? 2 : 3) : 4)
             let viewfinderToControlsSpacing: CGFloat = max(2, CollapsedChrome.viewfinderToDeckGap - 2)
+            let topStripPad: CGFloat = lockCompactTop ? 8 : DS.pageMargin
+            // Compact-top always shows the spirit level beside FOCUS / EV.
+            let stripShowsLevel = showLevel || lockCompactTop
 
             ZStack(alignment: .top) {
                 // Non-Metal grip texture — stitchable vulcaniteTexture in this tree
@@ -828,7 +844,7 @@ struct ContentView: View {
                                 macroEnabled: macroEnabled,
                                 isAutoFocus: !isManualFocusEnabled,
                                 compact: effectiveTopCollapsed,
-                                showLevel: showLevel,
+                                showLevel: stripShowsLevel,
                                 onFocusChanged: { val in
                                     guard !isLocked else { return }
                                     camera.setManualFocus(val)
@@ -883,9 +899,9 @@ struct ContentView: View {
                             )
                         }
                         .frame(height: topPanelHeight)
-                        .padding(.horizontal, DS.pageMargin)
+                        .padding(.horizontal, topStripPad)
                         // Higher threshold when dials are out so vertical dial drags
-                        // don't collapse the top deck.
+                        // don't collapse the top deck. Compact-top ignores expand swipes.
                         .simultaneousGesture(
                             deckSwipe(
                                 collapseOnSwipeUp: true,
@@ -893,7 +909,11 @@ struct ContentView: View {
                                 // horizontal FOCUS/EV scrubs don't expand the dials.
                                 minDistance: effectiveTopCollapsed ? 48 : 56,
                                 verticalBias: effectiveTopCollapsed ? 2.8 : 1.15
-                            ) { topCollapsed = $0 }
+                            ) { next in
+                                // Classic FOCUS + shutter dials stay a setting — lock
+                                // the strip when Compact top is on (Build 120).
+                                topCollapsed = lockCompactTop ? true : next
+                            }
                         )
                     }
 
@@ -905,7 +925,9 @@ struct ContentView: View {
                         viewfinderFrame(showHistogram: !effectiveBottomCollapsed && !minimalismMode)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .layoutPriority(1)
-                            .padding(.horizontal, effectiveBottomCollapsed ? 6 : DS.pageMargin)
+                            .padding(.horizontal, effectiveBottomCollapsed
+                                ? (lockCompactTop ? 4 : 6)
+                                : DS.pageMargin)
 
                         if effectiveBottomCollapsed && !minimalismMode {
                             // Histogram BELOW shutter in z-order. Never put contentShape

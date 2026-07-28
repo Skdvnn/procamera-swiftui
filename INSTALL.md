@@ -8,16 +8,16 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 119 phone test pack (widget pad + EV rail):**
+**Build 120 phone test pack (Compact top):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **119**.
-Verified: widget outer pad back to 14pt (system margins still disabled);
-expanded top EV meter needle stays on the −2…+2 rail when bias exceeds it.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **120**.
+Verified: Settings → Compact top locks FOCUS · EV · level strip for a fuller
+finder; classic FOCUS + shutter dials remain when the setting is off.
 
+Build 119: widget pad + EV rail.
 Build 118: Minimalism mode.
-Build 117: shutter arg order.
 Build 112: straight scrub rail.
 Build 111: darkroom page-turn + finder thrash.
 
