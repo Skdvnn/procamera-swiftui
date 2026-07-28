@@ -924,7 +924,7 @@ class CameraManager: NSObject, ObservableObject {
             self.hwTimeoutWork = nil
             self.restoreExposureAfterLongExposure()
             self.isLongExposureCapturing = false
-            
+            
             completion(nil)
         }
         hwTimeoutWork = hwTimeout
@@ -958,7 +958,7 @@ class CameraManager: NSObject, ObservableObject {
                             // Thaw multi-second preview lock, then restore manuals.
                             self.restoreExposureAfterLongExposure()
                             self.isLongExposureCapturing = false
-                            
+                            
                             completion(image)
                         }
                     }
@@ -975,7 +975,7 @@ class CameraManager: NSObject, ObservableObject {
                     self.longExposureCompletion = nil
                     self.photoStateLock.unlock()
                     self.isLongExposureCapturing = false
-                    
+                    
                     // Don't leave the finder locked on a multi-second custom exposure.
                     self.restoreExposureAfterLongExposure()
                     completion(nil)
@@ -1061,7 +1061,7 @@ class CameraManager: NSObject, ObservableObject {
                 self.restoreExposureAfterLongExposure()
                 DispatchQueue.main.async {
                     self.isLongExposureCapturing = false
-                    
+                    
                     completion(nil)
                 }
             }
@@ -1114,7 +1114,7 @@ class CameraManager: NSObject, ObservableObject {
 
         DispatchQueue.main.async {
             self.isLongExposureCapturing = false
-            
+            
             if let bakeDone {
                 bakeDone(nil)
             } else {
