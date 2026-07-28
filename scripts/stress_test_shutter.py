@@ -576,6 +576,12 @@ def test_source_guards() -> None:
     check("minimalChrome on overlay", "minimalChrome: minimalismMode" in content)
     check("minimal hides top strip", "hideTopStrip = minimalismMode" in content)
     check("minimal gear escape hatch", "Escape hatch — gear lives on the expanded deck" in content)
+    # Build 120 — Compact top (opt-in); classic dials remain when off.
+    check("compactTop AppStorage", '@AppStorage("cam.compactTop")' in content)
+    check("compactTop settings toggle", 'title: "Compact top"' in settings)
+    check("compactTop locks strip", "lockCompactTop = compactTop" in content)
+    check("compactTop keeps dials path", "Classic FOCUS + shutter dials stay" in content)
+    check("compactTop shows level in strip", "stripShowsLevel = showLevel || lockCompactTop" in content)
     check("save look fixedSize hug", "SAVE LOOK" in vf and "fixedSize(horizontal: true, vertical: true)" in vf)
     check("settings save hugs text", "Save current look" in settings and "fixedSize(horizontal: true, vertical: true)" in settings)
     # Build 117 — labeled ShutterButton args must follow declaration order.
@@ -1062,8 +1068,16 @@ def test_source_guards() -> None:
     # Compact FOCUS/EV — 38pt strip + outer dark bezel (Build 100)
     check("compact scrubbers 38pt", ".frame(height: 38)" in (ROOT / "AnalogGaugeView.swift").read_text())
     check("compact level matches scrubber height", "compact ? 38 : 36" in aids)
-    check("compact top panel clears strip", "isLandscape ? 44 : 50" in content)
-    check("gauge to viewfinder gap", "gaugeToViewfinderSpacing" in content and "? 3 : 4" in content)
+    check(
+        "compact top panel clears strip",
+        ("isLandscape || lockCompactTop ? 44 : 50" in content)
+        or ("isLandscape ? 44 : 50" in content)
+    )
+    check(
+        "gauge to viewfinder gap",
+        ("gaugeToViewfinderSpacing" in content)
+        and (("lockCompactTop ? 2 : 3" in content) or ("? 3 : 4" in content))
+    )
     check("level yellow focused only", "Yellow only on the focused/leading mark" in aids)
     check("EV meter yellow focused only", "yellow only on the focused/leading mark" in (ROOT / "AnalogGaugeView.swift").read_text())
     snap = content[content.find("struct NativeSnapScrubber"):content.find("struct ISOScrubberHorizontal")]
@@ -1111,7 +1125,11 @@ def test_source_guards() -> None:
     # Build 73 — level under top EV, shutter deep push-in, film/FX long-press clear
     check("info bar metal level", "struct InfoBarMetalLevel" in aids)
     check("level under EV meter", "InfoBarMetalLevel" in gauge and "showLevel: showLevel" in gauge)
-    check("top panel showLevel wiring", "showLevel: showLevel" in content[content.find("AnalogDisplayPanel("):content.find("AnalogDisplayPanel(")+900])
+    check(
+        "top panel showLevel wiring",
+        ("showLevel: stripShowsLevel" in content[content.find("AnalogDisplayPanel("):content.find("AnalogDisplayPanel(")+900])
+        or ("showLevel: showLevel" in content[content.find("AnalogDisplayPanel("):content.find("AnalogDisplayPanel(")+900])
+    )
     check("soft fullscreen fade", "Color.black.opacity(0.20)" in content and "Color.black.opacity(0.48)" in content and "Color.black.opacity(0.74)" in content)
     check("histogram taller and wider", "compact ? 54 : 76" in content and "compact ? 32 : 46" in content)
     check("histogram exposure grid", "Fine exposure grid" in content)
