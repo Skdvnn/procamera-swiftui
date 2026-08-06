@@ -407,6 +407,9 @@ class CameraManager: NSObject, ObservableObject {
 
         session.beginConfiguration()
         session.sessionPreset = .photo
+        // Keep color space under our control; natural capture is SDR sRGB, not
+        // an automatically-selected wide-gamut/HDR workflow (Build 125).
+        session.automaticallyConfiguresCaptureDeviceForWideColor = false
 
         // Use wide angle camera directly - virtual multi-camera devices (triple/dual)
         // don't support .custom exposure mode needed for manual ISO/shutter control
@@ -455,6 +458,10 @@ class CameraManager: NSObject, ObservableObject {
 
         // Select format with longest exposure that still supports custom exposure mode
         selectBestFormatForLongExposure(device: videoDevice)
+
+        // The active format may change after the first photo-output configuration.
+        // Apply the final natural ISP/color policy before the session starts.
+        applyNaturalCapturePhotoOutputConfig()
 
         // Request full-resolution stills for the final active format
         updateMaxPhotoDimensions(for: videoDevice)
@@ -514,13 +521,40 @@ class CameraManager: NSObject, ObservableObject {
         if photoOutput.isZeroShutterLagSupported {
             photoOutput.isZeroShutterLagEnabled = false
         }
+        if photoOutput.isResponsiveCaptureSupported {
+            photoOutput.isResponsiveCaptureEnabled = false
+        }
 
         // Re-pick dimensions when natural toggles (12MP vs max).
         if let device = videoDeviceInput?.device {
+            configureNaturalDeviceOutput(device)
             updateMaxPhotoDimensions(for: device)
         }
 
         print("NaturalCapture: natural=\(natural) maxQ=\(photoOutput.maxPhotoQualityPrioritization.rawValue) proRAW=\(photoOutput.isAppleProRAWEnabled) dims=\(photoOutput.maxPhotoDimensions.width)x\(photoOutput.maxPhotoDimensions.height) rawFormats=\(photoOutput.availableRawPhotoPixelFormatTypes.count)")
+    }
+
+    /// Device-level controls that must be configured under a device lock.
+    /// These avoid wide-gamut/HDR and video-side low-light boosting in natural
+    /// mode. There is no public API to disable every Apple ISP operation; use
+    /// Bayer RAW when the actual sensor file is required.
+    private func configureNaturalDeviceOutput(_ device: AVCaptureDevice) {
+        do {
+            try device.lockForConfiguration()
+            if naturalCaptureEnabled {
+                if device.activeFormat.supportedColorSpaces.contains(.sRGB) {
+                    device.activeColorSpace = .sRGB
+                }
+                if device.isLowLightBoostSupported {
+                    device.automaticallyEnablesLowLightBoostWhenAvailable = false
+                }
+            } else if device.isLowLightBoostSupported {
+                device.automaticallyEnablesLowLightBoostWhenAvailable = true
+            }
+            device.unlockForConfiguration()
+        } catch {
+            print("NaturalCapture: device ISP configuration failed: \(error)")
+        }
     }
 
     /// Prefer pure Bayer sensor RAW over Apple ProRAW (fused / more processed).
@@ -550,6 +584,9 @@ class CameraManager: NSObject, ObservableObject {
         if natural, photoOutput.isContentAwareDistortionCorrectionSupported {
             settings.isAutoContentAwareDistortionCorrectionEnabled = false
         }
+        // Automatic still stabilization includes a digital processing pass in
+        // low light. Natural trades that rescue for one honest exposure.
+        settings.isAutoStillImageStabilizationEnabled = !natural
     }
 
     private func updateDeviceCapabilities(device: AVCaptureDevice) {
@@ -1743,6 +1780,7 @@ class CameraManager: NSObject, ObservableObject {
                     self.selectBestFormatForLongExposure(device: newDevice)
                     self.updateDeviceCapabilities(device: newDevice)
                     self.updateMaxPhotoDimensions(for: newDevice)
+                    self.applyNaturalCapturePhotoOutputConfig()
                 } else if let oldInput, self.session.canAddInput(oldInput) {
                     self.session.addInput(oldInput)
                     print("switchToLens: new input rejected — restored previous lens")

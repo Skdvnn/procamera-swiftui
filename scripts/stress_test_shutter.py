@@ -300,6 +300,28 @@ def test_source_guards() -> None:
         "zero shutter lag off",
         "isZeroShutterLagEnabled = false" in cam,
     )
+    # Build 125 — all remaining public ISP controls for the natural path.
+    check(
+        "wide color auto-config off",
+        "automaticallyConfiguresCaptureDeviceForWideColor = false" in cam,
+    )
+    check(
+        "natural forces sRGB",
+        "activeColorSpace = .sRGB" in cam
+        and "supportedColorSpaces.contains(.sRGB)" in cam,
+    )
+    check(
+        "natural disables still stabilization",
+        "isAutoStillImageStabilizationEnabled = !natural" in cam,
+    )
+    check(
+        "natural disables low light boost",
+        "automaticallyEnablesLowLightBoostWhenAvailable = false" in cam,
+    )
+    check(
+        "responsive capture off",
+        "isResponsiveCaptureEnabled = false" in cam,
+    )
     check(
         "repairs sideways portrait still",
         "repaired sideways portrait still" in cam
