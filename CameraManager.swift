@@ -12,6 +12,9 @@ import Combine
 struct CapturedStill {
     let image: UIImage
     let originalFileData: Data?
+    /// Pre-film pixels retained for non-destructive Darkroom regrades.
+    /// Only film-only captures keep this; Lens FX has no safe post chain yet.
+    let cleanImage: UIImage? = nil
 }
 
 class CameraManager: NSObject, ObservableObject {
@@ -225,12 +228,22 @@ class CameraManager: NSObject, ObservableObject {
     typealias FilmFilter = FilmFilterMode
 
     private let ciContext = ShutterRender.ciContext
+    /// Headless baker for Darkroom post-film work. It never configures or starts
+    /// a capture session; it only shares the serial Core Image renderer.
+    private static let darkroomFilmBaker = CameraManager()
 
     override init() {
         super.init()
         syncPipelineSelection()
         installSessionObservers()
         installMemoryObservers()
+    }
+
+    /// Re-grade a clean gallery master without touching the live camera state.
+    static func bakeFilmForDarkroom(_ stock: FilmFilterMode, onto image: UIImage) -> UIImage? {
+        guard stock != .none else { return image }
+        let result = darkroomFilmBaker.bakeFilmFilter(stock, onto: image)
+        return result.ok ? result.image : nil
     }
 
     deinit {
@@ -2818,7 +2831,9 @@ class CameraManager: NSObject, ObservableObject {
                 guard stillCurrent else { return }
                 let delivered: CapturedStill?
                 if needsFXBake {
-                    // Bake rewrites pixels — drop the original bitstream.
+                    // Bake rewrites pixels — drop the original bitstream. Keep a
+                    // clean master only for film-only captures; an FX chain has
+                    // no safe post-film ordering yet (Build 127).
                     if let baked = self.bakeLooksForCapture(
                         film: captureFilmFilter,
                         fx: captureLensFX,
@@ -2826,7 +2841,14 @@ class CameraManager: NSObject, ObservableObject {
                         onto: still.image
                     ) {
                         print("LensFX capture done: out=\(baked.size) orient=\(baked.imageOrientation.rawValue)")
-                        delivered = CapturedStill(image: baked, originalFileData: nil)
+                        let master = captureFilmFilter != .none && captureLensFX == .none
+                            ? still.image
+                            : nil
+                        delivered = CapturedStill(
+                            image: baked,
+                            originalFileData: nil,
+                            cleanImage: master
+                        )
                     } else {
                         print("LensFX capture BAKE FAILED — not saving clean still")
                         delivered = nil

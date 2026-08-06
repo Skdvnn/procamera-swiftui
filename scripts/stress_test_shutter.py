@@ -290,6 +290,29 @@ def test_source_guards() -> None:
     # Build 122 — clean stills keep original HEIC/JPEG bytes for Photos.
     check("CapturedStill type", "struct CapturedStill" in cam)
     check(
+        "film capture retains clean master",
+        "cleanImage: master" in cam
+        and "captureFilmFilter != .none && captureLensFX == .none" in cam,
+    )
+    check(
+        "darkroom uses dedicated film baker",
+        "static func bakeFilmForDarkroom" in cam
+        and "darkroomFilmBaker.bakeFilmFilter" in cam,
+    )
+    photobook = (ROOT / "PhotoBook.swift").read_text()
+    check(
+        "non-destructive gallery master",
+        "masterImage: UIImage? = nil" in photobook
+        and "masterURL(for: metadata.id)" in photobook
+        and "func applyFilmLook(" in photobook,
+    )
+    cull = (ROOT / "CullGallery.swift").read_text()
+    check(
+        "darkroom post film control",
+        'title: isApplyingPostFilm ? "BAKING…" : "POST FILM"' in cull
+        and "applyPostFilm(_ film: FilmFilterMode)" in cull,
+    )
+    check(
         "keeps original file bytes",
         "NaturalCapture: keeping original" in cam
         and "originalFileData" in cam
@@ -1307,6 +1330,7 @@ def test_source_guards() -> None:
     check(
         "widget refresh waits for gallery publish",
         "recordShot(framed, originalFileData: originalData) {" in content
+        or "masterImage: framedMaster" in content
         or "recordShot(framed) {" in content,
     )
     check("widget recents sort by date", ".sorted { $0.date > $1.date }" in content)

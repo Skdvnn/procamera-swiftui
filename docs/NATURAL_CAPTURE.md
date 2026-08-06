@@ -48,6 +48,15 @@ CI bake / preview working space is **Display P3**.
 
 **Film / Lens FX still bake** into the processed companion when selected (WYSIWYG). Natural only reduces Apple’s ISP fusion — it does not strip looks. RAW DNG stays clean.
 
+## Non-destructive film Darkroom (Build 127)
+Film-only captures now write a second, clean, cropped SDR JPEG inside Shutter’s
+app roll. It is never overwritten. In Darkroom, use **POST FILM** to re-bake any
+stock from that master — including **None** to restore the clean display. The
+current display JPEG and thumbnail update in the app; the Photos asset remains
+the capture-time WYSIWYG look because Photos does not offer an in-place image
+replacement API. Captures with Lens FX and legacy frames do not expose POST FILM
+until a clean master exists.
+
 ## Product
 - Settings → **Image honesty** → Natural capture (default ON)
 - **SCENE → Film**: live stock in the finder, baked into the saved HEIC/JPEG.

@@ -8,15 +8,19 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 126 phone test pack (Film + Natural Manual workflows):**
+**Build 127 phone test pack (non-destructive Darkroom film):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **126**.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **127**.
 Verified: SCENE → Film is live + baked WYSIWYG; SCENE → Natural Manual clears
 looks, forces natural SDR capture, and starts 1/125 · ISO 400. Choose RAW there
-for the clean Bayer DNG; film stocks retain their Build 124 character.
+for the clean Bayer DNG; film stocks retain their Build 124 character. Film-only
+captures now retain a clean app-side master: Darkroom → POST FILM can re-bake or
+restore the clean display without overwriting that master. Photos keeps the
+capture-time look.
 
+Build 127: clean masters + non-destructive Darkroom film regrades.
 Build 125: deeper OS-level natural capture.
 Build 124: deeper film stock recipes.
 Build 123: natural 12MP + sideways repair.

@@ -11,7 +11,10 @@ struct ShotMetadata: Codable, Identifiable, Equatable {
     let shutter: String
     let aperture: Float
     let ev: Float
-    let filmFilter: String
+    /// Current display film — Darkroom may re-bake this from the clean master.
+    var filmFilter: String
+    /// Stock selected at shutter time; nil for legacy/no-master frames.
+    var captureFilmFilter: String? = nil
     let lensFX: String
     let focalLength: Int
     /// Link to the dual-written Photos asset (nil for pre-cull-era shots).
@@ -92,6 +95,7 @@ final class GalleryStore: ObservableObject {
     func add(
         image: UIImage,
         metadata: ShotMetadata,
+        masterImage: UIImage? = nil,
         completion: (() -> Void)? = nil
     ) {
         // Write JPEG/thumb first so Darkroom never opens a blank frame.
@@ -99,6 +103,16 @@ final class GalleryStore: ObservableObject {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self = self else { return }
 
+            // Preserve the clean, cropped master before the baked display JPEG.
+            // A master write failure must never drop the captured display frame.
+            if let master = masterImage,
+               let masterData = master.normalizedUpSDR().jpegData(compressionQuality: 0.97) {
+                do {
+                    try masterData.write(to: self.masterURL(for: metadata.id), options: .atomic)
+                } catch {
+                    print("GalleryStore: clean master write failed: \(error)")
+                }
+            }
             // Near-lossless SDR archive — Photos gets original HEIC when clean (Build 122/123).
             guard let data = image.normalizedUpSDR().jpegData(compressionQuality: 0.97) else { return }
             do {
@@ -148,10 +162,12 @@ final class GalleryStore: ObservableObject {
 
         let imageURL = imageURL(for: shot.id)
         let thumbURL = thumbURL(for: shot.id)
+        let masterURL = masterURL(for: shot.id)
         thumbCache.removeObject(forKey: shot.id.uuidString as NSString)
         DispatchQueue.global(qos: .utility).async {
             try? FileManager.default.removeItem(at: imageURL)
             try? FileManager.default.removeItem(at: thumbURL)
+            try? FileManager.default.removeItem(at: masterURL)
         }
     }
 
@@ -162,6 +178,54 @@ final class GalleryStore: ObservableObject {
     // File locations used by the CloudKit uploader to build CKAssets
     func imageFileURL(for shot: ShotMetadata) -> URL { imageURL(for: shot.id) }
     func thumbFileURL(for shot: ShotMetadata) -> URL { thumbURL(for: shot.id) }
+    func hasCleanMaster(for shot: ShotMetadata) -> Bool {
+        FileManager.default.fileExists(atPath: masterURL(for: shot.id).path)
+    }
+
+    /// Re-bake the display JPEG from an immutable clean film master.
+    /// Photos retains the capture-time WYSIWYG asset; only the app roll changes.
+    func applyFilmLook(
+        to shotID: UUID,
+        film: FilmFilterMode,
+        completion: @escaping (Bool) -> Void
+    ) {
+        guard let shot = shots.first(where: { $0.id == shotID }),
+              shot.lensFX == "None",
+              let master = UIImage(contentsOfFile: masterURL(for: shotID).path) else {
+            completion(false)
+            return
+        }
+        let displayURL = imageURL(for: shotID)
+        let thumbnailURL = thumbURL(for: shotID)
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let self else { return }
+            guard let baked = CameraManager.bakeFilmForDarkroom(film, onto: master),
+                  let data = baked.normalizedUpSDR().jpegData(compressionQuality: 0.97) else {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
+            do {
+                try data.write(to: displayURL, options: .atomic)
+            } catch {
+                DispatchQueue.main.async { completion(false) }
+                return
+            }
+            if let thumb = Self.thumbnail(from: baked, longEdge: 900),
+               let thumbData = thumb.jpegData(compressionQuality: 0.8) {
+                try? thumbData.write(to: thumbnailURL, options: .atomic)
+            }
+            DispatchQueue.main.async {
+                guard let i = self.shots.firstIndex(where: { $0.id == shot.id }) else {
+                    completion(false)
+                    return
+                }
+                self.shots[i].filmFilter = film.name
+                self.thumbCache.removeObject(forKey: shot.id.uuidString as NSString)
+                self.saveIndex()
+                completion(true)
+            }
+        }
+    }
 
     func thumbnail(for shot: ShotMetadata) -> UIImage? {
         let key = shot.id.uuidString as NSString
@@ -278,6 +342,10 @@ final class GalleryStore: ObservableObject {
 
     private func thumbURL(for id: UUID) -> URL {
         directory.appendingPathComponent("\(id.uuidString)_thumb.jpg")
+    }
+
+    private func masterURL(for id: UUID) -> URL {
+        directory.appendingPathComponent("\(id.uuidString)_master.jpg")
     }
 
     private func saveIndex() {

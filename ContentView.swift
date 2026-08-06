@@ -1147,6 +1147,7 @@ struct ContentView: View {
     // Bind a captured frame into the Field Book with the live shot settings
     private func recordShot(
         _ img: UIImage,
+        masterImage: UIImage? = nil,
         originalFileData: Data? = nil,
         completion: (() -> Void)? = nil
     ) {
@@ -1158,10 +1159,16 @@ struct ContentView: View {
             aperture: apertureValue > 0 ? apertureValue : 0,
             ev: exposureValue,
             filmFilter: filmFilter.name,
+            captureFilmFilter: masterImage == nil ? nil : filmFilter.name,
             lensFX: lensFX.name,
             focalLength: focalLength
         )
-        gallery.add(image: img, metadata: metadata, completion: completion)
+        gallery.add(
+            image: img,
+            metadata: metadata,
+            masterImage: masterImage,
+            completion: completion
+        )
         // Dual-write to Photos — prefer original HEIC/JPEG bytes when clean.
         camera.saveToPhotoLibrary(img, originalFileData: originalFileData) { assetID in
             if let assetID {
@@ -1576,17 +1583,22 @@ struct ContentView: View {
     /// (FULL) and looks were not baked — otherwise Photos gets a fresh encode.
     private func finishCapturedImage(_ still: CapturedStill) {
         let framed = still.image.croppedToAspectMode(aspectRatio)
+        let framedMaster = still.cleanImage?.croppedToAspectMode(aspectRatio)
         let didCrop = framed.size != still.image.size
             || framed.scale != still.image.scale
             || framed.imageOrientation != still.image.imageOrientation
-        // Aspect crop rewrites pixels — drop the original bitstream.
-        let originalData = didCrop ? nil : still.originalFileData
+        // Aspect crop or a retained master rewrites pixels — drop original bytes.
+        let originalData = (didCrop || framedMaster != nil) ? nil : still.originalFileData
         lastCapturedImage = framed
         photoCount += 1
         CaptureChromeBus.shared.bumpPhotoCount(thumb: framed)
         // Gallery publishes only after JPEG + thumb exist. Refreshing before
         // this completion made widget recents one capture behind.
-        recordShot(framed, originalFileData: originalData) {
+        recordShot(
+            framed,
+            masterImage: framedMaster,
+            originalFileData: originalData
+        ) {
             photoCount = gallery.shots.count
             CaptureChromeBus.shared.setRecents(count: gallery.shots.count, thumb: lastCapturedImage)
             refreshWidgetRecents()
