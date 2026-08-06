@@ -14,7 +14,17 @@ struct CapturedStill {
     let originalFileData: Data?
     /// Pre-film pixels retained for non-destructive Darkroom regrades.
     /// Only film-only captures keep this; Lens FX has no safe post chain yet.
-    let cleanImage: UIImage? = nil
+    let cleanImage: UIImage?
+
+    init(
+        image: UIImage,
+        originalFileData: Data?,
+        cleanImage: UIImage? = nil
+    ) {
+        self.image = image
+        self.originalFileData = originalFileData
+        self.cleanImage = cleanImage
+    }
 }
 
 class CameraManager: NSObject, ObservableObject {

@@ -295,6 +295,10 @@ def test_source_guards() -> None:
         and "captureFilmFilter != .none && captureLensFX == .none" in cam,
     )
     check(
+        "CapturedStill accepts clean master",
+        "init(\n        image: UIImage,\n        originalFileData: Data?,\n        cleanImage: UIImage? = nil" in cam,
+    )
+    check(
         "darkroom uses dedicated film baker",
         "static func bakeFilmForDarkroom" in cam
         and "darkroomFilmBaker.bakeFilmFilter" in cam,
