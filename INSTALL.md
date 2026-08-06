@@ -8,15 +8,16 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 125 phone test pack (deeper OS-level natural capture):**
+**Build 126 phone test pack (Film + Natural Manual workflows):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **125**.
-Verified: natural forces SDR sRGB, disables digital stabilization / low-light
-boost / deferred / ZSL / responsive capture, and stays ~12MP. Use RAW for the
-sensor-first Bayer DNG; film stocks retain their Build 124 character.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **126**.
+Verified: SCENE → Film is live + baked WYSIWYG; SCENE → Natural Manual clears
+looks, forces natural SDR capture, and starts 1/125 · ISO 400. Choose RAW there
+for the clean Bayer DNG; film stocks retain their Build 124 character.
 
+Build 125: deeper OS-level natural capture.
 Build 124: deeper film stock recipes.
 Build 123: natural 12MP + sideways repair.
 Build 122: original HEIC bytes to Photos.

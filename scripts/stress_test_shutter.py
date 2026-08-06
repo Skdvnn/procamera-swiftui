@@ -272,6 +272,18 @@ def test_source_guards() -> None:
     check("switchCamera updates max dims", "updateMaxPhotoDimensions" in cam[cam.find("func switchCamera"): cam.find("func switchCamera") + 2500])
     check("speed prioritization", "maxPhotoQualityPrioritization = natural ? .speed" in cam)
     check("Bayer prefer", "isBayerRAWPixelFormat" in cam)
+    settings = (ROOT / "ShutterSettings.swift").read_text()
+    check(
+        "Natural Manual scene exists",
+        'case naturalManual = "naturalmanual"' in settings
+        and 'case .naturalManual: return "Natural Manual"' in settings,
+    )
+    check(
+        "Natural Manual forces clean manual capture",
+        "case .naturalManual:" in content
+        and "NATURAL MANUAL · 1/125 · ISO 400" in content
+        and "naturalCapture = true" in content[content.find("case .naturalManual:"):content.find("case .naturalManual:")+1300],
+    )
     check("bake always when looks", "let needsFXBake = captureLensFX != .none || captureFilmFilter != .none" in cam)
     check("no bakeLooks leftover", "bakeLooksIntoProcessed" not in cam and "bakeLooksIntoProcessed" not in content)
     check("setBakingStill", "func setBakingStill" in cam)

@@ -7,6 +7,7 @@ enum ShootMode: String, CaseIterable, Identifiable {
     /// Continuous AE that watches light and soft-suggests a SCENE (Build 105).
     case auto
     case street, night, studio, film
+    case naturalManual = "naturalmanual"
 
     var id: String { rawValue }
 
@@ -17,6 +18,7 @@ enum ShootMode: String, CaseIterable, Identifiable {
         case .night: return "Night"
         case .studio: return "Studio"
         case .film: return "Film"
+        case .naturalManual: return "Natural Manual"
         }
     }
 
@@ -27,6 +29,7 @@ enum ShootMode: String, CaseIterable, Identifiable {
         case .night: return "1/15 · ISO 1600 · clean"
         case .studio: return "Manual lock · peaking"
         case .film: return "Stock-first · soft defaults"
+        case .naturalManual: return "1/125 · ISO 400 · clean RAW feel"
         }
     }
 
@@ -37,6 +40,7 @@ enum ShootMode: String, CaseIterable, Identifiable {
         case .night: return "moon.stars"
         case .studio: return "lamp.desk"
         case .film: return "film"
+        case .naturalManual: return "camera.aperture"
         }
     }
 }

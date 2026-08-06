@@ -50,5 +50,9 @@ CI bake / preview working space is **Display P3**.
 
 ## Product
 - Settings → **Image honesty** → Natural capture (default ON)
+- **SCENE → Film**: live stock in the finder, baked into the saved HEIC/JPEG.
+- **SCENE → Natural Manual**: clears Film/FX, forces Natural capture, and starts
+  a clean manual baseline at 1/125 · ISO 400. It is the DSLR-like workflow;
+  choose RAW there when you need the Bayer DNG too.
 - Info bar shows **NAT** when natural is active
 - Format pill still chooses HEIC / JPEG / RAW; RAW uses Bayer when the device exposes it

@@ -1433,6 +1433,30 @@ struct ContentView: View {
             camera.setISO(400)
             isLocked = false
             camera.setAEAFLocked(false)
+        case .naturalManual:
+            // Clean DSLR-like baseline: no baked stock / FX, manual exposure,
+            // and the full NaturalCapture ISP policy. Film remains a separate
+            // live + baked workflow (Build 126).
+            naturalCapture = true
+            camera.naturalCaptureEnabled = true
+            showGrid = true
+            focusPeaking = false
+            zebraEnabled = false
+            filmFilter = .none
+            lensFX = .none
+            camera.selectedFilmFilter = .none
+            camera.selectedLensFX = .none
+            camera.focusPeakingEnabled = false
+            camera.zebraEnabled = false
+            LensFXEngine.shared.clearStickyTouch()
+            shutterSpeedIndex = 9 // 1/125
+            isoValue = 400
+            isManualExposure = true
+            camera.setShutterSpeed(index: 9)
+            camera.setISO(400)
+            isLocked = false
+            camera.setAEAFLocked(false)
+            showStatusToast("NATURAL MANUAL · 1/125 · ISO 400")
         }
         syncCaptureContextToSystem()
         Haptics.medium()
