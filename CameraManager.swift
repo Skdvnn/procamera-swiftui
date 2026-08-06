@@ -522,13 +522,15 @@ class CameraManager: NSObject, ObservableObject {
 
     // MARK: - Natural / rude capture (minimize Apple computational photography)
 
-    /// Configure photo output for natural (speed + Bayer) vs polished (quality + ProRAW allowed).
+    /// Configure photo output for natural (balanced + Bayer) vs polished (quality + ProRAW allowed).
     /// Must run on `sessionQueue`. There is no public "disable Deep Fusion" switch —
-    /// `.speed` + Bayer RAW + ProRAW off are the real levers (WWDC / AVFoundation).
+    /// Bayer RAW + ProRAW off are the real levers (WWDC / AVFoundation).
     private func applyNaturalCapturePhotoOutputConfig() {
         let natural = naturalCaptureEnabled
         // Per-capture prioritization cannot exceed this max.
-        photoOutput.maxPhotoQualityPrioritization = natural ? .speed : .quality
+        // `.speed` made natural low-light captures unnecessarily soft. Balanced
+        // keeps the direct SDR / no-deferred policy while allowing a sharp still.
+        photoOutput.maxPhotoQualityPrioritization = natural ? .balanced : .quality
 
         // ProRAW is Apple's fused linear DNG — more processing, not less.
         // Keep it off in natural mode so Bayer formats stay available.
@@ -595,8 +597,9 @@ class CameraManager: NSObject, ObservableObject {
 
     private func applyMinimalProcessing(to settings: inout AVCapturePhotoSettings) {
         let natural = naturalCaptureEnabled
-        // `.speed` = WYSIWYG stills with light NR only — skips Deep Fusion / heavy fusion.
-        settings.photoQualityPrioritization = natural ? .speed : .quality
+        // Keep Natural on balanced capture quality. The separate no-deferred,
+        // no-ZSL, SDR, fusion-off controls still define its honest pipeline.
+        settings.photoQualityPrioritization = natural ? .balanced : .quality
         // Red-eye is an extra face-rewrite pass — never for natural stills.
         settings.isAutoRedEyeReductionEnabled = false
         // Per-capture fusion knob lives on settings (not photoOutput).
@@ -1267,7 +1270,27 @@ class CameraManager: NSObject, ObservableObject {
                     self.isSessionRunning = self.session.isRunning
                 }
             }
+            self.resetAutoExposureBiasForNewSession()
             self.startExposureProbe()
+        }
+    }
+
+    /// A prior sun-drag EV adjustment must not silently underexpose the next
+    /// camera session. Manual exposure remains untouched.
+    private func resetAutoExposureBiasForNewSession() {
+        guard !isManualExposure, let device = videoDeviceInput?.device else { return }
+        do {
+            try device.lockForConfiguration()
+            if device.isExposureModeSupported(.continuousAutoExposure) {
+                device.exposureMode = .continuousAutoExposure
+                device.setExposureTargetBias(0) { _ in }
+            }
+            device.unlockForConfiguration()
+            DispatchQueue.main.async {
+                self.exposureValue = 0
+            }
+        } catch {
+            print("Camera: could not reset auto exposure bias: \(error)")
         }
     }
 

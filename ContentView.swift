@@ -596,7 +596,6 @@ struct ContentView: View {
                 naturalCapture: $naturalCapture,
                 nightAssist: $nightAssistEnabled,
                 holdBurst: $holdBurstEnabled,
-                minimalismMode: $minimalismMode,
                 compactTop: $compactTop,
                 filmFilter: $filmFilter,
                 lensFX: $lensFX,
@@ -624,16 +623,10 @@ struct ContentView: View {
             // FocusDial ↔ compact scrubber swap must not leave the side rail stuck.
             forceCloseScrubEdge()
         }
-        .onChange(of: minimalismMode) { _, on in
-            // Mode only — default chrome stays when off. On: quiet finder + decks in.
-            if on {
-                withAnimation(ShutterMotion.deck) {
-                    bottomCollapsed = true
-                    topCollapsed = true
-                }
-                forceCloseScrubEdge()
-                ChromePickerGate.dismiss()
-            }
+        .onAppear {
+            // Build 128 retires Minimalism: it hid useful controls and created a
+            // separate, confusing layout. Clear any old persisted preference.
+            if minimalismMode { minimalismMode = false }
         }
         .onChange(of: compactTop) { _, on in
             // Lock the strip compact — classic FOCUS/S dials remain available when off.
@@ -782,25 +775,22 @@ struct ContentView: View {
             let safeTop = geo.safeAreaInsets.top
             let safeBottom = geo.safeAreaInsets.bottom
             let isLandscape = geo.size.width > geo.size.height
-            // Landscape / Minimalism / Compact top: keep the strip compact.
+            // Landscape / Compact top: keep the strip compact.
             // Classic FOCUS + shutter dials stay available when compactTop is off.
-            let effectiveTopCollapsed = topCollapsed || isLandscape || minimalismMode || compactTop
+            let effectiveTopCollapsed = topCollapsed || isLandscape || compactTop
             let effectiveBottomCollapsed = bottomCollapsed
-            // Minimalism: hide the FOCUS/EV strip entirely — gestures own exposure/focus.
-            // Deck swipe still expands for flash / format / S·ISO when needed.
-            let hideTopStrip = minimalismMode
             // Compact top: no swipe-expand into the 110pt dial panel (Build 120).
-            let lockCompactTop = compactTop && !minimalismMode
+            let lockCompactTop = compactTop
 
             // Top FOCUS/EV strip — 38pt with air so scrubbers don't crush the finder
             // (Build 100 restores bezel + spacing after the 34pt crush).
             // Compact-top locks the short strip so the finder stays fuller.
-            let topPanelHeight: CGFloat = hideTopStrip
-                ? 0
-                : (effectiveTopCollapsed ? (isLandscape || lockCompactTop ? 44 : 50) : 110)
-            let gaugeToViewfinderSpacing: CGFloat = hideTopStrip
-                ? (isLandscape ? 4 : 6)
-                : (effectiveTopCollapsed ? (lockCompactTop ? 2 : 3) : 4)
+            let topPanelHeight: CGFloat = effectiveTopCollapsed
+                ? (isLandscape || lockCompactTop ? 44 : 50)
+                : 110
+            let gaugeToViewfinderSpacing: CGFloat = effectiveTopCollapsed
+                ? (lockCompactTop ? 2 : 3)
+                : 4
             let viewfinderToControlsSpacing: CGFloat = max(2, CollapsedChrome.viewfinderToDeckGap - 2)
             let topStripPad: CGFloat = lockCompactTop ? 8 : DS.pageMargin
             // Compact-top always shows the spirit level beside FOCUS / EV.
@@ -818,9 +808,7 @@ struct ContentView: View {
 
                 VStack(spacing: 0) {
                     // TOP: Analog Display Panel — FOCUS/EV when compact.
-                    // Minimalism hides this strip; sun-drag + tap own exposure/focus.
-                    if !hideTopStrip {
-                        LiveExposureChrome(
+                    LiveExposureChrome(
                             isManualExposure: isManualExposure,
                             isoOverride: isoValue,
                             shutterOverride: shutterSpeeds[safeShutterSpeedIndex]
@@ -909,7 +897,6 @@ struct ContentView: View {
                                 topCollapsed = lockCompactTop ? true : next
                             }
                         )
-                    }
 
                     Spacer().frame(height: gaugeToViewfinderSpacing)
 
@@ -917,15 +904,13 @@ struct ContentView: View {
                     // with a bottom gradient + compact controls overlaid.
                     // Swiped-down / collapsed: no histogram — shutter dock only (Build 121).
                     ZStack(alignment: .bottom) {
-                        viewfinderFrame(showHistogram: !effectiveBottomCollapsed && !minimalismMode)
+                        viewfinderFrame(showHistogram: !effectiveBottomCollapsed)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .layoutPriority(1)
-                            .padding(.horizontal, effectiveBottomCollapsed
-                                ? (lockCompactTop ? 4 : 6)
-                                : DS.pageMargin)
+                            .padding(.horizontal, effectiveBottomCollapsed ? 0 : DS.pageMargin)
 
                         if effectiveBottomCollapsed {
-                            // Shutter dock always stays in the quiet finder (incl. Minimalism).
+                            // Shutter dock stays visible in the edge-to-edge finder.
                             // Histogram stays off while collapsed — expanded deck only.
                             collapsedBottomOverlay(safeBottom: safeBottom, compact: isLandscape)
                                 // Fill the finder and pin chrome to the bottom edge —
@@ -950,7 +935,7 @@ struct ContentView: View {
                             lensFX: $lensFX,
                             focusPeaking: $focusPeaking,
                             compactChrome: isLandscape,
-                            minimalChrome: minimalismMode,
+                            minimalChrome: false,
                             onFlipCamera: {
                                 Haptics.click()
                                 camera.switchCamera()
@@ -969,7 +954,7 @@ struct ContentView: View {
                                 }
                             }
                         )
-                        .padding(.horizontal, effectiveBottomCollapsed ? 6 : DS.pageMargin)
+                        .padding(.horizontal, effectiveBottomCollapsed ? 0 : DS.pageMargin)
                         .zIndex(5)
 
                         // Level lives under the top EV meter (replaces ISO/S there).
@@ -1197,7 +1182,7 @@ struct ContentView: View {
     private func evaluateSceneAssist() {
         let armed = ShootMode(rawValue: shootModeRaw) == .auto || shootModeRaw == "auto"
         sceneAssist.evaluate(
-            enabled: nightAssistEnabled && !minimalismMode,
+            enabled: nightAssistEnabled,
             capturing: isCapturing,
             bursting: isBurstHolding,
             longExposure: camera.isLongExposureCapturing,
@@ -1855,8 +1840,11 @@ struct ContentView: View {
 
     @ViewBuilder
     private func viewfinderFrame(showHistogram: Bool = true) -> some View {
+        // Bottom-collapsed is the immersive finder, not a card. The old 1–2pt
+        // frame and rounded clip visibly shrank the live image.
+        let edgeToEdge = bottomCollapsed
         ZStack {
-            RoundedRectangle(cornerRadius: bottomCollapsed ? 10 : 8)
+            RoundedRectangle(cornerRadius: edgeToEdge ? 0 : 8)
                 .fill(Color.black)
 
             ZStack {
@@ -1913,16 +1901,10 @@ struct ContentView: View {
                     value: showFocusPoint
                 )
 
-                ViewfinderVignette()
-
-                // Minimalism hides the top EV strip — keep the spirit level as a
-                // quiet finder tick when the setting is on (Build 118).
-                if minimalismMode && showLevel {
-                    InfoBarMetalLevel(compact: true)
-                        .frame(width: 120, height: 28)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                        .padding(.top, 10)
-                        .allowsHitTesting(false)
+                // A dark preview-only vignette made clean natural framing look
+                // underexposed. Keep it as part of an intentional look only.
+                if filmFilter != .none || lensFX != .none {
+                    ViewfinderVignette()
                 }
 
                 Group {
@@ -2023,38 +2005,30 @@ struct ContentView: View {
 
                 // Chrome moved to parent ZStack (above collapsed fade) so FX stays tappable.
 
-                // Inner inset shadows — never steal focus / film / FX hits
-                VStack(spacing: 0) {
-                    LinearGradient(colors: [Color.black.opacity(0.6), Color.clear], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 12)
-                    Spacer()
+                if !edgeToEdge {
+                    // Inner inset shadows only belong to the deck-card layout.
+                    VStack(spacing: 0) {
+                        LinearGradient(colors: [Color.black.opacity(0.6), Color.clear], startPoint: .top, endPoint: .bottom)
+                            .frame(height: 12)
+                        Spacer()
+                    }
+                    .allowsHitTesting(false)
+                    HStack(spacing: 0) {
+                        LinearGradient(colors: [Color.black.opacity(0.5), Color.clear], startPoint: .leading, endPoint: .trailing)
+                            .frame(width: 10)
+                        Spacer()
+                    }
+                    .allowsHitTesting(false)
                 }
-                .allowsHitTesting(false)
-                HStack(spacing: 0) {
-                    LinearGradient(colors: [Color.black.opacity(0.5), Color.clear], startPoint: .leading, endPoint: .trailing)
-                        .frame(width: 10)
-                    Spacer()
-                }
-                .allowsHitTesting(false)
-                VStack(spacing: 0) {
-                    Spacer()
-                    LinearGradient(colors: [Color.clear, Color.white.opacity(0.03)], startPoint: .top, endPoint: .bottom)
-                        .frame(height: 6)
-                }
-                .allowsHitTesting(false)
-                HStack(spacing: 0) {
-                    Spacer()
-                    LinearGradient(colors: [Color.clear, Color.white.opacity(0.02)], startPoint: .leading, endPoint: .trailing)
-                        .frame(width: 4)
-                }
-                .allowsHitTesting(false)
             }
-            .clipShape(RoundedRectangle(cornerRadius: bottomCollapsed ? 8 : 6))
-            .padding(bottomCollapsed ? 1 : 2)
+            .clipShape(RoundedRectangle(cornerRadius: edgeToEdge ? 0 : 6))
+            .padding(edgeToEdge ? 0 : 2)
 
-            RoundedRectangle(cornerRadius: bottomCollapsed ? 8 : 6)
-                .stroke(Color(hex: "333333"), lineWidth: 0.5)
-                .padding(bottomCollapsed ? 1 : 2)
+            if !edgeToEdge {
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color(hex: "333333"), lineWidth: 0.5)
+                    .padding(2)
+            }
         }
     }
 
@@ -2198,21 +2172,12 @@ struct ContentView: View {
 
             Spacer(minLength: 8)
 
-            if minimalismMode {
-                // Escape hatch — gear lives on the expanded deck otherwise.
-                ModeControl(icon: "gearshape", isActive: showSettings) {
-                    Haptics.click()
-                    showSettings = true
+            WBPill(
+                whiteBalanceIndex: $whiteBalanceIndex,
+                onChanged: { mode in
+                    camera.setWhiteBalance(mode: mode)
                 }
-                .frame(width: 84, alignment: .trailing)
-            } else {
-                WBPill(
-                    whiteBalanceIndex: $whiteBalanceIndex,
-                    onChanged: { mode in
-                        camera.setWhiteBalance(mode: mode)
-                    }
-                )
-            }
+            )
         }
         .padding(.horizontal, DS.pageMargin)
         .padding(.vertical, compact ? 4 : 6)

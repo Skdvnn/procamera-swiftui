@@ -270,7 +270,8 @@ def test_source_guards() -> None:
     check("settings fusion off", "settings.isAutoVirtualDeviceFusionEnabled = false" in cam)
     check("capture on sessionQueue", "sessionQueue.async" in cam and "capturePhoto(with: settings" in cam)
     check("switchCamera updates max dims", "updateMaxPhotoDimensions" in cam[cam.find("func switchCamera"): cam.find("func switchCamera") + 2500])
-    check("speed prioritization", "maxPhotoQualityPrioritization = natural ? .speed" in cam)
+    check("balanced natural prioritization", "maxPhotoQualityPrioritization = natural ? .balanced" in cam)
+    check("new session clears stale EV bias", "resetAutoExposureBiasForNewSession()" in cam)
     check("Bayer prefer", "isBayerRAWPixelFormat" in cam)
     settings = (ROOT / "ShutterSettings.swift").read_text()
     check(
@@ -398,12 +399,11 @@ def test_source_guards() -> None:
         and ".simultaneousGesture(bottomDeckSwipe)" in content
         and "Above viewfinder chrome so shutter wins taps" in content,
     )
-    # Build 121 — swiped-down finder hides histogram; shutter always stays
-    # (including Minimalism, which previously gated the whole collapsed overlay off).
+    # Build 128 — swiped-down finder is edge-to-edge; shutter always stays.
     check(
         "collapsed always shows shutter dock",
         "if effectiveBottomCollapsed {" in content
-        and "Shutter dock always stays in the quiet finder" in content
+        and "Shutter dock stays visible in the edge-to-edge finder" in content
         and "if effectiveBottomCollapsed && !minimalismMode" not in content,
     )
     check(
@@ -703,24 +703,18 @@ def test_source_guards() -> None:
         "VolumeShutterOwner is MainActor",
         "@MainActor" in photobook[photobook.find("final class VolumeShutterOwner")-40:photobook.find("final class VolumeShutterOwner")+80],
     )
-    # Build 118 — Minimalism mode (opt-in) + Save button hugs label.
+    # Build 128 — Minimalism was retired; direct deck swipes own the finder.
     settings = (ROOT / "ShutterSettings.swift").read_text()
     vf = (ROOT / "ViewfinderOverlay.swift").read_text()
-    check("minimalism AppStorage", '@AppStorage("cam.minimalism")' in content)
-    check("minimalism settings toggle", 'title: "Minimalism"' in settings)
-    check("minimalChrome on overlay", "minimalChrome: minimalismMode" in content)
-    check("minimal hides top strip", "hideTopStrip = minimalismMode" in content)
-    check("minimal gear escape hatch", "Escape hatch — gear lives on the expanded deck" in content)
-    # Build 121 — Minimalism must keep the shutter in the collapsed dock.
-    compact_deck = content[
-        content.find("private func bottomCompactDeck") : content.find("private var bottomExpandedDeck")
-    ]
+    check("minimalism migrates old preference", "if minimalismMode { minimalismMode = false }" in content)
+    check("minimalism settings removed", 'title: "Minimalism"' not in settings)
+    check("minimal chrome disabled", "minimalChrome: false" in content)
+    check("edge-to-edge collapsed finder", "let edgeToEdge = bottomCollapsed" in content)
+    check("edge-to-edge finder removes border", ".padding(edgeToEdge ? 0 : 2)" in content)
     check(
-        "minimalism keeps collapsed shutter",
-        "Shutter dock always stays in the quiet finder (incl. Minimalism)" in content
-        and "ShutterButton(" in compact_deck
-        and "if minimalismMode {" in compact_deck
-        and "Escape hatch — gear lives on the expanded deck" in compact_deck,
+        "collapsed shutter remains visible",
+        "Shutter dock stays visible in the edge-to-edge finder." in content
+        and "ShutterButton(" in content,
     )
     # Build 120 — Compact top (opt-in); classic dials remain when off.
     check("compactTop AppStorage", '@AppStorage("cam.compactTop")' in content)

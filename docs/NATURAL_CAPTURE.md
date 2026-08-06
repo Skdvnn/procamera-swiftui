@@ -1,6 +1,6 @@
 # Natural capture — minimize Apple processing
 
-Build **125** · Branch `cursor/collapsed-hide-hist-keep-shutter-67bc`
+Build **128** · Branch `cursor/collapsed-hide-hist-keep-shutter-67bc`
 
 ## Thesis
 iPhone stills get heavy computational photography (Smart HDR / Deep Fusion / tone fusion). Shutter’s default is **natural**: deliver something closer to what the sensor saw.
@@ -9,8 +9,8 @@ There is **no public API** to disable Deep Fusion by name. The real levers:
 
 | Lever | Natural (default) | Polished |
 |---|---|---|
-| `maxPhotoQualityPrioritization` | `.speed` | `.quality` |
-| Per-capture `photoQualityPrioritization` | `.speed` | `.quality` |
+| `maxPhotoQualityPrioritization` | `.balanced` | `.quality` |
+| Per-capture `photoQualityPrioritization` | `.balanced` | `.quality` |
 | Max photo dimensions | ≤ ~12MP | largest supported |
 | Auto deferred photo delivery | off | off |
 | Zero shutter lag | off | off |
@@ -24,11 +24,15 @@ There is **no public API** to disable Deep Fusion by name. The real levers:
 | Low-light video boost | off | device default |
 | Responsive capture | off | device default |
 
-`.speed` = WYSIWYG stills with light noise reduction only (WWDC21).
+`.balanced` keeps the no-deferred SDR path while avoiding the unnecessarily soft
+low-light stills produced by the speed-first policy.
 Capping at ~12MP avoids the 24/48MP deferred / heavy-ISP path that produced
 crunchy halos and blown highlights with Film/FX off (Build 123). Build 125
 also forces sRGB/SDR, disables digital still stabilization, low-light video
 boost, and responsive capture.
+
+Build 128 resets stale AUTO EV bias whenever a new camera session begins. A
+negative sun-drag adjustment can no longer silently underexpose the next shoot.
 
 ## Public API boundary
 Apple does **not** offer a public switch to turn off all ISP operations in

@@ -159,7 +159,6 @@ struct ShutterSettingsSheet: View {
     @Binding var naturalCapture: Bool
     @Binding var nightAssist: Bool
     @Binding var holdBurst: Bool
-    @Binding var minimalismMode: Bool
     @Binding var compactTop: Bool
     @Binding var filmFilter: FilmFilterMode
     @Binding var lensFX: LensFXMode
@@ -176,19 +175,13 @@ struct ShutterSettingsSheet: View {
                         DSLRToggleRow(
                             title: "Natural capture",
                             blurb: naturalCapture
-                                ? "12MP SDR · no HDR / stabilizer / fusion"
+                                ? "12MP SDR · balanced sharpness · no deferred HDR"
                                 : "Max-res polished ISP · looks still bake",
                             isOn: $naturalCapture
                         )
                     }
 
                     dslrSection("Viewfinder") {
-                        DSLRToggleRow(
-                            title: "Minimalism",
-                            blurb: "Finder · shutter · gestures — quiet Minolta",
-                            isOn: $minimalismMode
-                        )
-                        DSLRDivider()
                         DSLRToggleRow(
                             title: "Compact top",
                             blurb: "Focus · EV · level strip — fuller finder",
