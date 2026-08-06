@@ -274,6 +274,31 @@ def test_source_guards() -> None:
     check("bake always when looks", "let needsFXBake = captureLensFX != .none || captureFilmFilter != .none" in cam)
     check("no bakeLooks leftover", "bakeLooksIntoProcessed" not in cam and "bakeLooksIntoProcessed" not in content)
     check("setBakingStill", "func setBakingStill" in cam)
+    # Build 122 — clean stills keep original HEIC/JPEG bytes for Photos.
+    check("CapturedStill type", "struct CapturedStill" in cam)
+    check(
+        "keeps original file bytes",
+        "NaturalCapture: keeping original" in cam
+        and "originalFileData" in cam
+        and "decodedProcessedStill" in cam,
+    )
+    check(
+        "content-aware distortion off",
+        "isAutoContentAwareDistortionCorrectionEnabled = false" in cam,
+    )
+    shoot = (ROOT / "ShootCull.swift").read_text()
+    check(
+        "Photos prefers original bytes",
+        "originalFileData" in shoot
+        and "addResource(with: .photo, data:" in shoot
+        and "highQualityPhotoData" in shoot,
+    )
+    check(
+        "gallery near-lossless jpeg",
+        "jpegData(compressionQuality: 0.97)" in (ROOT / "PhotoBook.swift").read_text(),
+    )
+    render = (ROOT / "ShutterRender.swift").read_text()
+    check("CI working space Display P3", "CGColorSpace.displayP3" in render)
     check("MTKView size before drawable", "drawableSize.width > 1" in preview and preview.find("drawableSize") < preview.find("currentDrawable"))
     check("deep link queue", "beginReceiving" in deep and "endReceiving" in deep)
     check("ContentView drains async", "ShutterDeepLinkCenter.beginReceiving()" in content)
@@ -680,7 +705,7 @@ def test_source_guards() -> None:
     check("cancel clears bake + photo handler", "Atomically bump leOpID" in cam or "Invalidate any in-flight still bake" in cam)
     check("switchCamera blocks mid-bake", "capturePipelineBusy(includeUILongExposure: true)" in cam[cam.find("func switchCamera"):cam.find("func switchCamera")+500])
     check("formats empty-safe", "device.formats.first" in cam and "device.formats[0]" not in cam)
-    check("HEIC decode fallback", "decodedProcessedPhoto" in cam and "CGImageSourceCreateWithData" in cam)
+    check("HEIC decode fallback", "decodedProcessedStill" in cam and "CGImageSourceCreateWithData" in cam)
     check("syncCI used in CameraManager", "ShutterRender.syncCI" in cam)
     check("live preview materializes frames", "Materialize now — CVPixelBuffer is recycled" in cam)
     check("LivePreviewBridge coalesces", "Latest-wins coalesce" in preview)
@@ -1203,7 +1228,11 @@ def test_source_guards() -> None:
     check("picker blocks hardware shutter", content.count("!ChromePickerGate.isPresented") >= 2)
     check("gallery add completion", "completion?()" in photo_book)
     check("gallery keeps chronological order", "self.shots.sort { $0.date < $1.date }" in photo_book)
-    check("widget refresh waits for gallery publish", "recordShot(framed) {" in content)
+    check(
+        "widget refresh waits for gallery publish",
+        "recordShot(framed, originalFileData: originalData) {" in content
+        or "recordShot(framed) {" in content,
+    )
     check("widget recents sort by date", ".sorted { $0.date > $1.date }" in content)
     check("clean widget frame stays clean", 'meta.filmFilter == "None" ? "Clean"' in widgets)
 

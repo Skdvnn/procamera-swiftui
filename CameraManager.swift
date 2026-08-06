@@ -6,6 +6,14 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import Combine
 
+/// Still delivered from the capture pipeline.
+/// `originalFileData` is the AVFoundation HEIC/JPEG bitstream when looks were
+/// not baked — save that to Photos instead of re-encoding via UIImage (Build 122).
+struct CapturedStill {
+    let image: UIImage
+    let originalFileData: Data?
+}
+
 class CameraManager: NSObject, ObservableObject {
     /// Not @Published — session identity never changes after init (Build 110).
     let session = AVCaptureSession()
@@ -185,7 +193,7 @@ class CameraManager: NSObject, ObservableObject {
     private var exposureSnapshotBeforeLE: (shutter: Int?, iso: Float?)?
     private var bakeTimeoutWork: DispatchWorkItem?
     /// User-facing completion kept alive across GPU bake so timeout can still unblock UI.
-    private var bakeTimeoutCompletion: ((UIImage?) -> Void)?
+    private var bakeTimeoutCompletion: ((CapturedStill?) -> Void)?
     /// Invalidates late bake / HW photo completions after cancel or timeout.
     private var bakeGeneration = UUID()
     private let photoStateLock = NSLock()
@@ -322,7 +330,7 @@ class CameraManager: NSObject, ObservableObject {
     private var videoDeviceInput: AVCaptureDeviceInput?
     private let photoOutput = AVCapturePhotoOutput()
     private let sessionQueue = DispatchQueue(label: "camera.session.queue")
-    private var photoCompletionHandler: ((UIImage?) -> Void)?
+    private var photoCompletionHandler: ((CapturedStill?) -> Void)?
     /// Prevents re-adding inputs/outputs when SwiftUI re-fires onAppear.
     private var isSessionConfigured = false
     /// Samples device.iso / exposureDuration for AUTO readouts.
@@ -498,13 +506,17 @@ class CameraManager: NSObject, ObservableObject {
 
     private func applyMinimalProcessing(to settings: inout AVCapturePhotoSettings) {
         let natural = naturalCaptureEnabled
-        // `.speed` skips the heavy multi-frame fusion path that `.quality` invites.
+        // `.speed` = WYSIWYG stills with light NR only — skips Deep Fusion / heavy fusion.
         settings.photoQualityPrioritization = natural ? .speed : .quality
         // Red-eye is an extra face-rewrite pass — never for natural stills.
         settings.isAutoRedEyeReductionEnabled = false
         // Per-capture fusion knob lives on settings (not photoOutput).
         if photoOutput.isVirtualDeviceFusionSupported {
             settings.isAutoVirtualDeviceFusionEnabled = false
+        }
+        // Ultra-wide edge rewrite — keep the frame honest when natural.
+        if natural, photoOutput.isContentAwareDistortionCorrectionSupported {
+            settings.isAutoContentAwareDistortionCorrectionEnabled = false
         }
     }
 
@@ -583,7 +595,7 @@ class CameraManager: NSObject, ObservableObject {
         return photoCompletionHandler != nil
     }
 
-    private func takePhotoHandler() -> ((UIImage?) -> Void)? {
+    private func takePhotoHandler() -> ((CapturedStill?) -> Void)? {
         photoStateLock.lock()
         defer { photoStateLock.unlock() }
         let handler = photoCompletionHandler
@@ -591,14 +603,14 @@ class CameraManager: NSObject, ObservableObject {
         return handler
     }
 
-    private func setPhotoHandler(_ handler: ((UIImage?) -> Void)?) {
+    private func setPhotoHandler(_ handler: ((CapturedStill?) -> Void)?) {
         photoStateLock.lock()
         defer { photoStateLock.unlock() }
         photoCompletionHandler = handler
     }
 
     /// Deliver a bake result once. Generation mismatch means cancel/timeout won.
-    private func finishUserBake(_ image: UIImage?, generation: UUID) {
+    private func finishUserBake(_ still: CapturedStill?, generation: UUID) {
         photoStateLock.lock()
         guard bakeGeneration == generation else {
             photoStateLock.unlock()
@@ -618,7 +630,7 @@ class CameraManager: NSObject, ObservableObject {
             guard let self else { return }
             self.isLongExposureCapturing = false
             self.clearLEProgressUI()
-            done?(image)
+            done?(still)
         }
     }
 
@@ -954,12 +966,12 @@ class CameraManager: NSObject, ObservableObject {
                             filmFilter: captureFilm,
                             lensFX: captureFX,
                             morphTouch: self.longExposureMorphTouch
-                        ) { image in
+                        ) { still in
                             // Thaw multi-second preview lock, then restore manuals.
                             self.restoreExposureAfterLongExposure()
                             self.isLongExposureCapturing = false
                             
-                            completion(image)
+                            completion(still?.image)
                         }
                     }
                 }
@@ -2306,9 +2318,13 @@ class CameraManager: NSObject, ObservableObject {
         ))
 
         let dims: [CGFloat] = [4096, 3072, 2048, 1536]
+        let bakeSpace = CGColorSpace(name: CGColorSpace.displayP3) ?? CGColorSpaceCreateDeviceRGB()
         let contexts: [CIContext] = [
             ciContext,
-            CIContext(options: [.useSoftwareRenderer: true])
+            CIContext(options: [
+                .useSoftwareRenderer: true,
+                .workingColorSpace: bakeSpace
+            ])
         ]
 
         for dim in dims {
@@ -2622,7 +2638,7 @@ class CameraManager: NSObject, ObservableObject {
         filmFilter: FilmFilter? = nil,
         lensFX: LensFXMode? = nil,
         morphTouch: MorphTouchState? = nil,
-        completion: @escaping (UIImage?) -> Void
+        completion: @escaping (CapturedStill?) -> Void
     ) {
         // Serialize: block mid-bake, STACK accumulation, and any in-flight LE.
         // Do NOT use isLongExposureCapturing — HW LE sets that before calling us.
@@ -2642,6 +2658,7 @@ class CameraManager: NSObject, ObservableObject {
         }()
         // Selected film/FX always bake into the processed companion (WYSIWYG).
         // Natural capture only reduces Apple ISP fusion — it does not strip looks.
+        // Clean stills keep original HEIC/JPEG bytes for Photos (Build 122).
         // RAW DNG stays clean via the separate raw callback.
         let needsFXBake = captureLensFX != .none || captureFilmFilter != .none
 
@@ -2662,17 +2679,17 @@ class CameraManager: NSObject, ObservableObject {
         // cannot race the bake registration.
         photoStateLock.lock()
         bakeGeneration = gen
-        bakeTimeoutCompletion = { img in
-            DispatchQueue.main.async { completion(img) }
+        bakeTimeoutCompletion = { still in
+            DispatchQueue.main.async { completion(still) }
         }
         photoStateLock.unlock()
-        setPhotoHandler { [weak self] image in
+        setPhotoHandler { [weak self] still in
             guard let self else { return }
             self.photoStateLock.lock()
             let genCurrent = self.bakeGeneration == gen
             self.photoStateLock.unlock()
             guard genCurrent else { return }
-            guard let image else {
+            guard let still else {
                 self.finishUserBake(nil, generation: gen)
                 return
             }
@@ -2683,23 +2700,27 @@ class CameraManager: NSObject, ObservableObject {
                 let stillCurrent = self.bakeGeneration == gen
                 self.photoStateLock.unlock()
                 guard stillCurrent else { return }
-                let filteredImage: UIImage?
+                let delivered: CapturedStill?
                 if needsFXBake {
-                    filteredImage = self.bakeLooksForCapture(
+                    // Bake rewrites pixels — drop the original bitstream.
+                    if let baked = self.bakeLooksForCapture(
                         film: captureFilmFilter,
                         fx: captureLensFX,
                         touch: captureTouch,
-                        onto: image
-                    )
+                        onto: still.image
+                    ) {
+                        print("LensFX capture done: out=\(baked.size) orient=\(baked.imageOrientation.rawValue)")
+                        delivered = CapturedStill(image: baked, originalFileData: nil)
+                    } else {
+                        print("LensFX capture BAKE FAILED — not saving clean still")
+                        delivered = nil
+                    }
                 } else {
-                    filteredImage = image
+                    // Honest path — keep sensor/ISP file bytes for Photos.
+                    print("NaturalCapture: keeping original \(still.originalFileData?.count ?? 0) bytes")
+                    delivered = still
                 }
-                if let filteredImage {
-                    print("LensFX capture done: out=\(filteredImage.size) orient=\(filteredImage.imageOrientation.rawValue)")
-                } else {
-                    print("LensFX capture BAKE FAILED — not saving clean still")
-                }
-                self.finishUserBake(filteredImage, generation: gen)
+                self.finishUserBake(delivered, generation: gen)
             }
         }
         armBakeTimeout()
@@ -2823,8 +2844,12 @@ class CameraManager: NSObject, ObservableObject {
     }
 
 
-    func saveToPhotoLibrary(_ image: UIImage, completion: @escaping (String?) -> Void) {
-        PhotosLibraryService.saveImage(image, completion: completion)
+    func saveToPhotoLibrary(
+        _ image: UIImage,
+        originalFileData: Data? = nil,
+        completion: @escaping (String?) -> Void
+    ) {
+        PhotosLibraryService.saveImage(image, originalFileData: originalFileData, completion: completion)
     }
 
     private func saveRawDataToPhotoLibrary(_ data: Data) {
@@ -2882,7 +2907,7 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
             return
         }
 
-        // Processed half arrived — try to decode.
+        // Processed half arrived — try to decode; keep original file bytes.
         let handler = photoCompletionHandler
         photoCompletionHandler = nil
         let rawToSave = pendingRawData
@@ -2890,8 +2915,7 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
         activeCaptureUniqueID = nil
         photoStateLock.unlock()
 
-        let image = decodedProcessedPhoto(photo)
-        guard let image else {
+        guard let still = decodedProcessedStill(photo) else {
             handler?(nil)
             return
         }
@@ -2900,13 +2924,15 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
         if let rawToSave {
             saveRawDataToPhotoLibrary(rawToSave)
         }
-        handler?(image)
+        handler?(still)
     }
 
-    /// Prefer UIImage(data:); fall back to CGImageSource when HEIC decode flakes.
-    private func decodedProcessedPhoto(_ photo: AVCapturePhoto) -> UIImage? {
+    /// Decode the processed companion and retain the original HEIC/JPEG bitstream.
+    private func decodedProcessedStill(_ photo: AVCapturePhoto) -> CapturedStill? {
         guard let data = photo.fileDataRepresentation() else { return nil }
-        if let ui = UIImage(data: data) { return ui }
+        if let ui = UIImage(data: data) {
+            return CapturedStill(image: ui, originalFileData: data)
+        }
         let options: [CFString: Any] = [kCGImageSourceShouldCache: false]
         guard let src = CGImageSourceCreateWithData(data as CFData, options as CFDictionary),
               let cg = CGImageSourceCreateImageAtIndex(src, 0, options as CFDictionary) else {
@@ -2925,7 +2951,8 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
         case 8: orient = .left
         default: orient = .up
         }
-        return UIImage(cgImage: cg, scale: 1, orientation: orient)
+        let ui = UIImage(cgImage: cg, scale: 1, orientation: orient)
+        return CapturedStill(image: ui, originalFileData: data)
     }
 
     func photoOutput(
@@ -3209,8 +3236,8 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         longExposureCompletion = nil
         let gen = UUID()
         bakeGeneration = gen
-        bakeTimeoutCompletion = { img in
-            DispatchQueue.main.async { completion?(img) }
+        bakeTimeoutCompletion = { still in
+            DispatchQueue.main.async { completion?(still?.image) }
         }
         photoStateLock.unlock()
 
@@ -3254,20 +3281,25 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             self.photoStateLock.unlock()
             guard genStillCurrent, opStillCurrent else { return }
 
-            let finalImage: UIImage?
+            let delivered: CapturedStill?
             if let img = resultImage {
-                // Same WYSIWYG bake policy as normal capture.
-                finalImage = self.bakeLooksForCapture(
+                // Same WYSIWYG bake policy as normal capture. LE has no original
+                // AVFoundation bitstream to preserve.
+                if let baked = self.bakeLooksForCapture(
                     film: captureFilmFilter,
                     fx: captureLensFX,
                     touch: captureTouch,
                     onto: img
-                )
+                ) {
+                    delivered = CapturedStill(image: baked, originalFileData: nil)
+                } else {
+                    delivered = nil
+                }
             } else {
-                finalImage = nil
+                delivered = nil
             }
 
-            self.finishUserBake(finalImage, generation: gen)
+            self.finishUserBake(delivered, generation: gen)
         }
     }
 

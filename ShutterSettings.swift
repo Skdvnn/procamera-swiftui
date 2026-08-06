@@ -172,7 +172,7 @@ struct ShutterSettingsSheet: View {
                         DSLRToggleRow(
                             title: "Natural capture",
                             blurb: naturalCapture
-                                ? "Less Apple fusion · looks still bake"
+                                ? "WYSIWYG ISP · original HEIC · looks still bake"
                                 : "Polished ISP · looks still bake",
                             isOn: $naturalCapture
                         )

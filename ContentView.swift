@@ -1145,7 +1145,11 @@ struct ContentView: View {
     }
 
     // Bind a captured frame into the Field Book with the live shot settings
-    private func recordShot(_ img: UIImage, completion: (() -> Void)? = nil) {
+    private func recordShot(
+        _ img: UIImage,
+        originalFileData: Data? = nil,
+        completion: (() -> Void)? = nil
+    ) {
         let metadata = ShotMetadata(
             id: UUID(),
             date: Date(),
@@ -1158,8 +1162,8 @@ struct ContentView: View {
             focalLength: focalLength
         )
         gallery.add(image: img, metadata: metadata, completion: completion)
-        // Dual-write to Photos; stash localIdentifier so cull can delete both sides.
-        camera.saveToPhotoLibrary(img) { assetID in
+        // Dual-write to Photos — prefer original HEIC/JPEG bytes when clean.
+        camera.saveToPhotoLibrary(img, originalFileData: originalFileData) { assetID in
             if let assetID {
                 gallery.setPhotosAssetIdentifier(assetID, for: metadata.id)
             } else {
@@ -1294,10 +1298,10 @@ struct ContentView: View {
             filmFilter: shutterFilm,
             lensFX: shutterFX,
             morphTouch: morphTouch
-        ) { img in
+        ) { still in
             captureChrome.setCapturing(false)
-            if let img {
-                finishCapturedImage(img)
+            if let still {
+                finishCapturedImage(still)
                 captureChrome.bumpBurstCaptured()
                 if isBurstHolding && burstCaptured < burstMaxFrames {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
@@ -1544,18 +1548,30 @@ struct ContentView: View {
     }
 
     /// Apply aspect crop then dual-write gallery + Photos.
-    private func finishCapturedImage(_ img: UIImage) {
-        let framed = img.croppedToAspectMode(aspectRatio)
+    /// Keeps original AVFoundation bytes only when the frame was not re-cropped
+    /// (FULL) and looks were not baked — otherwise Photos gets a fresh encode.
+    private func finishCapturedImage(_ still: CapturedStill) {
+        let framed = still.image.croppedToAspectMode(aspectRatio)
+        let didCrop = framed.size != still.image.size
+            || framed.scale != still.image.scale
+            || framed.imageOrientation != still.image.imageOrientation
+        // Aspect crop rewrites pixels — drop the original bitstream.
+        let originalData = didCrop ? nil : still.originalFileData
         lastCapturedImage = framed
         photoCount += 1
         CaptureChromeBus.shared.bumpPhotoCount(thumb: framed)
         // Gallery publishes only after JPEG + thumb exist. Refreshing before
         // this completion made widget recents one capture behind.
-        recordShot(framed) {
+        recordShot(framed, originalFileData: originalData) {
             photoCount = gallery.shots.count
             CaptureChromeBus.shared.setRecents(count: gallery.shots.count, thumb: lastCapturedImage)
             refreshWidgetRecents()
         }
+    }
+
+    /// Long-exposure / legacy UIImage path — no original bitstream to preserve.
+    private func finishCapturedImage(_ img: UIImage) {
+        finishCapturedImage(CapturedStill(image: img, originalFileData: nil))
     }
 
     /// Push the newest unculled frames (+ meta + stats) into the App Group.
@@ -2470,10 +2486,10 @@ struct ContentView: View {
                 filmFilter: shutterFilm,
                 lensFX: shutterFX,
                 morphTouch: morphTouch
-            ) { img in
+            ) { still in
                 captureChrome.setCapturing(false)
-                if let img = img {
-                    finishCapturedImage(img)
+                if let still {
+                    finishCapturedImage(still)
                 } else {
                     showStatusToast("Capture failed")
                     UINotificationFeedbackGenerator().notificationOccurred(.error)

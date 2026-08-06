@@ -1,6 +1,6 @@
 # Natural capture — minimize Apple processing
 
-Build **45** · Branch `cursor/natural-capture-landscape-1a29`
+Build **122** · Branch `cursor/collapsed-hide-hist-keep-shutter-67bc`
 
 ## Thesis
 iPhone stills get heavy computational photography (Smart HDR / Deep Fusion / tone fusion). Shutter’s default is **natural**: deliver something closer to what the sensor saw.
@@ -15,8 +15,18 @@ There is **no public API** to disable Deep Fusion by name. The real levers:
 | RAW pixel format | Bayer preferred | first available |
 | Virtual device fusion | off | off |
 | Auto red-eye | off | off |
+| Content-aware distortion | off | device default |
 
-**Film / Lens FX always bake** into the processed HEIC/JPEG when selected (WYSIWYG). Natural only reduces Apple’s ISP fusion — it does not strip looks. RAW DNG stays clean.
+`.speed` = WYSIWYG stills with light noise reduction only (WWDC21).
+
+## Honest save path (Build 122)
+Clean captures (no film / Lens FX bake, FULL aspect) keep the **original AVFoundation HEIC/JPEG bitstream** and write it to Photos via `PHAssetResourceType.photo` — no UIImage re-encode.
+
+When looks bake or aspect crop rewrites pixels, Photos gets a fresh HEIC @ 0.95 (JPEG @ 0.97 fallback). In-app gallery archives at JPEG 0.97.
+
+CI bake / preview working space is **Display P3** (was DeviceRGB).
+
+**Film / Lens FX still bake** into the processed companion when selected (WYSIWYG). Natural only reduces Apple’s ISP fusion — it does not strip looks. RAW DNG stays clean.
 
 ## Effects safety (build 29–30)
 - Thread-safe bake gate so live FX doesn’t fight still bake on the GPU
