@@ -229,18 +229,19 @@ def test_enum_coverage() -> None:
     check("film enum count", len(film_cases) >= 8, f"{film_cases}")
     check("fx enum count", len(fx_cases) >= 13, f"{fx_cases}")
 
-    # Live film switch
-    live = switch_cases(ROOT / "CameraManager.swift", "func applyFilmFilter(to ciImage")
+    # Build 124 — shared gradeFilmStock recipes cover live + still.
+    cam_text = (ROOT / "CameraManager.swift").read_text()
+    grade = switch_cases(ROOT / "CameraManager.swift", "private func gradeFilmStock")
+    if not grade:
+        grade = set(re.findall(
+            r"case\s+\.(\w+):",
+            cam_text[cam_text.find("private func gradeFilmStock"):cam_text.find("private func gradeFilmStock") + 2500],
+        ))
     for c in film_cases:
-        check(f"live film .{c}", c in live, f"missing in live switch; have {sorted(live)[:20]}")
-
-    # Still film switch (second applyFilmFilter)
-    still_text = (ROOT / "CameraManager.swift").read_text()
-    # Find private applyFilmFilter(_ filmFilter
-    m = re.search(r"private func applyFilmFilter\(_ filmFilter[\s\S]{0,12000}?renderCIImageSafely", still_text)
-    still = set(re.findall(r"case\s+\.(\w+)", m.group(0))) if m else set()
-    for c in film_cases:
-        check(f"still film .{c}", c in still, f"missing in still switch")
+        check(f"live film .{c}", c in grade, f"missing in gradeFilmStock; have {sorted(grade)[:20]}")
+        check(f"still film .{c}", c in grade, f"missing in gradeFilmStock; have {sorted(grade)[:20]}")
+    check("shared film budget", "enum FilmLookBudget" in cam_text and "gradeFilmStock" in cam_text)
+    check("per-stock grain amounts", "func filmGrainAmount" in cam_text)
 
     # LensFX apply switch
     fx_apply = switch_cases(ROOT / "LensFXEngine.swift", "func apply(\n        _ fx: LensFXMode")
@@ -271,9 +272,120 @@ def test_source_guards() -> None:
     check("switchCamera updates max dims", "updateMaxPhotoDimensions" in cam[cam.find("func switchCamera"): cam.find("func switchCamera") + 2500])
     check("speed prioritization", "maxPhotoQualityPrioritization = natural ? .speed" in cam)
     check("Bayer prefer", "isBayerRAWPixelFormat" in cam)
+    settings = (ROOT / "ShutterSettings.swift").read_text()
+    check(
+        "Natural Manual scene exists",
+        'case naturalManual = "naturalmanual"' in settings
+        and 'case .naturalManual: return "Natural Manual"' in settings,
+    )
+    check(
+        "Natural Manual forces clean manual capture",
+        "case .naturalManual:" in content
+        and "NATURAL MANUAL · 1/125 · ISO 400" in content
+        and "naturalCapture = true" in content[content.find("case .naturalManual:"):content.find("case .naturalManual:")+1300],
+    )
     check("bake always when looks", "let needsFXBake = captureLensFX != .none || captureFilmFilter != .none" in cam)
     check("no bakeLooks leftover", "bakeLooksIntoProcessed" not in cam and "bakeLooksIntoProcessed" not in content)
     check("setBakingStill", "func setBakingStill" in cam)
+    # Build 122 — clean stills keep original HEIC/JPEG bytes for Photos.
+    check("CapturedStill type", "struct CapturedStill" in cam)
+    check(
+        "film capture retains clean master",
+        "cleanImage: master" in cam
+        and "captureFilmFilter != .none && captureLensFX == .none" in cam,
+    )
+    check(
+        "CapturedStill accepts clean master",
+        "init(\n        image: UIImage,\n        originalFileData: Data?,\n        cleanImage: UIImage? = nil" in cam,
+    )
+    check(
+        "darkroom uses dedicated film baker",
+        "static func bakeFilmForDarkroom" in cam
+        and "darkroomFilmBaker.bakeFilmFilter" in cam,
+    )
+    photobook = (ROOT / "PhotoBook.swift").read_text()
+    check(
+        "non-destructive gallery master",
+        "masterImage: UIImage? = nil" in photobook
+        and "masterURL(for: metadata.id)" in photobook
+        and "func applyFilmLook(" in photobook,
+    )
+    cull = (ROOT / "CullGallery.swift").read_text()
+    check(
+        "darkroom post film control",
+        'title: isApplyingPostFilm ? "BAKING…" : "POST FILM"' in cull
+        and "applyPostFilm(_ film: FilmFilterMode)" in cull,
+    )
+    check(
+        "keeps original file bytes",
+        "NaturalCapture: keeping original" in cam
+        and "originalFileData" in cam
+        and "decodedProcessedStill" in cam,
+    )
+    check(
+        "content-aware distortion off",
+        "isAutoContentAwareDistortionCorrectionEnabled = false" in cam,
+    )
+    # Build 123 — natural stays ~12MP; kill deferred/ZSL crunchy HDR; upright stills.
+    check(
+        "natural caps photo dimensions",
+        "12_500_000" in cam and "preferredPhotoDimensions" in cam,
+    )
+    check(
+        "deferred photo delivery off",
+        "isAutoDeferredPhotoDeliveryEnabled = false" in cam,
+    )
+    check(
+        "zero shutter lag off",
+        "isZeroShutterLagEnabled = false" in cam,
+    )
+    # Build 125 — all remaining public ISP controls for the natural path.
+    check(
+        "wide color auto-config off",
+        "automaticallyConfiguresCaptureDeviceForWideColor = false" in cam,
+    )
+    check(
+        "natural forces sRGB",
+        "activeColorSpace = .sRGB" in cam
+        and "supportedColorSpaces.contains(.sRGB)" in cam,
+    )
+    check(
+        "natural disables still stabilization",
+        "isAutoStillImageStabilizationEnabled = !natural" in cam,
+    )
+    check(
+        "natural disables low light boost",
+        "automaticallyEnablesLowLightBoostWhenAvailable = false" in cam,
+    )
+    check(
+        "responsive capture off",
+        "isResponsiveCaptureEnabled = false" in cam,
+    )
+    check(
+        "repairs sideways portrait still",
+        "repaired sideways portrait still" in cam
+        and "normalizedUpSDR" in cam,
+    )
+    aids = (ROOT / "ViewfinderAids.swift").read_text()
+    check(
+        "SDR preferredRange on photo redraw",
+        "preferredRange = .standard" in aids
+        and "normalizedUpSDR" in aids
+        and "rotated90ClockwiseSDR" in aids,
+    )
+    shoot = (ROOT / "ShootCull.swift").read_text()
+    check(
+        "Photos prefers original bytes",
+        "originalFileData" in shoot
+        and "addResource(with: .photo, data:" in shoot
+        and "highQualityPhotoData" in shoot,
+    )
+    check(
+        "gallery near-lossless jpeg",
+        "jpegData(compressionQuality: 0.97)" in (ROOT / "PhotoBook.swift").read_text(),
+    )
+    render = (ROOT / "ShutterRender.swift").read_text()
+    check("CI working space Display P3", "CGColorSpace.displayP3" in render)
     check("MTKView size before drawable", "drawableSize.width > 1" in preview and preview.find("drawableSize") < preview.find("currentDrawable"))
     check("deep link queue", "beginReceiving" in deep and "endReceiving" in deep)
     check("ContentView drains async", "ShutterDeepLinkCenter.beginReceiving()" in content)
@@ -284,7 +396,21 @@ def test_source_guards() -> None:
         "collapsed dock swipe + shutter z-order",
         "collapsedBottomOverlay" in content
         and ".simultaneousGesture(bottomDeckSwipe)" in content
-        and "Above histogram + viewfinder chrome" in content,
+        and "Above viewfinder chrome so shutter wins taps" in content,
+    )
+    # Build 121 — swiped-down finder hides histogram; shutter always stays
+    # (including Minimalism, which previously gated the whole collapsed overlay off).
+    check(
+        "collapsed always shows shutter dock",
+        "if effectiveBottomCollapsed {" in content
+        and "Shutter dock always stays in the quiet finder" in content
+        and "if effectiveBottomCollapsed && !minimalismMode" not in content,
+    )
+    check(
+        "collapsed hides histogram",
+        "Swiped-down / collapsed: no histogram" in content
+        and "Histogram stays off while collapsed" in content
+        and "histogramBottomPad" not in content,
     )
     check(
         "shutter timer cancel stays enabled",
@@ -407,9 +533,18 @@ def test_source_guards() -> None:
     check("album export failure surfaced", "Album export failed — keepers in Field Book" in (ROOT / "CullGallery.swift").read_text())
     check("comic fallback", "func applyToon" in (ROOT / "LensFXEngine.swift").read_text())
     check("film grain bake", "func applyFilmGrain" in cam)
-    # Preview intentionally skips CineStill bloom (perf); still bake keeps it.
-    check("cinestill still bloom", "case .cinestill800:" in cam and "bloom.intensity = 0.3" in cam)
-    check("preview bloom skipped", "Preview skips bloom" in cam)
+    # Preview uses cheap screen-glow; still bake keeps real CIBloom (Build 124).
+    check(
+        "cinestill still bloom",
+        "gradeCinestill800" in cam
+        and "allowFullBloom" in cam
+        and "bloom.intensity = stillIntensity" in cam,
+    )
+    check(
+        "preview bloom skipped",
+        "Preview-safe: soft blur screened" in cam
+        and "filmHalationGlow" in cam,
+    )
     check("live preview bridge", "class LivePreviewBridge" in preview and "let livePreview = LivePreviewBridge()" in cam)
     check("no @Published filtered preview", "@Published var filteredPreviewImage" not in cam)
     check("previewCheap live FX", "previewCheap: true" in cam and "previewCheap: Bool = false" in (ROOT / "LensFXEngine.swift").read_text())
@@ -576,6 +711,17 @@ def test_source_guards() -> None:
     check("minimalChrome on overlay", "minimalChrome: minimalismMode" in content)
     check("minimal hides top strip", "hideTopStrip = minimalismMode" in content)
     check("minimal gear escape hatch", "Escape hatch — gear lives on the expanded deck" in content)
+    # Build 121 — Minimalism must keep the shutter in the collapsed dock.
+    compact_deck = content[
+        content.find("private func bottomCompactDeck") : content.find("private var bottomExpandedDeck")
+    ]
+    check(
+        "minimalism keeps collapsed shutter",
+        "Shutter dock always stays in the quiet finder (incl. Minimalism)" in content
+        and "ShutterButton(" in compact_deck
+        and "if minimalismMode {" in compact_deck
+        and "Escape hatch — gear lives on the expanded deck" in compact_deck,
+    )
     # Build 120 — Compact top (opt-in); classic dials remain when off.
     check("compactTop AppStorage", '@AppStorage("cam.compactTop")' in content)
     check("compactTop settings toggle", 'title: "Compact top"' in settings)
@@ -655,7 +801,7 @@ def test_source_guards() -> None:
     check("cancel clears bake + photo handler", "Atomically bump leOpID" in cam or "Invalidate any in-flight still bake" in cam)
     check("switchCamera blocks mid-bake", "capturePipelineBusy(includeUILongExposure: true)" in cam[cam.find("func switchCamera"):cam.find("func switchCamera")+500])
     check("formats empty-safe", "device.formats.first" in cam and "device.formats[0]" not in cam)
-    check("HEIC decode fallback", "decodedProcessedPhoto" in cam and "CGImageSourceCreateWithData" in cam)
+    check("HEIC decode fallback", "decodedProcessedStill" in cam and "CGImageSourceCreateWithData" in cam)
     check("syncCI used in CameraManager", "ShutterRender.syncCI" in cam)
     check("live preview materializes frames", "Materialize now — CVPixelBuffer is recycled" in cam)
     check("LivePreviewBridge coalesces", "Latest-wins coalesce" in preview)
@@ -1165,8 +1311,15 @@ def test_source_guards() -> None:
     check("draw normalizes CI origin", "Orientation shifts origin off" in preview)
     check("mark presented before GPU wait", "Reveal Metal as soon as this drawable" in preview)
     check("draw fail restores early", "if !metalHasPresented || consecutiveDrawFails >= 3" in preview)
-    check("live film grain preview", "applyFilmGrain(to: outputImage, amount: 0.035)" in cam)
+    check(
+        "live film grain preview",
+        "filmGrainAmount(for: stock) * budget.grainScale" in cam
+        and "grainScale" in cam,
+    )
     check("CineStill bloom cropped", "result.cropped(to: bloomExtent)" in cam)
+    check("film recipes portra curve", "gradePortra400" in cam and "filmToneCurve" in cam)
+    check("film recipes tri-x curve", "gradeTrix400" in cam)
+    check("film preview halation cheap", "filmHalationGlow" in cam and "screenBlendMode" in cam)
     check("preview normalize before CI", "Normalize origin before CI filters" in cam)
 
     # Build 76 — bug-fix pass
@@ -1178,7 +1331,12 @@ def test_source_guards() -> None:
     check("picker blocks hardware shutter", content.count("!ChromePickerGate.isPresented") >= 2)
     check("gallery add completion", "completion?()" in photo_book)
     check("gallery keeps chronological order", "self.shots.sort { $0.date < $1.date }" in photo_book)
-    check("widget refresh waits for gallery publish", "recordShot(framed) {" in content)
+    check(
+        "widget refresh waits for gallery publish",
+        "recordShot(framed, originalFileData: originalData) {" in content
+        or "masterImage: framedMaster" in content
+        or "recordShot(framed) {" in content,
+    )
     check("widget recents sort by date", ".sorted { $0.date > $1.date }" in content)
     check("clean widget frame stays clean", 'meta.filmFilter == "None" ? "Clean"' in widgets)
 
@@ -1508,7 +1666,8 @@ def main() -> int:
     check("visual report PASS", viz_report.startswith("PASS"))
     check("visual parses CollapsedChrome", "parsed CollapsedChrome:" in viz_report)
     check("visual film dock case", "film dock clears shutter: yes" in viz_report)
-    check("visual shutter z-order", "shutter z-order above histogram: yes" in viz_report)
+    check("visual shutter z-order", "collapsed shutter dock: yes" in viz_report)
+    check("visual collapsed hist hidden", "collapsed histogram: hidden" in viz_report)
     check("visual landscape expanded", "landscape expanded hist↔shutter gap:" in viz_report)
     print("\n== Widget preview render ==")
     w = subprocess.run([sys.executable, str(ROOT / "scripts/widget_layout_preview.py")], cwd=ROOT)

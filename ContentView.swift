@@ -499,7 +499,8 @@ struct ContentView: View {
         }
     }
 
-    /// Shared collapsed chrome metrics — histogram floats above fade/deck.
+    /// Shared collapsed chrome metrics — shutter dock + fade only when collapsed.
+    /// Histogram lives in the expanded viewfinder only (Build 121).
     private enum CollapsedChrome {
         static let deckHeight: CGFloat = 88
         /// Tall enough for the compact shutter (64) + vertical pad in landscape.
@@ -507,8 +508,6 @@ struct ContentView: View {
         static let fadeHeight: CGFloat = 48
         /// Approximate RefractiveGlassInfoBar height (pad + hist + readouts).
         static let infoBarHeight: CGFloat = 56
-        /// Gap between histogram bottom and shutter deck top when collapsed.
-        static let histDeckGap: CGFloat = 6
         /// Expanded: keep histogram inside the viewfinder, clear of the deck below.
         static let expandedHistogramBottomPad: CGFloat = 12
         /// Gap between viewfinder bottom and expanded shutter deck.
@@ -516,11 +515,6 @@ struct ContentView: View {
 
         static func bottomPad(safeBottom: CGFloat) -> CGFloat {
             max(safeBottom * 0.55, 8)
-        }
-
-        /// Lift the glass bar above the safe-area strip + shutter deck.
-        static func histogramBottomPad(safeBottom: CGFloat, deckHeight: CGFloat = deckHeight) -> CGFloat {
-            deckHeight + bottomPad(safeBottom: safeBottom) + histDeckGap
         }
     }
 
@@ -921,6 +915,7 @@ struct ContentView: View {
 
                     // VIEWFINDER — when bottom is collapsed, feed runs under the shutter
                     // with a bottom gradient + compact controls overlaid.
+                    // Swiped-down / collapsed: no histogram — shutter dock only (Build 121).
                     ZStack(alignment: .bottom) {
                         viewfinderFrame(showHistogram: !effectiveBottomCollapsed && !minimalismMode)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -929,48 +924,9 @@ struct ContentView: View {
                                 ? (lockCompactTop ? 4 : 6)
                                 : DS.pageMargin)
 
-                        if effectiveBottomCollapsed && !minimalismMode {
-                            // Histogram BELOW shutter in z-order. Never put contentShape
-                            // on the bottom-padded frame — that invisible pad sat on top
-                            // of the shutter and ate every tap.
-                            LiveExposureChrome(
-                                isManualExposure: isManualExposure,
-                                isoOverride: isoValue,
-                                shutterOverride: shutterSpeeds[safeShutterSpeedIndex]
-                            ) { liveISO, liveShutter in
-                                RefractiveGlassInfoBar(
-                                    iso: liveISO,
-                                    shutterSpeed: liveShutter,
-                                    aperture: apertureValue,
-                                    photoCount: photoCount,
-                                    exposureValue: exposureValue,
-                                    captureFormat: captureFormat,
-                                    aspectLabel: aspectRatio.shortLabel,
-                                    isLocked: isLocked,
-                                    isManualExposure: isManualExposure,
-                                    naturalCapture: naturalCapture,
-                                    showLevel: showLevel,
-                                    compact: isLandscape,
-                                    onToggleLock: { toggleAEAFLock() },
-                                    onReturnToAuto: { returnToAuto() }
-                                )
-                            }
-                            .padding(.horizontal, isLandscape ? 10 : 14)
-                            .simultaneousGesture(bottomDeckSwipe)
-                            .padding(.bottom, CollapsedChrome.histogramBottomPad(
-                                safeBottom: safeBottom,
-                                deckHeight: isLandscape
-                                    ? CollapsedChrome.landscapeDeckHeight
-                                    : CollapsedChrome.deckHeight
-                            ))
-                            .transition(
-                                .asymmetric(
-                                    insertion: .opacity.combined(with: .offset(y: 8)),
-                                    removal: .opacity.combined(with: .offset(y: 6))
-                                )
-                            )
-                            .zIndex(2)
-
+                        if effectiveBottomCollapsed {
+                            // Shutter dock always stays in the quiet finder (incl. Minimalism).
+                            // Histogram stays off while collapsed — expanded deck only.
                             collapsedBottomOverlay(safeBottom: safeBottom, compact: isLandscape)
                                 // Fill the finder and pin chrome to the bottom edge —
                                 // without this the shutter can float mid-frame.
@@ -981,12 +937,12 @@ struct ContentView: View {
                                         removal: .opacity.combined(with: .offset(y: 10))
                                     )
                                 )
-                                // Above histogram + viewfinder chrome so shutter wins taps.
+                                // Above viewfinder chrome so shutter wins taps.
                                 .zIndex(10)
                         }
 
-                        // Chrome above histogram, BELOW shutter dock — corner
-                        // buttons stay tappable; empty space can't cover shutter.
+                        // Chrome BELOW shutter dock — corner buttons stay tappable;
+                        // empty space can't cover shutter.
                         ViewfinderOverlay(
                             showGrid: showGrid,
                             aspectRatio: $aspectRatio,
@@ -1189,7 +1145,12 @@ struct ContentView: View {
     }
 
     // Bind a captured frame into the Field Book with the live shot settings
-    private func recordShot(_ img: UIImage, completion: (() -> Void)? = nil) {
+    private func recordShot(
+        _ img: UIImage,
+        masterImage: UIImage? = nil,
+        originalFileData: Data? = nil,
+        completion: (() -> Void)? = nil
+    ) {
         let metadata = ShotMetadata(
             id: UUID(),
             date: Date(),
@@ -1198,12 +1159,18 @@ struct ContentView: View {
             aperture: apertureValue > 0 ? apertureValue : 0,
             ev: exposureValue,
             filmFilter: filmFilter.name,
+            captureFilmFilter: masterImage == nil ? nil : filmFilter.name,
             lensFX: lensFX.name,
             focalLength: focalLength
         )
-        gallery.add(image: img, metadata: metadata, completion: completion)
-        // Dual-write to Photos; stash localIdentifier so cull can delete both sides.
-        camera.saveToPhotoLibrary(img) { assetID in
+        gallery.add(
+            image: img,
+            metadata: metadata,
+            masterImage: masterImage,
+            completion: completion
+        )
+        // Dual-write to Photos — prefer original HEIC/JPEG bytes when clean.
+        camera.saveToPhotoLibrary(img, originalFileData: originalFileData) { assetID in
             if let assetID {
                 gallery.setPhotosAssetIdentifier(assetID, for: metadata.id)
             } else {
@@ -1338,10 +1305,10 @@ struct ContentView: View {
             filmFilter: shutterFilm,
             lensFX: shutterFX,
             morphTouch: morphTouch
-        ) { img in
+        ) { still in
             captureChrome.setCapturing(false)
-            if let img {
-                finishCapturedImage(img)
+            if let still {
+                finishCapturedImage(still)
                 captureChrome.bumpBurstCaptured()
                 if isBurstHolding && burstCaptured < burstMaxFrames {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
@@ -1473,6 +1440,30 @@ struct ContentView: View {
             camera.setISO(400)
             isLocked = false
             camera.setAEAFLocked(false)
+        case .naturalManual:
+            // Clean DSLR-like baseline: no baked stock / FX, manual exposure,
+            // and the full NaturalCapture ISP policy. Film remains a separate
+            // live + baked workflow (Build 126).
+            naturalCapture = true
+            camera.naturalCaptureEnabled = true
+            showGrid = true
+            focusPeaking = false
+            zebraEnabled = false
+            filmFilter = .none
+            lensFX = .none
+            camera.selectedFilmFilter = .none
+            camera.selectedLensFX = .none
+            camera.focusPeakingEnabled = false
+            camera.zebraEnabled = false
+            LensFXEngine.shared.clearStickyTouch()
+            shutterSpeedIndex = 9 // 1/125
+            isoValue = 400
+            isManualExposure = true
+            camera.setShutterSpeed(index: 9)
+            camera.setISO(400)
+            isLocked = false
+            camera.setAEAFLocked(false)
+            showStatusToast("NATURAL MANUAL · 1/125 · ISO 400")
         }
         syncCaptureContextToSystem()
         Haptics.medium()
@@ -1588,18 +1579,35 @@ struct ContentView: View {
     }
 
     /// Apply aspect crop then dual-write gallery + Photos.
-    private func finishCapturedImage(_ img: UIImage) {
-        let framed = img.croppedToAspectMode(aspectRatio)
+    /// Keeps original AVFoundation bytes only when the frame was not re-cropped
+    /// (FULL) and looks were not baked — otherwise Photos gets a fresh encode.
+    private func finishCapturedImage(_ still: CapturedStill) {
+        let framed = still.image.croppedToAspectMode(aspectRatio)
+        let framedMaster = still.cleanImage?.croppedToAspectMode(aspectRatio)
+        let didCrop = framed.size != still.image.size
+            || framed.scale != still.image.scale
+            || framed.imageOrientation != still.image.imageOrientation
+        // Aspect crop or a retained master rewrites pixels — drop original bytes.
+        let originalData = (didCrop || framedMaster != nil) ? nil : still.originalFileData
         lastCapturedImage = framed
         photoCount += 1
         CaptureChromeBus.shared.bumpPhotoCount(thumb: framed)
         // Gallery publishes only after JPEG + thumb exist. Refreshing before
         // this completion made widget recents one capture behind.
-        recordShot(framed) {
+        recordShot(
+            framed,
+            masterImage: framedMaster,
+            originalFileData: originalData
+        ) {
             photoCount = gallery.shots.count
             CaptureChromeBus.shared.setRecents(count: gallery.shots.count, thumb: lastCapturedImage)
             refreshWidgetRecents()
         }
+    }
+
+    /// Long-exposure / legacy UIImage path — no original bitstream to preserve.
+    private func finishCapturedImage(_ img: UIImage) {
+        finishCapturedImage(CapturedStill(image: img, originalFileData: nil))
     }
 
     /// Push the newest unculled frames (+ meta + stats) into the App Group.
@@ -2514,10 +2522,10 @@ struct ContentView: View {
                 filmFilter: shutterFilm,
                 lensFX: shutterFX,
                 morphTouch: morphTouch
-            ) { img in
+            ) { still in
                 captureChrome.setCapturing(false)
-                if let img = img {
-                    finishCapturedImage(img)
+                if let still {
+                    finishCapturedImage(still)
                 } else {
                     showStatusToast("Capture failed")
                     UINotificationFeedbackGenerator().notificationOccurred(.error)

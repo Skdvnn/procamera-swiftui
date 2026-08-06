@@ -1055,6 +1055,9 @@ final class CullDisplayCache {
     }
 
     func purge() { cache.removeAllObjects() }
+    func evict(_ shotID: UUID) {
+        cache.removeObject(forKey: shotID.uuidString as NSString)
+    }
 }
 
 // MARK: - Cull session
@@ -1101,12 +1104,25 @@ struct CullSessionView: View {
     @State private var showCoach = false
     @State private var crossedKeep = false
     @State private var crossedReject = false
+    @State private var isApplyingPostFilm = false
+    /// `ShootSession.shots` is an immutable snapshot; reflect a regrade here
+    /// immediately while GalleryStore persists the mutable metadata.
+    @State private var postFilmOverrides: [UUID: String] = [:]
     @AppStorage("darkroom.thumbCoach.seen") private var coachSeen = false
 
     private var shots: [ShotMetadata] { session.shots }
     private var current: ShotMetadata? {
         guard index >= 0, index < shots.count else { return nil }
-        return shots[index]
+        var shot = shots[index]
+        if let film = postFilmOverrides[shot.id] {
+            shot.filmFilter = film
+        }
+        return shot
+    }
+
+    private var canApplyPostFilm: Bool {
+        guard let shot = current else { return false }
+        return shot.lensFX == "None" && store.hasCleanMaster(for: shot)
     }
 
     private var progress: (kept: Int, rejected: Int, unmarked: Int) {
@@ -1385,6 +1401,31 @@ struct CullSessionView: View {
                     .animation(CullMotion.wash, value: isAdvancing)
             }
 
+            if canApplyPostFilm {
+                Menu {
+                    ForEach(FilmFilterMode.allCases, id: \.self) { film in
+                        Button {
+                            applyPostFilm(film)
+                        } label: {
+                            if current?.filmFilter == film.name {
+                                Label(film.name, systemImage: "checkmark")
+                            } else {
+                                Text(film.name)
+                            }
+                        }
+                    }
+                } label: {
+                    DarkroomChip(
+                        title: isApplyingPostFilm ? "BAKING…" : "POST FILM",
+                        kind: .amber,
+                        compact: true
+                    )
+                }
+                .disabled(isApplyingPostFilm)
+                .padding(.top, 6)
+                .accessibilityLabel("Apply film in Darkroom")
+            }
+
             // Thumb-zone hint + accessible controls
             VStack(spacing: 10) {
                 // Drag intent label
@@ -1441,6 +1482,26 @@ struct CullSessionView: View {
         if dragOffset.height < -40 { return CullPalette.amber }
         if dragOffset.height > 40 { return Color(red: 0.95, green: 0.55, blue: 0.5) }
         return .white.opacity(0.28)
+    }
+
+    private func applyPostFilm(_ film: FilmFilterMode) {
+        guard let shot = current, !isApplyingPostFilm else { return }
+        isApplyingPostFilm = true
+        store.applyFilmLook(to: shot.id, film: film) { ok in
+            isApplyingPostFilm = false
+            guard ok else {
+                ToastBus.shared.show("Film bake failed")
+                return
+            }
+            postFilmOverrides[shot.id] = film.name
+            CullDisplayCache.shared.evict(shot.id)
+            CullDisplayCache.shared.prefetch(around: index, shots: shots, store: store)
+            ToastBus.shared.show(
+                film == .none
+                    ? "Clean master restored · Photos unchanged"
+                    : "\(film.name) · app roll updated"
+            )
+        }
     }
 
     private var filmStrip: some View {

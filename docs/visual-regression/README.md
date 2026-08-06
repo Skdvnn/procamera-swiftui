@@ -14,12 +14,12 @@ HTML gallery.
 
 - **Expanded:** histogram clears the shutter deck; trailing Film/FX/Looks and
   leading Aspect/Flip/Peaking stay above the deck.
-- **Collapsed:** bottom gradient covers the shutter; histogram clears the deck by
-  `histDeckGap`; chrome columns stay above the fade band.
-- **Landscape collapsed + expanded:** bottom deck may expand in landscape; both
-  modes keep hist clear of shutter and a usable viewfinder height.
+- **Collapsed (swiped-down):** no histogram; shutter dock + fade only; chrome
+  columns stay above the fade band.
+- **Landscape collapsed + expanded:** bottom deck may expand in landscape;
+  collapsed stays hist-free; expanded keeps hist clear of shutter.
 - **Film dock open:** SCENE/FILM picker must not cover the shutter center.
-- **Z-order:** shutter dock sits above the histogram (tap priority).
+- **Z-order:** shutter dock stays tappable above viewfinder chrome.
 
 ## Devices
 

@@ -5,6 +5,8 @@ import Photos
 import CoreLocation
 import Combine
 import WidgetKit
+import ImageIO
+import UniformTypeIdentifiers
 
 // MARK: - Tunable session clustering
 
@@ -256,16 +258,32 @@ enum PhotosLibraryService {
     /// Saves image to the camera roll, mirrors it into the Shutter album (so
     /// Home Screen widgets can find frames even when App Groups are off), and
     /// returns the new asset localIdentifier.
-    static func saveImage(_ image: UIImage, completion: @escaping (String?) -> Void) {
+    ///
+    /// Prefer `originalFileData` (AVFoundation HEIC/JPEG) so Photos keeps the
+    /// sensor/ISP bitstream instead of a UIImage re-encode (Build 122).
+    static func saveImage(
+        _ image: UIImage,
+        originalFileData: Data? = nil,
+        completion: @escaping (String?) -> Void
+    ) {
         requestReadWrite { status in
             guard status == .authorized || status == .limited else {
                 DispatchQueue.main.async { completion(nil) }
                 return
             }
+            // Prefer original capture bytes; else high-quality HEIC/JPEG encode.
+            let fileData = originalFileData ?? highQualityPhotoData(from: image)
             var placeholderID: String?
             PHPhotoLibrary.shared().performChanges({
-                let req = PHAssetCreationRequest.creationRequestForAsset(from: image)
-                placeholderID = req.placeholderForCreatedAsset?.localIdentifier
+                if let fileData {
+                    let req = PHAssetCreationRequest.forAsset()
+                    req.addResource(with: .photo, data: fileData, options: nil)
+                    placeholderID = req.placeholderForCreatedAsset?.localIdentifier
+                } else {
+                    // Last resort — UIImage path (Apple may re-encode as JPEG).
+                    let req = PHAssetCreationRequest.creationRequestForAsset(from: image)
+                    placeholderID = req.placeholderForCreatedAsset?.localIdentifier
+                }
             }, completionHandler: { success, _ in
                 let id = success ? placeholderID : nil
                 if let id {
@@ -278,6 +296,36 @@ enum PhotosLibraryService {
                 }
             })
         }
+    }
+
+    /// Encode a still for Photos when original AVFoundation bytes are gone
+    /// (look bake / aspect crop / orientation repair). Prefer HEIC @ 0.95.
+    static func highQualityPhotoData(from image: UIImage) -> Data? {
+        // Bake orientation + tone-map HDR→SDR before encode (Build 123).
+        let upright = image.normalizedUpSDR()
+        if let heic = heicData(from: upright, quality: 0.95) { return heic }
+        return upright.jpegData(compressionQuality: 0.97)
+    }
+
+    private static func heicData(from image: UIImage, quality: CGFloat) -> Data? {
+        // Prefer an upright SDR bitmap — writing EXIF-only orientation on a
+        // sideways cgImage left Photos/share targets looking rotated.
+        let upright = image.imageOrientation == .up ? image : image.normalizedUpSDR()
+        guard let cgImage = upright.cgImage else { return nil }
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(
+            data,
+            UTType.heic.identifier as CFString,
+            1,
+            nil
+        ) else { return nil }
+        let props: [CFString: Any] = [
+            kCGImageDestinationLossyCompressionQuality: quality,
+            kCGImagePropertyOrientation: CGImagePropertyOrientation.up.rawValue
+        ]
+        CGImageDestinationAddImage(dest, cgImage, props as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { return nil }
+        return data as Data
     }
 
     /// Best-effort mirror into the shared Shutter album for widget Photos fallback.

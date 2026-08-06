@@ -45,6 +45,7 @@ enum ShutterSceneEntity: String, AppEnum {
     case night = "night"
     case studio = "studio"
     case film = "film"
+    case naturalManual = "naturalmanual"
 
     static var typeDisplayRepresentation = TypeDisplayRepresentation(name: "Scene")
     static var caseDisplayRepresentations: [ShutterSceneEntity: DisplayRepresentation] = [
@@ -52,7 +53,8 @@ enum ShutterSceneEntity: String, AppEnum {
         .street: "Street",
         .night: "Night",
         .studio: "Studio",
-        .film: "Film"
+        .film: "Film",
+        .naturalManual: "Natural Manual"
     ]
 }
 

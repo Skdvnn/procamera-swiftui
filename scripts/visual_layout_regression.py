@@ -28,7 +28,6 @@ DECK_H = 88.0
 LANDSCAPE_DECK_H = 72.0
 FADE_H = 48.0
 INFO_BAR_H = 56.0
-HIST_DECK_GAP = 8.0
 HIST_PAD_EXPANDED = 14.0
 VF_TO_DECK_GAP = 5.0
 CHROME_INSET = 16.0
@@ -59,7 +58,6 @@ def parse_chrome_constants() -> dict[str, float]:
         "landscapeDeckHeight": "landscape_deck_h",
         "fadeHeight": "fade_h",
         "infoBarHeight": "info_bar_h",
-        "histDeckGap": "hist_deck_gap",
         "expandedHistogramBottomPad": "hist_pad_expanded",
         "viewfinderToDeckGap": "vf_to_deck_gap",
     }
@@ -73,7 +71,7 @@ def parse_chrome_constants() -> dict[str, float]:
 
 def apply_constants(parsed: dict[str, float]) -> None:
     global DECK_H, LANDSCAPE_DECK_H, FADE_H, INFO_BAR_H
-    global HIST_DECK_GAP, HIST_PAD_EXPANDED, VF_TO_DECK_GAP
+    global HIST_PAD_EXPANDED, VF_TO_DECK_GAP
     if "deck_h" in parsed:
         DECK_H = parsed["deck_h"]
     if "landscape_deck_h" in parsed:
@@ -82,8 +80,6 @@ def apply_constants(parsed: dict[str, float]) -> None:
         FADE_H = parsed["fade_h"]
     if "info_bar_h" in parsed:
         INFO_BAR_H = parsed["info_bar_h"]
-    if "hist_deck_gap" in parsed:
-        HIST_DECK_GAP = parsed["hist_deck_gap"]
     if "hist_pad_expanded" in parsed:
         HIST_PAD_EXPANDED = parsed["hist_pad_expanded"]
     if "vf_to_deck_gap" in parsed:
@@ -92,10 +88,6 @@ def apply_constants(parsed: dict[str, float]) -> None:
 
 def bottom_pad(safe_bottom: float) -> float:
     return max(safe_bottom * 0.55, 8.0)
-
-
-def hist_pad_collapsed(safe_bottom: float, deck_h: float) -> float:
-    return deck_h + bottom_pad(safe_bottom) + HIST_DECK_GAP
 
 
 @dataclass
@@ -273,19 +265,7 @@ def layout_collapsed(
     fade = Rect("fade_band", 0, underlay_top, W, FADE_H, (50, 50, 120), 1)
     vf = Rect("viewfinder", margin, y, W - 2 * margin, H - y, (10, 10, 12), 0)
     panels.extend([vf, gradient, fade, deck])
-
-    hist_bottom = H - hist_pad_collapsed(safe_bottom, deck_h)
-    hist_h = 48.0 if compact_chrome else INFO_BAR_H
-    hist = Rect(
-        "histogram",
-        margin + (10 if compact_chrome else 14),
-        hist_bottom - hist_h,
-        W - 2 * margin - (20 if compact_chrome else 28),
-        hist_h,
-        (180, 160, 60),
-        2,
-    )
-    panels.append(hist)
+    # Build 121 — collapsed / swiped-down has no histogram; shutter dock only.
 
     inset = 10 if compact_chrome else CHROME_INSET
     lead_x = margin + inset
@@ -301,7 +281,7 @@ def layout_collapsed(
             W - margin - (10 if compact_chrome else 16) - FILM_DOCK_W,
             dock_top,
             FILM_DOCK_W,
-            min(FILM_DOCK_H, hist.top - dock_top - 8),
+            min(FILM_DOCK_H, deck.top - dock_top - 8),
             (90, 70, 40),
             45,
         )
@@ -310,12 +290,11 @@ def layout_collapsed(
     return panels, {
         "mode": "collapsed",
         "device": device.name,
-        "hist_deck_gap": deck.top - hist.bottom,
+        "has_histogram": False,
         "vf_height": vf.h,
         "gradient_covers_deck": gradient.top <= deck.top and gradient.bottom >= deck.bottom,
         "fade_above_deck": fade.bottom <= deck.top + 0.5,
         "shutter_z": deck.z,
-        "hist_z": hist.z,
         "film_dock_open": film_dock_open,
     }
 
@@ -323,21 +302,22 @@ def layout_collapsed(
 def assert_common(panels: list[Rect], meta: dict, label: str) -> list[str]:
     errors: list[str] = []
     by = {p.name: p for p in panels}
-    hist = by["histogram"]
+    hist = by.get("histogram")
     deck = by["shutter_deck"]
 
-    if hist.overlaps(deck):
-        errors.append(
-            f"{label}: histogram overlaps shutter "
-            f"(hist.bottom={hist.bottom:.1f} deck.top={deck.top:.1f})"
-        )
+    if hist is not None:
+        if hist.overlaps(deck):
+            errors.append(
+                f"{label}: histogram overlaps shutter "
+                f"(hist.bottom={hist.bottom:.1f} deck.top={deck.top:.1f})"
+            )
 
-    # Shutter dock must win z-order over histogram (ContentView zIndex 10 > 2/5)
-    if meta.get("shutter_z", 0) <= meta.get("hist_z", 0):
-        errors.append(
-            f"{label}: shutter z-order not above histogram "
-            f"(shutter={meta.get('shutter_z')} hist={meta.get('hist_z')})"
-        )
+        # Expanded: shutter deck is a sibling below the viewfinder hist.
+        if meta.get("shutter_z", 0) <= meta.get("hist_z", 0):
+            errors.append(
+                f"{label}: shutter z-order not above histogram "
+                f"(shutter={meta.get('shutter_z')} hist={meta.get('hist_z')})"
+            )
 
     if meta.get("vf_height", 999) < 160:
         errors.append(f"{label}: viewfinder too short ({meta['vf_height']:.1f})")
@@ -347,10 +327,13 @@ def assert_common(panels: list[Rect], meta: dict, label: str) -> list[str]:
     for btn in film_btns:
         if btn.overlaps(deck):
             errors.append(f"{label}: {btn.name} overlaps shutter deck")
-        if btn.overlaps(hist):
+        if hist is not None and btn.overlaps(hist):
             errors.append(f"{label}: {btn.name} overlaps histogram")
         cx, cy = btn.center()
-        if deck.contains_point(cx, cy) or hist.contains_point(cx, cy):
+        blocked = deck.contains_point(cx, cy)
+        if hist is not None:
+            blocked = blocked or hist.contains_point(cx, cy)
+        if blocked:
             errors.append(f"{label}: {btn.name} center hit-blocked")
 
     lead_btns = [p for p in panels if p.name.startswith("lead_")]
@@ -376,6 +359,8 @@ def assert_common(panels: list[Rect], meta: dict, label: str) -> list[str]:
 def assert_expanded(panels: list[Rect], meta: dict) -> list[str]:
     label = f"EXPANDED[{meta['device']}]"
     errors = assert_common(panels, meta, label)
+    if "histogram" not in {p.name for p in panels}:
+        errors.append(f"{label}: expanded mode missing histogram")
     gap = meta["hist_shutter_gap"]
     if gap < VF_TO_DECK_GAP:
         errors.append(f"{label}: hist↔shutter gap too small ({gap:.1f}pt)")
@@ -386,13 +371,15 @@ def assert_collapsed(panels: list[Rect], meta: dict) -> list[str]:
     label = f"COLLAPSED[{meta['device']}]"
     errors = assert_common(panels, meta, label)
     by = {p.name: p for p in panels}
+    # Build 121 — swiped-down chrome is shutter-only; histogram must stay off.
+    if "histogram" in by or meta.get("has_histogram"):
+        errors.append(f"{label}: collapsed mode must not show histogram")
+    if "shutter_deck" not in by:
+        errors.append(f"{label}: collapsed mode missing shutter deck")
     if not meta.get("gradient_covers_deck"):
         errors.append(f"{label}: gradient underlay does not cover shutter deck")
     if not meta.get("fade_above_deck"):
         errors.append(f"{label}: fade band is not above the shutter deck")
-    gap = meta["hist_deck_gap"]
-    if gap < HIST_DECK_GAP - 0.5:
-        errors.append(f"{label}: hist↔deck gap too small ({gap:.1f}pt)")
     grad = by["gradient_underlay"]
     for btn in (p for p in panels if p.name.startswith("film_")):
         if btn.bottom > grad.top:
@@ -610,16 +597,14 @@ def main() -> int:
         report_lines.append(f"cases: {len(cases)}")
         # Spotlight metrics from canonical iPhone 15
         e = by_key["expanded-iphone15"].meta
-        c = by_key["collapsed-iphone15"].meta
-        l = by_key["landscape-collapsed-iphone15_land"].meta
         le = by_key["landscape-expanded-iphone15_land"].meta
         report_lines.append(f"expanded hist↔shutter gap: {e['hist_shutter_gap']:.1f}pt")
-        report_lines.append(f"collapsed hist↔deck gap: {c['hist_deck_gap']:.1f}pt")
-        report_lines.append(f"landscape hist↔deck gap: {l['hist_deck_gap']:.1f}pt")
+        report_lines.append("collapsed histogram: hidden")
+        report_lines.append("landscape collapsed histogram: hidden")
         report_lines.append(f"landscape expanded hist↔shutter gap: {le['hist_shutter_gap']:.1f}pt")
         report_lines.append("gradient covers deck: yes")
         report_lines.append("film/shader clear of bottom chrome: yes")
-        report_lines.append("shutter z-order above histogram: yes")
+        report_lines.append("collapsed shutter dock: yes")
         report_lines.append("film dock clears shutter: yes")
 
     report_text = "\n".join(report_lines) + "\n"

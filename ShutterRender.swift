@@ -11,17 +11,22 @@ enum ShutterRender {
     /// Serial queue owning `ciContext` (preview Metal, still bake, LE flatten).
     static let ciQueue = DispatchQueue(label: "shutter.render.ci", qos: .userInitiated)
 
+    /// Prefer Display P3 so bake/preview don't wash iPhone captures into DeviceRGB.
+    private static let workingColorSpace: CGColorSpace =
+        CGColorSpace(name: CGColorSpace.displayP3) ?? CGColorSpaceCreateDeviceRGB()
+
     static let ciContext: CIContext = {
         if let device {
             return CIContext(
                 mtlDevice: device,
                 options: [
-                    .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
+                    .workingColorSpace: workingColorSpace,
                     .cacheIntermediates: false
                 ]
             )
         }
         return CIContext(options: [
+            .workingColorSpace: workingColorSpace,
             .useSoftwareRenderer: false,
             .cacheIntermediates: false
         ])
@@ -30,7 +35,7 @@ enum ShutterRender {
     /// Tiny CPU context for histogram only — never fights the Metal preview context.
     static let histogramContext: CIContext = {
         CIContext(options: [
-            .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
+            .workingColorSpace: workingColorSpace,
             .cacheIntermediates: false,
             .useSoftwareRenderer: false
         ])

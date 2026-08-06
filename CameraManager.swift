@@ -6,6 +6,27 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import Combine
 
+/// Still delivered from the capture pipeline.
+/// `originalFileData` is the AVFoundation HEIC/JPEG bitstream when looks were
+/// not baked — save that to Photos instead of re-encoding via UIImage (Build 122).
+struct CapturedStill {
+    let image: UIImage
+    let originalFileData: Data?
+    /// Pre-film pixels retained for non-destructive Darkroom regrades.
+    /// Only film-only captures keep this; Lens FX has no safe post chain yet.
+    let cleanImage: UIImage?
+
+    init(
+        image: UIImage,
+        originalFileData: Data?,
+        cleanImage: UIImage? = nil
+    ) {
+        self.image = image
+        self.originalFileData = originalFileData
+        self.cleanImage = cleanImage
+    }
+}
+
 class CameraManager: NSObject, ObservableObject {
     /// Not @Published — session identity never changes after init (Build 110).
     let session = AVCaptureSession()
@@ -185,7 +206,7 @@ class CameraManager: NSObject, ObservableObject {
     private var exposureSnapshotBeforeLE: (shutter: Int?, iso: Float?)?
     private var bakeTimeoutWork: DispatchWorkItem?
     /// User-facing completion kept alive across GPU bake so timeout can still unblock UI.
-    private var bakeTimeoutCompletion: ((UIImage?) -> Void)?
+    private var bakeTimeoutCompletion: ((CapturedStill?) -> Void)?
     /// Invalidates late bake / HW photo completions after cancel or timeout.
     private var bakeGeneration = UUID()
     private let photoStateLock = NSLock()
@@ -201,6 +222,8 @@ class CameraManager: NSObject, ObservableObject {
     private var pendingRawData: Data?
     /// `AVCapturePhotoSettings.uniqueID` for the in-flight still — ignore late callbacks.
     private var activeCaptureUniqueID: Int64?
+    /// Interface orientation frozen at shutter — used to repair sideways stills.
+    private var captureInterfaceOrientation: UIInterfaceOrientation = .portrait
     /// Remembered WB / macro so lens+flip can reapply.
     private var lockedWhiteBalanceMode: Int = 0
     private var macroEnabledFlag = false
@@ -215,12 +238,22 @@ class CameraManager: NSObject, ObservableObject {
     typealias FilmFilter = FilmFilterMode
 
     private let ciContext = ShutterRender.ciContext
+    /// Headless baker for Darkroom post-film work. It never configures or starts
+    /// a capture session; it only shares the serial Core Image renderer.
+    private static let darkroomFilmBaker = CameraManager()
 
     override init() {
         super.init()
         syncPipelineSelection()
         installSessionObservers()
         installMemoryObservers()
+    }
+
+    /// Re-grade a clean gallery master without touching the live camera state.
+    static func bakeFilmForDarkroom(_ stock: FilmFilterMode, onto image: UIImage) -> UIImage? {
+        guard stock != .none else { return image }
+        let result = darkroomFilmBaker.bakeFilmFilter(stock, onto: image)
+        return result.ok ? result.image : nil
     }
 
     deinit {
@@ -322,7 +355,7 @@ class CameraManager: NSObject, ObservableObject {
     private var videoDeviceInput: AVCaptureDeviceInput?
     private let photoOutput = AVCapturePhotoOutput()
     private let sessionQueue = DispatchQueue(label: "camera.session.queue")
-    private var photoCompletionHandler: ((UIImage?) -> Void)?
+    private var photoCompletionHandler: ((CapturedStill?) -> Void)?
     /// Prevents re-adding inputs/outputs when SwiftUI re-fires onAppear.
     private var isSessionConfigured = false
     /// Samples device.iso / exposureDuration for AUTO readouts.
@@ -397,6 +430,9 @@ class CameraManager: NSObject, ObservableObject {
 
         session.beginConfiguration()
         session.sessionPreset = .photo
+        // Keep color space under our control; natural capture is SDR sRGB, not
+        // an automatically-selected wide-gamut/HDR workflow (Build 125).
+        session.automaticallyConfiguresCaptureDeviceForWideColor = false
 
         // Use wide angle camera directly - virtual multi-camera devices (triple/dual)
         // don't support .custom exposure mode needed for manual ISO/shutter control
@@ -446,6 +482,10 @@ class CameraManager: NSObject, ObservableObject {
         // Select format with longest exposure that still supports custom exposure mode
         selectBestFormatForLongExposure(device: videoDevice)
 
+        // The active format may change after the first photo-output configuration.
+        // Apply the final natural ISP/color policy before the session starts.
+        applyNaturalCapturePhotoOutputConfig()
+
         // Request full-resolution stills for the final active format
         updateMaxPhotoDimensions(for: videoDevice)
 
@@ -454,14 +494,30 @@ class CameraManager: NSObject, ObservableObject {
         startSession()
     }
 
-    // Modern replacement for isHighResolutionCaptureEnabled: pick the largest
-    // photo dimensions the active format supports. Must be re-applied whenever
-    // the device or its active format changes.
+    // Modern replacement for isHighResolutionCaptureEnabled. Must be re-applied
+    // whenever the device or its active format changes.
     private func updateMaxPhotoDimensions(for device: AVCaptureDevice) {
         let supported = device.activeFormat.supportedMaxPhotoDimensions
-        if let best = supported.max(by: { Int($0.width) * Int($0.height) < Int($1.width) * Int($1.height) }) {
+        guard !supported.isEmpty else { return }
+        if let best = preferredPhotoDimensions(from: supported) {
             photoOutput.maxPhotoDimensions = best
         }
+    }
+
+    /// Natural stays on the classic ~12MP path. 24/48MP invites deferred delivery
+    /// and heavier ISP that reads as crunchy HDR / blown halos (Build 123).
+    private func preferredPhotoDimensions(
+        from supported: [CMVideoDimensions]
+    ) -> CMVideoDimensions? {
+        let area = { (d: CMVideoDimensions) in Int(d.width) * Int(d.height) }
+        if naturalCaptureEnabled {
+            let limit = 12_500_000
+            let under = supported.filter { area($0) <= limit }
+            if let best = under.max(by: { area($0) < area($1) }) { return best }
+            // Every option is huge — take the smallest to stay honest.
+            return supported.min(by: { area($0) < area($1) })
+        }
+        return supported.max(by: { area($0) < area($1) })
     }
 
     // MARK: - Natural / rude capture (minimize Apple computational photography)
@@ -480,7 +536,48 @@ class CameraManager: NSObject, ObservableObject {
             photoOutput.isAppleProRAWEnabled = !natural
         }
 
-        print("NaturalCapture: natural=\(natural) maxQ=\(photoOutput.maxPhotoQualityPrioritization.rawValue) proRAW=\(photoOutput.isAppleProRAWEnabled) rawFormats=\(photoOutput.availableRawPhotoPixelFormatTypes.count)")
+        // Deferred proxies + zero-shutter-lag reuse prior ISP frames — both fight
+        // "what you see is what you get" natural stills (Build 123).
+        if photoOutput.isAutoDeferredPhotoDeliverySupported {
+            photoOutput.isAutoDeferredPhotoDeliveryEnabled = false
+        }
+        if photoOutput.isZeroShutterLagSupported {
+            photoOutput.isZeroShutterLagEnabled = false
+        }
+        if photoOutput.isResponsiveCaptureSupported {
+            photoOutput.isResponsiveCaptureEnabled = false
+        }
+
+        // Re-pick dimensions when natural toggles (12MP vs max).
+        if let device = videoDeviceInput?.device {
+            configureNaturalDeviceOutput(device)
+            updateMaxPhotoDimensions(for: device)
+        }
+
+        print("NaturalCapture: natural=\(natural) maxQ=\(photoOutput.maxPhotoQualityPrioritization.rawValue) proRAW=\(photoOutput.isAppleProRAWEnabled) dims=\(photoOutput.maxPhotoDimensions.width)x\(photoOutput.maxPhotoDimensions.height) rawFormats=\(photoOutput.availableRawPhotoPixelFormatTypes.count)")
+    }
+
+    /// Device-level controls that must be configured under a device lock.
+    /// These avoid wide-gamut/HDR and video-side low-light boosting in natural
+    /// mode. There is no public API to disable every Apple ISP operation; use
+    /// Bayer RAW when the actual sensor file is required.
+    private func configureNaturalDeviceOutput(_ device: AVCaptureDevice) {
+        do {
+            try device.lockForConfiguration()
+            if naturalCaptureEnabled {
+                if device.activeFormat.supportedColorSpaces.contains(.sRGB) {
+                    device.activeColorSpace = .sRGB
+                }
+                if device.isLowLightBoostSupported {
+                    device.automaticallyEnablesLowLightBoostWhenAvailable = false
+                }
+            } else if device.isLowLightBoostSupported {
+                device.automaticallyEnablesLowLightBoostWhenAvailable = true
+            }
+            device.unlockForConfiguration()
+        } catch {
+            print("NaturalCapture: device ISP configuration failed: \(error)")
+        }
     }
 
     /// Prefer pure Bayer sensor RAW over Apple ProRAW (fused / more processed).
@@ -498,7 +595,7 @@ class CameraManager: NSObject, ObservableObject {
 
     private func applyMinimalProcessing(to settings: inout AVCapturePhotoSettings) {
         let natural = naturalCaptureEnabled
-        // `.speed` skips the heavy multi-frame fusion path that `.quality` invites.
+        // `.speed` = WYSIWYG stills with light NR only — skips Deep Fusion / heavy fusion.
         settings.photoQualityPrioritization = natural ? .speed : .quality
         // Red-eye is an extra face-rewrite pass — never for natural stills.
         settings.isAutoRedEyeReductionEnabled = false
@@ -506,6 +603,13 @@ class CameraManager: NSObject, ObservableObject {
         if photoOutput.isVirtualDeviceFusionSupported {
             settings.isAutoVirtualDeviceFusionEnabled = false
         }
+        // Ultra-wide edge rewrite — keep the frame honest when natural.
+        if natural, photoOutput.isContentAwareDistortionCorrectionSupported {
+            settings.isAutoContentAwareDistortionCorrectionEnabled = false
+        }
+        // Automatic still stabilization includes a digital processing pass in
+        // low light. Natural trades that rescue for one honest exposure.
+        settings.isAutoStillImageStabilizationEnabled = !natural
     }
 
     private func updateDeviceCapabilities(device: AVCaptureDevice) {
@@ -583,7 +687,7 @@ class CameraManager: NSObject, ObservableObject {
         return photoCompletionHandler != nil
     }
 
-    private func takePhotoHandler() -> ((UIImage?) -> Void)? {
+    private func takePhotoHandler() -> ((CapturedStill?) -> Void)? {
         photoStateLock.lock()
         defer { photoStateLock.unlock() }
         let handler = photoCompletionHandler
@@ -591,14 +695,14 @@ class CameraManager: NSObject, ObservableObject {
         return handler
     }
 
-    private func setPhotoHandler(_ handler: ((UIImage?) -> Void)?) {
+    private func setPhotoHandler(_ handler: ((CapturedStill?) -> Void)?) {
         photoStateLock.lock()
         defer { photoStateLock.unlock() }
         photoCompletionHandler = handler
     }
 
     /// Deliver a bake result once. Generation mismatch means cancel/timeout won.
-    private func finishUserBake(_ image: UIImage?, generation: UUID) {
+    private func finishUserBake(_ still: CapturedStill?, generation: UUID) {
         photoStateLock.lock()
         guard bakeGeneration == generation else {
             photoStateLock.unlock()
@@ -618,7 +722,7 @@ class CameraManager: NSObject, ObservableObject {
             guard let self else { return }
             self.isLongExposureCapturing = false
             self.clearLEProgressUI()
-            done?(image)
+            done?(still)
         }
     }
 
@@ -954,12 +1058,12 @@ class CameraManager: NSObject, ObservableObject {
                             filmFilter: captureFilm,
                             lensFX: captureFX,
                             morphTouch: self.longExposureMorphTouch
-                        ) { image in
+                        ) { still in
                             // Thaw multi-second preview lock, then restore manuals.
                             self.restoreExposureAfterLongExposure()
                             self.isLongExposureCapturing = false
                             
-                            completion(image)
+                            completion(still?.image)
                         }
                     }
                 }
@@ -1699,6 +1803,7 @@ class CameraManager: NSObject, ObservableObject {
                     self.selectBestFormatForLongExposure(device: newDevice)
                     self.updateDeviceCapabilities(device: newDevice)
                     self.updateMaxPhotoDimensions(for: newDevice)
+                    self.applyNaturalCapturePhotoOutputConfig()
                 } else if let oldInput, self.session.canAddInput(oldInput) {
                     self.session.addInput(oldInput)
                     print("switchToLens: new input rejected — restored previous lens")
@@ -1812,174 +1917,27 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Film Filter Processing
+    // MARK: - Film Filter Processing (Build 124 — deeper stock recipes)
+
+    /// Preview vs still only differ on expensive glow + grain intensity.
+    /// Color / curves stay identical so finder ≈ bake (WYSIWYG).
+    private enum FilmLookBudget {
+        case preview
+        case still
+
+        /// Still grain is ~1.7× preview (same ratio as Build 75).
+        var grainScale: Float { self == .preview ? 0.58 : 1.0 }
+        var allowFullBloom: Bool { self == .still }
+    }
 
     // Apply filter to CIImage (for live preview)
     func applyFilmFilter(to ciImage: CIImage, filter: FilmFilter? = nil) -> CIImage {
         let activeFilter = filter ?? selectedFilmFilter
-        guard activeFilter != .none else { return ciImage }
-
-        var outputImage = ciImage
-
-        switch activeFilter {
-        case .none:
-            break
-
-        case .portra400:
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 0.9
-            colorControls.contrast = 0.95
-            colorControls.brightness = 0.02
-            if let result = colorControls.outputImage { outputImage = result }
-
-            let tempTint = CIFilter.temperatureAndTint()
-            tempTint.inputImage = outputImage
-            tempTint.neutral = CIVector(x: 6500, y: 0)
-            tempTint.targetNeutral = CIVector(x: 5800, y: 10)
-            if let result = tempTint.outputImage { outputImage = result }
-
-        case .ektar100:
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 1.3
-            colorControls.contrast = 1.1
-            colorControls.brightness = 0.0
-            if let result = colorControls.outputImage { outputImage = result }
-
-            let vibrance = CIFilter.vibrance()
-            vibrance.inputImage = outputImage
-            vibrance.amount = 0.3
-            if let result = vibrance.outputImage { outputImage = result }
-
-        case .kodakGold:
-            // Golden hour in a canister: warm cast, gentle contrast, soft lift
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 1.08
-            colorControls.contrast = 1.02
-            colorControls.brightness = 0.03
-            if let result = colorControls.outputImage { outputImage = result }
-
-            let tempTint = CIFilter.temperatureAndTint()
-            tempTint.inputImage = outputImage
-            tempTint.neutral = CIVector(x: 6500, y: 0)
-            tempTint.targetNeutral = CIVector(x: 5400, y: 12)
-            if let result = tempTint.outputImage { outputImage = result }
-
-            let vibrance = CIFilter.vibrance()
-            vibrance.inputImage = outputImage
-            vibrance.amount = 0.15
-            if let result = vibrance.outputImage { outputImage = result }
-
-        case .trix400:
-            let noir = CIFilter.photoEffectNoir()
-            noir.inputImage = outputImage
-            if let result = noir.outputImage { outputImage = result }
-
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.contrast = 1.15
-            if let result = colorControls.outputImage { outputImage = result }
-
-        case .cinestill800:
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 0.95
-            colorControls.contrast = 1.05
-            if let result = colorControls.outputImage { outputImage = result }
-
-            let tempTint = CIFilter.temperatureAndTint()
-            tempTint.inputImage = outputImage
-            tempTint.neutral = CIVector(x: 6500, y: 0)
-            tempTint.targetNeutral = CIVector(x: 5200, y: 15)
-            if let result = tempTint.outputImage { outputImage = result }
-
-            // Preview skips bloom — CIBloom every frame freezes the finder.
-            // Still bake keeps the full CineStill halation.
-
-        case .velvia50:
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 1.5
-            colorControls.contrast = 1.15
-            colorControls.brightness = -0.02
-            if let result = colorControls.outputImage { outputImage = result }
-
-            let vibrance = CIFilter.vibrance()
-            vibrance.inputImage = outputImage
-            vibrance.amount = 0.4
-            if let result = vibrance.outputImage { outputImage = result }
-
-        case .instant:
-            outputImage = applyInstantFilmLook(to: outputImage, preview: true)
-        }
-
-        // Light live grain so the finder matches the still bake (Build 75).
-        // Canvas overlays were removed next to Metal — CI grain is cheap at preview size.
-        let inputExtent = ciImage.extent
-        if !inputExtent.isInfinite {
-            outputImage = outputImage.cropped(to: inputExtent)
-        }
-        outputImage = applyFilmGrain(to: outputImage, amount: 0.035)
-        // Keep origin at zero for Metal draw / createCGImage.
-        let e = outputImage.extent
-        if e.origin != .zero {
-            outputImage = outputImage.transformed(by: CGAffineTransform(
-                translationX: -e.origin.x,
-                y: -e.origin.y
-            ))
-        }
-        return outputImage
+        return gradeFilmStock(activeFilter, onto: ciImage, budget: .preview)
     }
 
     func applyFilmFilter(to image: UIImage) -> UIImage {
-
         applyFilmFilter(selectedFilmFilter, to: image)
-    }
-
-    /// Polaroid / SX-70 grade used by FilmFilter.instant (and legacy LensFX.instant).
-    private func applyInstantFilmLook(to image: CIImage, preview: Bool) -> CIImage {
-        let extent = image.extent
-        var output = image
-
-        let controls = CIFilter.colorControls()
-        controls.inputImage = output
-        controls.saturation = 0.82
-        controls.brightness = 0.02
-        controls.contrast = 0.92
-        if let result = controls.outputImage { output = result }
-
-        let tempTint = CIFilter.temperatureAndTint()
-        tempTint.inputImage = output
-        tempTint.neutral = CIVector(x: 6500, y: 0)
-        tempTint.targetNeutral = CIVector(x: 5300, y: -8)
-        if let result = tempTint.outputImage { output = result }
-
-        let curve = CIFilter.toneCurve()
-        curve.inputImage = output
-        curve.point0 = CGPoint(x: 0.00, y: 0.10)
-        curve.point1 = CGPoint(x: 0.25, y: 0.28)
-        curve.point2 = CGPoint(x: 0.50, y: 0.52)
-        curve.point3 = CGPoint(x: 0.75, y: 0.78)
-        curve.point4 = CGPoint(x: 1.00, y: 0.93)
-        if let result = curve.outputImage { output = result }
-
-        let vignette = CIFilter.vignette()
-        vignette.inputImage = output
-        vignette.intensity = 0.8
-        vignette.radius = 1.8
-        if let result = vignette.outputImage { output = result }
-
-        if !preview {
-            let bloom = CIFilter.bloom()
-            bloom.inputImage = output
-            bloom.radius = 4
-            bloom.intensity = 0.25
-            if let result = bloom.outputImage { output = result }
-        }
-
-        return output.cropped(to: extent)
     }
 
     private func applyFilmFilter(_ filmFilter: FilmFilter, to image: UIImage) -> UIImage {
@@ -2003,151 +1961,7 @@ class CameraManager: NSObject, ObservableObject {
             ciImage = ciImage.oriented(image.imageOrientation.cgImageOrientation)
         }
 
-
-        var outputImage = ciImage
-
-        switch filmFilter {
-        case .none:
-            break
-
-        case .portra400:
-            // Warm, slightly desaturated, lifted shadows
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 0.9
-            colorControls.contrast = 0.95
-            colorControls.brightness = 0.02
-            if let result = colorControls.outputImage {
-                outputImage = result
-            }
-
-            // Add warmth
-            let tempTint = CIFilter.temperatureAndTint()
-            tempTint.inputImage = outputImage
-            tempTint.neutral = CIVector(x: 6500, y: 0)
-            tempTint.targetNeutral = CIVector(x: 5800, y: 10)
-            if let result = tempTint.outputImage {
-                outputImage = result
-            }
-
-        case .ektar100:
-            // Vivid, saturated, punchy
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 1.3
-            colorControls.contrast = 1.1
-            colorControls.brightness = 0.0
-            if let result = colorControls.outputImage {
-                outputImage = result
-            }
-
-            // Add slight warmth
-            let vibrance = CIFilter.vibrance()
-            vibrance.inputImage = outputImage
-            vibrance.amount = 0.3
-            if let result = vibrance.outputImage {
-                outputImage = result
-            }
-
-        case .kodakGold:
-            // Golden hour in a canister: warm cast, gentle contrast, soft lift
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 1.08
-            colorControls.contrast = 1.02
-            colorControls.brightness = 0.03
-            if let result = colorControls.outputImage {
-                outputImage = result
-            }
-
-            let tempTint = CIFilter.temperatureAndTint()
-            tempTint.inputImage = outputImage
-            tempTint.neutral = CIVector(x: 6500, y: 0)
-            tempTint.targetNeutral = CIVector(x: 5400, y: 12)
-            if let result = tempTint.outputImage {
-                outputImage = result
-            }
-
-            let vibrance = CIFilter.vibrance()
-            vibrance.inputImage = outputImage
-            vibrance.amount = 0.15
-            if let result = vibrance.outputImage {
-                outputImage = result
-            }
-
-        case .trix400:
-            // Classic black and white
-            let noir = CIFilter.photoEffectNoir()
-            noir.inputImage = outputImage
-            if let result = noir.outputImage {
-                outputImage = result
-            }
-
-            // Add contrast
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.contrast = 1.15
-            if let result = colorControls.outputImage {
-                outputImage = result
-            }
-
-        case .cinestill800:
-            // Cinematic look with warm highlights
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 0.95
-            colorControls.contrast = 1.05
-            if let result = colorControls.outputImage {
-                outputImage = result
-            }
-
-            // Warm color cast
-            let tempTint = CIFilter.temperatureAndTint()
-            tempTint.inputImage = outputImage
-            tempTint.neutral = CIVector(x: 6500, y: 0)
-            tempTint.targetNeutral = CIVector(x: 5200, y: 15)
-            if let result = tempTint.outputImage {
-                outputImage = result
-            }
-
-            // Add halation-like bloom (subtle highlight glow) — crop back so
-            // expanded bloom extent doesn't break createCGImage / Metal.
-            let bloomExtent = outputImage.extent
-            let bloom = CIFilter.bloom()
-            bloom.inputImage = outputImage
-            bloom.radius = 5
-            bloom.intensity = 0.3
-            if let result = bloom.outputImage {
-                outputImage = result.cropped(to: bloomExtent)
-            }
-
-        case .velvia50:
-            // Ultra vivid, high saturation
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 1.5
-            colorControls.contrast = 1.15
-            colorControls.brightness = -0.02
-            if let result = colorControls.outputImage {
-                outputImage = result
-            }
-
-            // Boost vibrance
-            let vibrance = CIFilter.vibrance()
-            vibrance.inputImage = outputImage
-            vibrance.amount = 0.4
-            if let result = vibrance.outputImage {
-                outputImage = result
-            }
-
-        case .instant:
-            outputImage = applyInstantFilmLook(to: outputImage, preview: false)
-        }
-
-        // Bake grain into film stills so the finder overlay isn't preview-only.
-        if filmFilter != .none {
-            outputImage = applyFilmGrain(to: outputImage, amount: 0.06)
-        }
+        let outputImage = gradeFilmStock(filmFilter, onto: ciImage, budget: .still)
 
         // Same retry / software-fallback path as Lens FX — a single createCGImage
         // can fail under live-camera GPU load and used to drop the film look silently.
@@ -2156,6 +1970,342 @@ class CameraManager: NSObject, ObservableObject {
         }
         print("FilmFilter: bake failed for \(filmFilter) — saving unfiltered still")
         return (image, false)
+    }
+
+    /// Shared stock grade for live preview + still bake (Build 124).
+    private func gradeFilmStock(
+        _ stock: FilmFilter,
+        onto image: CIImage,
+        budget: FilmLookBudget
+    ) -> CIImage {
+        guard stock != .none else { return image }
+        let extent = image.extent
+        var output = image
+
+        switch stock {
+        case .none:
+            break
+        case .portra400:
+            output = gradePortra400(output)
+        case .ektar100:
+            output = gradeEktar100(output)
+        case .kodakGold:
+            output = gradeKodakGold(output)
+        case .trix400:
+            output = gradeTrix400(output)
+        case .cinestill800:
+            output = gradeCinestill800(output, budget: budget)
+        case .velvia50:
+            output = gradeVelvia50(output)
+        case .instant:
+            output = gradeInstant(output, budget: budget)
+        }
+
+        if !extent.isInfinite {
+            output = output.cropped(to: extent)
+        }
+        let grain = filmGrainAmount(for: stock) * budget.grainScale
+        output = applyFilmGrain(to: output, amount: grain)
+        // Keep origin at zero for Metal draw / createCGImage.
+        let e = output.extent
+        if e.origin != .zero {
+            output = output.transformed(by: CGAffineTransform(
+                translationX: -e.origin.x,
+                y: -e.origin.y
+            ))
+        }
+        return output
+    }
+
+    /// Still-bake grain amounts — preview scales by `FilmLookBudget.grainScale`.
+    private func filmGrainAmount(for stock: FilmFilter) -> Float {
+        switch stock {
+        case .none: return 0
+        case .portra400: return 0.048
+        case .ektar100: return 0.028
+        case .kodakGold: return 0.055
+        case .trix400: return 0.095
+        case .cinestill800: return 0.082
+        case .velvia50: return 0.022
+        case .instant: return 0.070
+        }
+    }
+
+    // MARK: Stock recipes
+
+    /// Portra 400 — soft pastel skins, muted greens, warm mid lift, gentle toe.
+    private func gradePortra400(_ image: CIImage) -> CIImage {
+        var o = image
+        o = filmColorControls(o, saturation: 0.86, contrast: 0.93, brightness: 0.015)
+        o = filmTempTint(o, targetKelvin: 5750, tint: 8)
+        // Soft S: lifted shadows, easy shoulder — skin stays open.
+        o = filmToneCurve(
+            o,
+            p0: CGPoint(x: 0.00, y: 0.04),
+            p1: CGPoint(x: 0.25, y: 0.27),
+            p2: CGPoint(x: 0.50, y: 0.52),
+            p3: CGPoint(x: 0.75, y: 0.76),
+            p4: CGPoint(x: 1.00, y: 0.96)
+        )
+        // Slight green-shadow / peach-highlight crosstalk.
+        o = filmColorMatrix(
+            o,
+            r: CIVector(x: 1.04, y: 0.02, z: -0.01, w: 0),
+            g: CIVector(x: -0.01, y: 0.98, z: 0.02, w: 0),
+            b: CIVector(x: 0.01, y: -0.02, z: 0.97, w: 0)
+        )
+        o = filmVignette(o, intensity: 0.28, radius: 1.6)
+        return o
+    }
+
+    /// Ektar 100 — punchy reds/blues, tight contrast, fine grain, clean neutrals.
+    private func gradeEktar100(_ image: CIImage) -> CIImage {
+        var o = image
+        o = filmColorControls(o, saturation: 1.28, contrast: 1.12, brightness: -0.01)
+        o = filmVibrance(o, amount: 0.28)
+        o = filmTempTint(o, targetKelvin: 6400, tint: -2)
+        o = filmToneCurve(
+            o,
+            p0: CGPoint(x: 0.00, y: 0.01),
+            p1: CGPoint(x: 0.22, y: 0.18),
+            p2: CGPoint(x: 0.50, y: 0.50),
+            p3: CGPoint(x: 0.78, y: 0.82),
+            p4: CGPoint(x: 1.00, y: 0.99)
+        )
+        o = filmColorMatrix(
+            o,
+            r: CIVector(x: 1.06, y: -0.02, z: -0.01, w: 0),
+            g: CIVector(x: -0.02, y: 1.02, z: 0.01, w: 0),
+            b: CIVector(x: -0.01, y: -0.01, z: 1.08, w: 0)
+        )
+        o = filmVignette(o, intensity: 0.22, radius: 1.7)
+        return o
+    }
+
+    /// Kodak Gold — amber nostalgia, soft highlight rolloff, sunny mids.
+    private func gradeKodakGold(_ image: CIImage) -> CIImage {
+        var o = image
+        o = filmColorControls(o, saturation: 1.12, contrast: 1.00, brightness: 0.035)
+        o = filmTempTint(o, targetKelvin: 5200, tint: 14)
+        o = filmVibrance(o, amount: 0.18)
+        o = filmToneCurve(
+            o,
+            p0: CGPoint(x: 0.00, y: 0.05),
+            p1: CGPoint(x: 0.25, y: 0.30),
+            p2: CGPoint(x: 0.50, y: 0.54),
+            p3: CGPoint(x: 0.75, y: 0.78),
+            p4: CGPoint(x: 1.00, y: 0.94)
+        )
+        o = filmColorMatrix(
+            o,
+            r: CIVector(x: 1.08, y: 0.04, z: -0.02, w: 0),
+            g: CIVector(x: 0.02, y: 1.00, z: -0.01, w: 0),
+            b: CIVector(x: -0.03, y: -0.02, z: 0.92, w: 0)
+        )
+        o = filmVignette(o, intensity: 0.32, radius: 1.55)
+        return o
+    }
+
+    /// Tri-X 400 — hard B&W with crushed toe, bright shoulder, heavy grain.
+    private func gradeTrix400(_ image: CIImage) -> CIImage {
+        var o = image
+        let noir = CIFilter.photoEffectNoir()
+        noir.inputImage = o
+        if let result = noir.outputImage { o = result }
+        o = filmColorControls(o, saturation: 0, contrast: 1.22, brightness: 0.0)
+        o = filmToneCurve(
+            o,
+            p0: CGPoint(x: 0.00, y: 0.00),
+            p1: CGPoint(x: 0.22, y: 0.14),
+            p2: CGPoint(x: 0.48, y: 0.48),
+            p3: CGPoint(x: 0.72, y: 0.80),
+            p4: CGPoint(x: 1.00, y: 1.00)
+        )
+        // Warm silver scan bias.
+        o = filmTempTint(o, targetKelvin: 6000, tint: 4)
+        o = filmVignette(o, intensity: 0.40, radius: 1.5)
+        return o
+    }
+
+    /// CineStill 800T — tungsten warmth + red edge glow on speculars.
+    private func gradeCinestill800(_ image: CIImage, budget: FilmLookBudget) -> CIImage {
+        var o = image
+        o = filmColorControls(o, saturation: 0.92, contrast: 1.08, brightness: 0.01)
+        o = filmTempTint(o, targetKelvin: 4800, tint: 12)
+        o = filmToneCurve(
+            o,
+            p0: CGPoint(x: 0.00, y: 0.03),
+            p1: CGPoint(x: 0.25, y: 0.24),
+            p2: CGPoint(x: 0.50, y: 0.51),
+            p3: CGPoint(x: 0.78, y: 0.80),
+            p4: CGPoint(x: 1.00, y: 0.97)
+        )
+        // Teal-ish shadows / amber highlights.
+        o = filmColorMatrix(
+            o,
+            r: CIVector(x: 1.05, y: 0.03, z: -0.02, w: 0),
+            g: CIVector(x: -0.02, y: 0.98, z: 0.03, w: 0),
+            b: CIVector(x: 0.02, y: -0.01, z: 1.04, w: 0)
+        )
+        o = filmHalationGlow(o, budget: budget, stillRadius: 6, stillIntensity: 0.38, previewMix: 0.20)
+        o = filmVignette(o, intensity: 0.35, radius: 1.55)
+        return o
+    }
+
+    /// Velvia 50 — dense slide: deep greens/blues, hard blacks, tiny grain.
+    private func gradeVelvia50(_ image: CIImage) -> CIImage {
+        var o = image
+        o = filmColorControls(o, saturation: 1.48, contrast: 1.18, brightness: -0.025)
+        o = filmVibrance(o, amount: 0.35)
+        o = filmTempTint(o, targetKelvin: 6600, tint: -4)
+        o = filmToneCurve(
+            o,
+            p0: CGPoint(x: 0.00, y: 0.00),
+            p1: CGPoint(x: 0.20, y: 0.12),
+            p2: CGPoint(x: 0.50, y: 0.48),
+            p3: CGPoint(x: 0.80, y: 0.84),
+            p4: CGPoint(x: 1.00, y: 0.98)
+        )
+        o = filmColorMatrix(
+            o,
+            r: CIVector(x: 1.02, y: -0.03, z: -0.02, w: 0),
+            g: CIVector(x: -0.04, y: 1.10, z: -0.02, w: 0),
+            b: CIVector(x: -0.02, y: -0.02, z: 1.12, w: 0)
+        )
+        o = filmVignette(o, intensity: 0.30, radius: 1.65)
+        return o
+    }
+
+    /// Instant / SX-70 — creamy lift, greenish shadows, heavy falloff, soft glow.
+    private func gradeInstant(_ image: CIImage, budget: FilmLookBudget) -> CIImage {
+        var o = image
+        o = filmColorControls(o, saturation: 0.78, contrast: 0.90, brightness: 0.03)
+        o = filmTempTint(o, targetKelvin: 5150, tint: -10)
+        o = filmToneCurve(
+            o,
+            p0: CGPoint(x: 0.00, y: 0.12),
+            p1: CGPoint(x: 0.25, y: 0.30),
+            p2: CGPoint(x: 0.50, y: 0.54),
+            p3: CGPoint(x: 0.75, y: 0.80),
+            p4: CGPoint(x: 1.00, y: 0.92)
+        )
+        o = filmColorMatrix(
+            o,
+            r: CIVector(x: 1.04, y: 0.02, z: 0.01, w: 0),
+            g: CIVector(x: 0.01, y: 1.02, z: -0.02, w: 0),
+            b: CIVector(x: -0.02, y: 0.03, z: 0.94, w: 0)
+        )
+        o = filmVignette(o, intensity: 0.85, radius: 1.75)
+        o = filmHalationGlow(o, budget: budget, stillRadius: 4.5, stillIntensity: 0.28, previewMix: 0.12)
+        return o
+    }
+
+    // MARK: Film CI helpers
+
+    private func filmColorControls(
+        _ image: CIImage,
+        saturation: Float,
+        contrast: Float,
+        brightness: Float
+    ) -> CIImage {
+        let f = CIFilter.colorControls()
+        f.inputImage = image
+        f.saturation = saturation
+        f.contrast = contrast
+        f.brightness = brightness
+        return f.outputImage ?? image
+    }
+
+    private func filmVibrance(_ image: CIImage, amount: Float) -> CIImage {
+        let f = CIFilter.vibrance()
+        f.inputImage = image
+        f.amount = amount
+        return f.outputImage ?? image
+    }
+
+    private func filmTempTint(_ image: CIImage, targetKelvin: CGFloat, tint: CGFloat) -> CIImage {
+        let f = CIFilter.temperatureAndTint()
+        f.inputImage = image
+        f.neutral = CIVector(x: 6500, y: 0)
+        f.targetNeutral = CIVector(x: targetKelvin, y: tint)
+        return f.outputImage ?? image
+    }
+
+    private func filmToneCurve(
+        _ image: CIImage,
+        p0: CGPoint, p1: CGPoint, p2: CGPoint, p3: CGPoint, p4: CGPoint
+    ) -> CIImage {
+        let f = CIFilter.toneCurve()
+        f.inputImage = image
+        f.point0 = p0
+        f.point1 = p1
+        f.point2 = p2
+        f.point3 = p3
+        f.point4 = p4
+        return f.outputImage ?? image
+    }
+
+    private func filmColorMatrix(
+        _ image: CIImage,
+        r: CIVector, g: CIVector, b: CIVector
+    ) -> CIImage {
+        let f = CIFilter.colorMatrix()
+        f.inputImage = image
+        f.rVector = r
+        f.gVector = g
+        f.bVector = b
+        f.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        f.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        return f.outputImage ?? image
+    }
+
+    private func filmVignette(_ image: CIImage, intensity: Float, radius: Float) -> CIImage {
+        let f = CIFilter.vignette()
+        f.inputImage = image
+        f.intensity = intensity
+        f.radius = radius
+        return f.outputImage ?? image
+    }
+
+    /// Still uses real bloom; preview uses a cheap screen-glow so the finder
+    /// keeps CineStill / Instant character without freezing Metal.
+    private func filmHalationGlow(
+        _ image: CIImage,
+        budget: FilmLookBudget,
+        stillRadius: Float,
+        stillIntensity: Float,
+        previewMix: Float
+    ) -> CIImage {
+        let extent = image.extent
+        if budget.allowFullBloom {
+            let bloom = CIFilter.bloom()
+            bloom.inputImage = image
+            bloom.radius = stillRadius
+            bloom.intensity = stillIntensity
+            let bloomExtent = image.extent
+            if let result = bloom.outputImage {
+                return result.cropped(to: bloomExtent)
+            }
+            return image
+        }
+        // Preview-safe: soft blur screened in at low mix (no CIBloom).
+        let blur = CIFilter.gaussianBlur()
+        blur.inputImage = image
+        blur.radius = max(2, stillRadius * 0.45)
+        guard let soft = blur.outputImage?.cropped(to: extent) else { return image }
+        let fade = CIFilter.colorMatrix()
+        fade.inputImage = soft
+        let m = CGFloat(previewMix)
+        fade.rVector = CIVector(x: m, y: 0, z: 0, w: 0)
+        fade.gVector = CIVector(x: 0, y: m * 0.85, z: 0, w: 0)
+        fade.bVector = CIVector(x: 0, y: 0, z: m * 0.7, w: 0)
+        fade.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        fade.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        guard let glow = fade.outputImage else { return image }
+        let screen = CIFilter.screenBlendMode()
+        screen.inputImage = glow
+        screen.backgroundImage = image
+        return (screen.outputImage ?? image).cropped(to: extent)
     }
 
     /// Soft luminance grain (shared by live preview + still bake).
@@ -2306,9 +2456,13 @@ class CameraManager: NSObject, ObservableObject {
         ))
 
         let dims: [CGFloat] = [4096, 3072, 2048, 1536]
+        let bakeSpace = CGColorSpace(name: CGColorSpace.displayP3) ?? CGColorSpaceCreateDeviceRGB()
         let contexts: [CIContext] = [
             ciContext,
-            CIContext(options: [.useSoftwareRenderer: true])
+            CIContext(options: [
+                .useSoftwareRenderer: true,
+                .workingColorSpace: bakeSpace
+            ])
         ]
 
         for dim in dims {
@@ -2535,9 +2689,10 @@ class CameraManager: NSObject, ObservableObject {
         guard longest > maxDimension, longest > 1 else { return image }
         let scale = maxDimension / longest
         let newSize = CGSize(width: size.width * scale, height: size.height * scale)
-        let format = UIGraphicsImageRendererFormat.default()
+        let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         format.opaque = false
+        format.preferredRange = .standard
         let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
         return renderer.image { _ in
             image.draw(in: CGRect(origin: .zero, size: newSize))
@@ -2622,7 +2777,7 @@ class CameraManager: NSObject, ObservableObject {
         filmFilter: FilmFilter? = nil,
         lensFX: LensFXMode? = nil,
         morphTouch: MorphTouchState? = nil,
-        completion: @escaping (UIImage?) -> Void
+        completion: @escaping (CapturedStill?) -> Void
     ) {
         // Serialize: block mid-bake, STACK accumulation, and any in-flight LE.
         // Do NOT use isLongExposureCapturing — HW LE sets that before calling us.
@@ -2642,6 +2797,7 @@ class CameraManager: NSObject, ObservableObject {
         }()
         // Selected film/FX always bake into the processed companion (WYSIWYG).
         // Natural capture only reduces Apple ISP fusion — it does not strip looks.
+        // Clean stills keep original HEIC/JPEG bytes for Photos (Build 122).
         // RAW DNG stays clean via the separate raw callback.
         let needsFXBake = captureLensFX != .none || captureFilmFilter != .none
 
@@ -2662,17 +2818,17 @@ class CameraManager: NSObject, ObservableObject {
         // cannot race the bake registration.
         photoStateLock.lock()
         bakeGeneration = gen
-        bakeTimeoutCompletion = { img in
-            DispatchQueue.main.async { completion(img) }
+        bakeTimeoutCompletion = { still in
+            DispatchQueue.main.async { completion(still) }
         }
         photoStateLock.unlock()
-        setPhotoHandler { [weak self] image in
+        setPhotoHandler { [weak self] still in
             guard let self else { return }
             self.photoStateLock.lock()
             let genCurrent = self.bakeGeneration == gen
             self.photoStateLock.unlock()
             guard genCurrent else { return }
-            guard let image else {
+            guard let still else {
                 self.finishUserBake(nil, generation: gen)
                 return
             }
@@ -2683,23 +2839,36 @@ class CameraManager: NSObject, ObservableObject {
                 let stillCurrent = self.bakeGeneration == gen
                 self.photoStateLock.unlock()
                 guard stillCurrent else { return }
-                let filteredImage: UIImage?
+                let delivered: CapturedStill?
                 if needsFXBake {
-                    filteredImage = self.bakeLooksForCapture(
+                    // Bake rewrites pixels — drop the original bitstream. Keep a
+                    // clean master only for film-only captures; an FX chain has
+                    // no safe post-film ordering yet (Build 127).
+                    if let baked = self.bakeLooksForCapture(
                         film: captureFilmFilter,
                         fx: captureLensFX,
                         touch: captureTouch,
-                        onto: image
-                    )
+                        onto: still.image
+                    ) {
+                        print("LensFX capture done: out=\(baked.size) orient=\(baked.imageOrientation.rawValue)")
+                        let master = captureFilmFilter != .none && captureLensFX == .none
+                            ? still.image
+                            : nil
+                        delivered = CapturedStill(
+                            image: baked,
+                            originalFileData: nil,
+                            cleanImage: master
+                        )
+                    } else {
+                        print("LensFX capture BAKE FAILED — not saving clean still")
+                        delivered = nil
+                    }
                 } else {
-                    filteredImage = image
+                    // Honest path — keep sensor/ISP file bytes for Photos.
+                    print("NaturalCapture: keeping original \(still.originalFileData?.count ?? 0) bytes")
+                    delivered = still
                 }
-                if let filteredImage {
-                    print("LensFX capture done: out=\(filteredImage.size) orient=\(filteredImage.imageOrientation.rawValue)")
-                } else {
-                    print("LensFX capture BAKE FAILED — not saving clean still")
-                }
-                self.finishUserBake(filteredImage, generation: gen)
+                self.finishUserBake(delivered, generation: gen)
             }
         }
         armBakeTimeout()
@@ -2747,8 +2916,9 @@ class CameraManager: NSObject, ObservableObject {
         applyMinimalProcessing(to: &settings)
 
         // Snapshot UIKit orientation on main — never from sessionQueue.
-        let fire: (CGFloat) -> Void = { [weak self] angle in
+        let fire: (UIInterfaceOrientation) -> Void = { [weak self] orient in
             guard let self else { return }
+            let angle = Self.videoRotationAngle(for: orient)
             self.sessionQueue.async {
                 guard self.session.isRunning else {
                     DispatchQueue.main.async {
@@ -2775,15 +2945,16 @@ class CameraManager: NSObject, ObservableObject {
                 // steal the next capture's handler.
                 self.photoStateLock.lock()
                 self.activeCaptureUniqueID = settings.uniqueID
+                self.captureInterfaceOrientation = orient
                 self.photoStateLock.unlock()
                 self.photoOutput.capturePhoto(with: settings, delegate: self)
             }
         }
         if Thread.isMainThread {
-            fire(Self.videoRotationAngle(for: Self.currentInterfaceOrientation()))
+            fire(Self.currentInterfaceOrientation())
         } else {
             DispatchQueue.main.async {
-                fire(Self.videoRotationAngle(for: Self.currentInterfaceOrientation()))
+                fire(Self.currentInterfaceOrientation())
             }
         }
     }
@@ -2823,8 +2994,12 @@ class CameraManager: NSObject, ObservableObject {
     }
 
 
-    func saveToPhotoLibrary(_ image: UIImage, completion: @escaping (String?) -> Void) {
-        PhotosLibraryService.saveImage(image, completion: completion)
+    func saveToPhotoLibrary(
+        _ image: UIImage,
+        originalFileData: Data? = nil,
+        completion: @escaping (String?) -> Void
+    ) {
+        PhotosLibraryService.saveImage(image, originalFileData: originalFileData, completion: completion)
     }
 
     private func saveRawDataToPhotoLibrary(_ data: Data) {
@@ -2882,16 +3057,16 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
             return
         }
 
-        // Processed half arrived — try to decode.
+        // Processed half arrived — try to decode; keep original file bytes.
         let handler = photoCompletionHandler
         photoCompletionHandler = nil
         let rawToSave = pendingRawData
         pendingRawData = nil
         activeCaptureUniqueID = nil
+        let captureOrient = captureInterfaceOrientation
         photoStateLock.unlock()
 
-        let image = decodedProcessedPhoto(photo)
-        guard let image else {
+        guard let still = decodedProcessedStill(photo, interfaceOrientation: captureOrient) else {
             handler?(nil)
             return
         }
@@ -2900,13 +3075,47 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
         if let rawToSave {
             saveRawDataToPhotoLibrary(rawToSave)
         }
-        handler?(image)
+        handler?(still)
     }
 
-    /// Prefer UIImage(data:); fall back to CGImageSource when HEIC decode flakes.
-    private func decodedProcessedPhoto(_ photo: AVCapturePhoto) -> UIImage? {
+    /// Decode the processed companion, upright it, and retain original bytes when safe.
+    private func decodedProcessedStill(
+        _ photo: AVCapturePhoto,
+        interfaceOrientation: UIInterfaceOrientation
+    ) -> CapturedStill? {
         guard let data = photo.fileDataRepresentation() else { return nil }
-        if let ui = UIImage(data: data) { return ui }
+        let decoded: UIImage?
+        if let ui = UIImage(data: data) {
+            decoded = ui
+        } else {
+            decoded = Self.uiImageFromImageIO(data)
+        }
+        guard let decoded else { return nil }
+
+        // Bake EXIF into pixels (SDR) so gallery/share never depend on tags.
+        var image = decoded.normalizedUpSDR()
+        var keepOriginal = true
+
+        // If photo-connection rotation never stuck, portrait captures arrive as
+        // landscape pixels with orientation=.up — looks 90° CCW in every viewer.
+        if interfaceOrientation == .portrait, image.size.width > image.size.height + 1 {
+            image = image.rotated90ClockwiseSDR()
+            keepOriginal = false
+            print("NaturalCapture: repaired sideways portrait still")
+        } else if interfaceOrientation == .portraitUpsideDown,
+                  image.size.width > image.size.height + 1 {
+            image = image.rotated90CounterClockwiseSDR()
+            keepOriginal = false
+            print("NaturalCapture: repaired sideways upside-down still")
+        }
+
+        return CapturedStill(
+            image: image,
+            originalFileData: keepOriginal ? data : nil
+        )
+    }
+
+    private static func uiImageFromImageIO(_ data: Data) -> UIImage? {
         let options: [CFString: Any] = [kCGImageSourceShouldCache: false]
         guard let src = CGImageSourceCreateWithData(data as CFData, options as CFDictionary),
               let cg = CGImageSourceCreateImageAtIndex(src, 0, options as CFDictionary) else {
@@ -3209,8 +3418,8 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
         longExposureCompletion = nil
         let gen = UUID()
         bakeGeneration = gen
-        bakeTimeoutCompletion = { img in
-            DispatchQueue.main.async { completion?(img) }
+        bakeTimeoutCompletion = { still in
+            DispatchQueue.main.async { completion?(still?.image) }
         }
         photoStateLock.unlock()
 
@@ -3254,20 +3463,25 @@ extension CameraManager: AVCaptureVideoDataOutputSampleBufferDelegate {
             self.photoStateLock.unlock()
             guard genStillCurrent, opStillCurrent else { return }
 
-            let finalImage: UIImage?
+            let delivered: CapturedStill?
             if let img = resultImage {
-                // Same WYSIWYG bake policy as normal capture.
-                finalImage = self.bakeLooksForCapture(
+                // Same WYSIWYG bake policy as normal capture. LE has no original
+                // AVFoundation bitstream to preserve.
+                if let baked = self.bakeLooksForCapture(
                     film: captureFilmFilter,
                     fx: captureLensFX,
                     touch: captureTouch,
                     onto: img
-                )
+                ) {
+                    delivered = CapturedStill(image: baked, originalFileData: nil)
+                } else {
+                    delivered = nil
+                }
             } else {
-                finalImage = nil
+                delivered = nil
             }
 
-            self.finishUserBake(finalImage, generation: gen)
+            self.finishUserBake(delivered, generation: gen)
         }
     }
 

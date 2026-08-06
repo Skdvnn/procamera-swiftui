@@ -411,16 +411,20 @@ class FilteredPreviewView: UIView {
     }
 
     private static func makePreviewCIContext(device: MTLDevice?) -> CIContext {
+        let space = CGColorSpace(name: CGColorSpace.displayP3) ?? CGColorSpaceCreateDeviceRGB()
         if let device {
             return CIContext(
                 mtlDevice: device,
                 options: [
-                    .workingColorSpace: CGColorSpaceCreateDeviceRGB(),
+                    .workingColorSpace: space,
                     .cacheIntermediates: false
                 ]
             )
         }
-        return CIContext(options: [.cacheIntermediates: false])
+        return CIContext(options: [
+            .workingColorSpace: space,
+            .cacheIntermediates: false
+        ])
     }
 
     override init(frame: CGRect) {
