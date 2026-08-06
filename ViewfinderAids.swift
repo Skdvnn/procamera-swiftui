@@ -55,13 +55,52 @@ extension UIImage {
             let newH = w / aspect
             crop = CGRect(x: 0, y: (h - newH) / 2, width: w, height: newH)
         }
-        let format = UIGraphicsImageRendererFormat.default()
+        // `.standard` avoids HDR tone-map crunch when redrawing P3/gain-map stills.
+        let format = UIGraphicsImageRendererFormat()
         format.scale = scale
         format.opaque = false
+        format.preferredRange = .standard
         let renderer = UIGraphicsImageRenderer(size: crop.size, format: format)
         return renderer.image { _ in
             draw(at: CGPoint(x: -crop.origin.x, y: -crop.origin.y))
         }
+    }
+
+    /// Bake `imageOrientation` into upright SDR pixels (Build 123).
+    func normalizedUpSDR() -> UIImage {
+        guard imageOrientation != .up else { return self }
+        return redrawnSDR(size: size) { draw(at: .zero) }
+    }
+
+    /// Rotate 90° clockwise into upright SDR pixels.
+    func rotated90ClockwiseSDR() -> UIImage {
+        let newSize = CGSize(width: size.height, height: size.width)
+        return redrawnSDR(size: newSize) {
+            guard let ctx = UIGraphicsGetCurrentContext() else { return }
+            ctx.translateBy(x: newSize.width, y: 0)
+            ctx.rotate(by: .pi / 2)
+            draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+
+    /// Rotate 90° counter-clockwise into upright SDR pixels.
+    func rotated90CounterClockwiseSDR() -> UIImage {
+        let newSize = CGSize(width: size.height, height: size.width)
+        return redrawnSDR(size: newSize) {
+            guard let ctx = UIGraphicsGetCurrentContext() else { return }
+            ctx.translateBy(x: 0, y: newSize.height)
+            ctx.rotate(by: -.pi / 2)
+            draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+
+    /// SDR redraw — kills HDR headroom that otherwise becomes haloed/crunchy JPEG.
+    private func redrawnSDR(size: CGSize, draw: () -> Void) -> UIImage {
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = scale
+        format.opaque = false
+        format.preferredRange = .standard
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in draw() }
     }
 }
 

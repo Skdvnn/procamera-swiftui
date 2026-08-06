@@ -8,15 +8,16 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 122 phone test pack (natural stills + collapsed chrome):**
+**Build 123 phone test pack (honest natural stills):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **122**.
-Verified: clean natural captures save original HEIC/JPEG bytes to Photos (no
-UIImage re-encode); swiped-down finder hides the histogram and keeps the shutter;
-Minimalism no longer removes the shutter dock.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **123**.
+Verified: natural stills stay ~12MP WYSIWYG (no deferred/ZSL HDR crunch), upright
+orientation repaired, original HEIC kept when clean; swiped-down hides histogram;
+shutter stays in Minimalism.
 
+Build 122: original HEIC bytes to Photos.
 Build 121: collapsed hist off / shutter stays.
 Build 120: Compact top.
 Build 119: widget pad + EV rail.

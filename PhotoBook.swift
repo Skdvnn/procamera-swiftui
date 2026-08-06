@@ -99,8 +99,8 @@ final class GalleryStore: ObservableObject {
         DispatchQueue.global(qos: .utility).async { [weak self] in
             guard let self = self else { return }
 
-            // Near-lossless in-app archive — Photos gets original HEIC when clean (Build 122).
-            guard let data = image.jpegData(compressionQuality: 0.97) else { return }
+            // Near-lossless SDR archive — Photos gets original HEIC when clean (Build 122/123).
+            guard let data = image.normalizedUpSDR().jpegData(compressionQuality: 0.97) else { return }
             do {
                 try data.write(to: self.imageURL(for: metadata.id), options: .atomic)
             } catch {

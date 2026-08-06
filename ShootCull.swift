@@ -299,14 +299,19 @@ enum PhotosLibraryService {
     }
 
     /// Encode a still for Photos when original AVFoundation bytes are gone
-    /// (look bake / aspect crop). Prefer HEIC @ 0.95, else JPEG @ 0.97.
+    /// (look bake / aspect crop / orientation repair). Prefer HEIC @ 0.95.
     static func highQualityPhotoData(from image: UIImage) -> Data? {
-        if let heic = heicData(from: image, quality: 0.95) { return heic }
-        return image.jpegData(compressionQuality: 0.97)
+        // Bake orientation + tone-map HDR→SDR before encode (Build 123).
+        let upright = image.normalizedUpSDR()
+        if let heic = heicData(from: upright, quality: 0.95) { return heic }
+        return upright.jpegData(compressionQuality: 0.97)
     }
 
     private static func heicData(from image: UIImage, quality: CGFloat) -> Data? {
-        guard let cgImage = image.cgImage else { return nil }
+        // Prefer an upright SDR bitmap — writing EXIF-only orientation on a
+        // sideways cgImage left Photos/share targets looking rotated.
+        let upright = image.imageOrientation == .up ? image : image.normalizedUpSDR()
+        guard let cgImage = upright.cgImage else { return nil }
         let data = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(
             data,
@@ -314,27 +319,13 @@ enum PhotosLibraryService {
             1,
             nil
         ) else { return nil }
-        var props: [CFString: Any] = [
-            kCGImageDestinationLossyCompressionQuality: quality
+        let props: [CFString: Any] = [
+            kCGImageDestinationLossyCompressionQuality: quality,
+            kCGImagePropertyOrientation: CGImagePropertyOrientation.up.rawValue
         ]
-        props[kCGImagePropertyOrientation] = cgImagePropertyOrientation(image.imageOrientation).rawValue
         CGImageDestinationAddImage(dest, cgImage, props as CFDictionary)
         guard CGImageDestinationFinalize(dest) else { return nil }
         return data as Data
-    }
-
-    private static func cgImagePropertyOrientation(_ o: UIImage.Orientation) -> CGImagePropertyOrientation {
-        switch o {
-        case .up: return .up
-        case .down: return .down
-        case .left: return .left
-        case .right: return .right
-        case .upMirrored: return .upMirrored
-        case .downMirrored: return .downMirrored
-        case .leftMirrored: return .leftMirrored
-        case .rightMirrored: return .rightMirrored
-        @unknown default: return .up
-        }
     }
 
     /// Best-effort mirror into the shared Shutter album for widget Photos fallback.

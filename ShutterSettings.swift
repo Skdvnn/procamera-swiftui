@@ -172,8 +172,8 @@ struct ShutterSettingsSheet: View {
                         DSLRToggleRow(
                             title: "Natural capture",
                             blurb: naturalCapture
-                                ? "WYSIWYG ISP · original HEIC · looks still bake"
-                                : "Polished ISP · looks still bake",
+                                ? "12MP WYSIWYG · no deferred HDR · looks still bake"
+                                : "Max-res polished ISP · looks still bake",
                             isOn: $naturalCapture
                         )
                     }

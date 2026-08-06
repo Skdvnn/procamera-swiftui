@@ -209,6 +209,8 @@ class CameraManager: NSObject, ObservableObject {
     private var pendingRawData: Data?
     /// `AVCapturePhotoSettings.uniqueID` for the in-flight still — ignore late callbacks.
     private var activeCaptureUniqueID: Int64?
+    /// Interface orientation frozen at shutter — used to repair sideways stills.
+    private var captureInterfaceOrientation: UIInterfaceOrientation = .portrait
     /// Remembered WB / macro so lens+flip can reapply.
     private var lockedWhiteBalanceMode: Int = 0
     private var macroEnabledFlag = false
@@ -462,14 +464,30 @@ class CameraManager: NSObject, ObservableObject {
         startSession()
     }
 
-    // Modern replacement for isHighResolutionCaptureEnabled: pick the largest
-    // photo dimensions the active format supports. Must be re-applied whenever
-    // the device or its active format changes.
+    // Modern replacement for isHighResolutionCaptureEnabled. Must be re-applied
+    // whenever the device or its active format changes.
     private func updateMaxPhotoDimensions(for device: AVCaptureDevice) {
         let supported = device.activeFormat.supportedMaxPhotoDimensions
-        if let best = supported.max(by: { Int($0.width) * Int($0.height) < Int($1.width) * Int($1.height) }) {
+        guard !supported.isEmpty else { return }
+        if let best = preferredPhotoDimensions(from: supported) {
             photoOutput.maxPhotoDimensions = best
         }
+    }
+
+    /// Natural stays on the classic ~12MP path. 24/48MP invites deferred delivery
+    /// and heavier ISP that reads as crunchy HDR / blown halos (Build 123).
+    private func preferredPhotoDimensions(
+        from supported: [CMVideoDimensions]
+    ) -> CMVideoDimensions? {
+        let area = { (d: CMVideoDimensions) in Int(d.width) * Int(d.height) }
+        if naturalCaptureEnabled {
+            let limit = 12_500_000
+            let under = supported.filter { area($0) <= limit }
+            if let best = under.max(by: { area($0) < area($1) }) { return best }
+            // Every option is huge — take the smallest to stay honest.
+            return supported.min(by: { area($0) < area($1) })
+        }
+        return supported.max(by: { area($0) < area($1) })
     }
 
     // MARK: - Natural / rude capture (minimize Apple computational photography)
@@ -488,7 +506,21 @@ class CameraManager: NSObject, ObservableObject {
             photoOutput.isAppleProRAWEnabled = !natural
         }
 
-        print("NaturalCapture: natural=\(natural) maxQ=\(photoOutput.maxPhotoQualityPrioritization.rawValue) proRAW=\(photoOutput.isAppleProRAWEnabled) rawFormats=\(photoOutput.availableRawPhotoPixelFormatTypes.count)")
+        // Deferred proxies + zero-shutter-lag reuse prior ISP frames — both fight
+        // "what you see is what you get" natural stills (Build 123).
+        if photoOutput.isAutoDeferredPhotoDeliverySupported {
+            photoOutput.isAutoDeferredPhotoDeliveryEnabled = false
+        }
+        if photoOutput.isZeroShutterLagSupported {
+            photoOutput.isZeroShutterLagEnabled = false
+        }
+
+        // Re-pick dimensions when natural toggles (12MP vs max).
+        if let device = videoDeviceInput?.device {
+            updateMaxPhotoDimensions(for: device)
+        }
+
+        print("NaturalCapture: natural=\(natural) maxQ=\(photoOutput.maxPhotoQualityPrioritization.rawValue) proRAW=\(photoOutput.isAppleProRAWEnabled) dims=\(photoOutput.maxPhotoDimensions.width)x\(photoOutput.maxPhotoDimensions.height) rawFormats=\(photoOutput.availableRawPhotoPixelFormatTypes.count)")
     }
 
     /// Prefer pure Bayer sensor RAW over Apple ProRAW (fused / more processed).
@@ -2551,9 +2583,10 @@ class CameraManager: NSObject, ObservableObject {
         guard longest > maxDimension, longest > 1 else { return image }
         let scale = maxDimension / longest
         let newSize = CGSize(width: size.width * scale, height: size.height * scale)
-        let format = UIGraphicsImageRendererFormat.default()
+        let format = UIGraphicsImageRendererFormat()
         format.scale = 1
         format.opaque = false
+        format.preferredRange = .standard
         let renderer = UIGraphicsImageRenderer(size: newSize, format: format)
         return renderer.image { _ in
             image.draw(in: CGRect(origin: .zero, size: newSize))
@@ -2768,8 +2801,9 @@ class CameraManager: NSObject, ObservableObject {
         applyMinimalProcessing(to: &settings)
 
         // Snapshot UIKit orientation on main — never from sessionQueue.
-        let fire: (CGFloat) -> Void = { [weak self] angle in
+        let fire: (UIInterfaceOrientation) -> Void = { [weak self] orient in
             guard let self else { return }
+            let angle = Self.videoRotationAngle(for: orient)
             self.sessionQueue.async {
                 guard self.session.isRunning else {
                     DispatchQueue.main.async {
@@ -2796,15 +2830,16 @@ class CameraManager: NSObject, ObservableObject {
                 // steal the next capture's handler.
                 self.photoStateLock.lock()
                 self.activeCaptureUniqueID = settings.uniqueID
+                self.captureInterfaceOrientation = orient
                 self.photoStateLock.unlock()
                 self.photoOutput.capturePhoto(with: settings, delegate: self)
             }
         }
         if Thread.isMainThread {
-            fire(Self.videoRotationAngle(for: Self.currentInterfaceOrientation()))
+            fire(Self.currentInterfaceOrientation())
         } else {
             DispatchQueue.main.async {
-                fire(Self.videoRotationAngle(for: Self.currentInterfaceOrientation()))
+                fire(Self.currentInterfaceOrientation())
             }
         }
     }
@@ -2913,9 +2948,10 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
         let rawToSave = pendingRawData
         pendingRawData = nil
         activeCaptureUniqueID = nil
+        let captureOrient = captureInterfaceOrientation
         photoStateLock.unlock()
 
-        guard let still = decodedProcessedStill(photo) else {
+        guard let still = decodedProcessedStill(photo, interfaceOrientation: captureOrient) else {
             handler?(nil)
             return
         }
@@ -2927,12 +2963,44 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
         handler?(still)
     }
 
-    /// Decode the processed companion and retain the original HEIC/JPEG bitstream.
-    private func decodedProcessedStill(_ photo: AVCapturePhoto) -> CapturedStill? {
+    /// Decode the processed companion, upright it, and retain original bytes when safe.
+    private func decodedProcessedStill(
+        _ photo: AVCapturePhoto,
+        interfaceOrientation: UIInterfaceOrientation
+    ) -> CapturedStill? {
         guard let data = photo.fileDataRepresentation() else { return nil }
+        let decoded: UIImage?
         if let ui = UIImage(data: data) {
-            return CapturedStill(image: ui, originalFileData: data)
+            decoded = ui
+        } else {
+            decoded = Self.uiImageFromImageIO(data)
         }
+        guard let decoded else { return nil }
+
+        // Bake EXIF into pixels (SDR) so gallery/share never depend on tags.
+        var image = decoded.normalizedUpSDR()
+        var keepOriginal = true
+
+        // If photo-connection rotation never stuck, portrait captures arrive as
+        // landscape pixels with orientation=.up — looks 90° CCW in every viewer.
+        if interfaceOrientation == .portrait, image.size.width > image.size.height + 1 {
+            image = image.rotated90ClockwiseSDR()
+            keepOriginal = false
+            print("NaturalCapture: repaired sideways portrait still")
+        } else if interfaceOrientation == .portraitUpsideDown,
+                  image.size.width > image.size.height + 1 {
+            image = image.rotated90CounterClockwiseSDR()
+            keepOriginal = false
+            print("NaturalCapture: repaired sideways upside-down still")
+        }
+
+        return CapturedStill(
+            image: image,
+            originalFileData: keepOriginal ? data : nil
+        )
+    }
+
+    private static func uiImageFromImageIO(_ data: Data) -> UIImage? {
         let options: [CFString: Any] = [kCGImageSourceShouldCache: false]
         guard let src = CGImageSourceCreateWithData(data as CFData, options as CFDictionary),
               let cg = CGImageSourceCreateImageAtIndex(src, 0, options as CFDictionary) else {
@@ -2951,8 +3019,7 @@ extension CameraManager: AVCapturePhotoCaptureDelegate {
         case 8: orient = .left
         default: orient = .up
         }
-        let ui = UIImage(cgImage: cg, scale: 1, orientation: orient)
-        return CapturedStill(image: ui, originalFileData: data)
+        return UIImage(cgImage: cg, scale: 1, orientation: orient)
     }
 
     func photoOutput(

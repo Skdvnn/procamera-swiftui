@@ -286,6 +286,31 @@ def test_source_guards() -> None:
         "content-aware distortion off",
         "isAutoContentAwareDistortionCorrectionEnabled = false" in cam,
     )
+    # Build 123 — natural stays ~12MP; kill deferred/ZSL crunchy HDR; upright stills.
+    check(
+        "natural caps photo dimensions",
+        "12_500_000" in cam and "preferredPhotoDimensions" in cam,
+    )
+    check(
+        "deferred photo delivery off",
+        "isAutoDeferredPhotoDeliveryEnabled = false" in cam,
+    )
+    check(
+        "zero shutter lag off",
+        "isZeroShutterLagEnabled = false" in cam,
+    )
+    check(
+        "repairs sideways portrait still",
+        "repaired sideways portrait still" in cam
+        and "normalizedUpSDR" in cam,
+    )
+    aids = (ROOT / "ViewfinderAids.swift").read_text()
+    check(
+        "SDR preferredRange on photo redraw",
+        "preferredRange = .standard" in aids
+        and "normalizedUpSDR" in aids
+        and "rotated90ClockwiseSDR" in aids,
+    )
     shoot = (ROOT / "ShootCull.swift").read_text()
     check(
         "Photos prefers original bytes",
