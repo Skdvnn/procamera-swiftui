@@ -284,7 +284,21 @@ def test_source_guards() -> None:
         "collapsed dock swipe + shutter z-order",
         "collapsedBottomOverlay" in content
         and ".simultaneousGesture(bottomDeckSwipe)" in content
-        and "Above histogram + viewfinder chrome" in content,
+        and "Above viewfinder chrome so shutter wins taps" in content,
+    )
+    # Build 121 — swiped-down finder hides histogram; shutter always stays
+    # (including Minimalism, which previously gated the whole collapsed overlay off).
+    check(
+        "collapsed always shows shutter dock",
+        "if effectiveBottomCollapsed {" in content
+        and "Shutter dock always stays in the quiet finder" in content
+        and "if effectiveBottomCollapsed && !minimalismMode" not in content,
+    )
+    check(
+        "collapsed hides histogram",
+        "Swiped-down / collapsed: no histogram" in content
+        and "Histogram stays off while collapsed" in content
+        and "histogramBottomPad" not in content,
     )
     check(
         "shutter timer cancel stays enabled",
@@ -576,6 +590,17 @@ def test_source_guards() -> None:
     check("minimalChrome on overlay", "minimalChrome: minimalismMode" in content)
     check("minimal hides top strip", "hideTopStrip = minimalismMode" in content)
     check("minimal gear escape hatch", "Escape hatch — gear lives on the expanded deck" in content)
+    # Build 121 — Minimalism must keep the shutter in the collapsed dock.
+    compact_deck = content[
+        content.find("private func bottomCompactDeck") : content.find("private var bottomExpandedDeck")
+    ]
+    check(
+        "minimalism keeps collapsed shutter",
+        "Shutter dock always stays in the quiet finder (incl. Minimalism)" in content
+        and "ShutterButton(" in compact_deck
+        and "if minimalismMode {" in compact_deck
+        and "Escape hatch — gear lives on the expanded deck" in compact_deck,
+    )
     # Build 120 — Compact top (opt-in); classic dials remain when off.
     check("compactTop AppStorage", '@AppStorage("cam.compactTop")' in content)
     check("compactTop settings toggle", 'title: "Compact top"' in settings)
@@ -1508,7 +1533,8 @@ def main() -> int:
     check("visual report PASS", viz_report.startswith("PASS"))
     check("visual parses CollapsedChrome", "parsed CollapsedChrome:" in viz_report)
     check("visual film dock case", "film dock clears shutter: yes" in viz_report)
-    check("visual shutter z-order", "shutter z-order above histogram: yes" in viz_report)
+    check("visual shutter z-order", "collapsed shutter dock: yes" in viz_report)
+    check("visual collapsed hist hidden", "collapsed histogram: hidden" in viz_report)
     check("visual landscape expanded", "landscape expanded hist↔shutter gap:" in viz_report)
     print("\n== Widget preview render ==")
     w = subprocess.run([sys.executable, str(ROOT / "scripts/widget_layout_preview.py")], cwd=ROOT)

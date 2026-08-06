@@ -499,7 +499,8 @@ struct ContentView: View {
         }
     }
 
-    /// Shared collapsed chrome metrics — histogram floats above fade/deck.
+    /// Shared collapsed chrome metrics — shutter dock + fade only when collapsed.
+    /// Histogram lives in the expanded viewfinder only (Build 121).
     private enum CollapsedChrome {
         static let deckHeight: CGFloat = 88
         /// Tall enough for the compact shutter (64) + vertical pad in landscape.
@@ -507,8 +508,6 @@ struct ContentView: View {
         static let fadeHeight: CGFloat = 48
         /// Approximate RefractiveGlassInfoBar height (pad + hist + readouts).
         static let infoBarHeight: CGFloat = 56
-        /// Gap between histogram bottom and shutter deck top when collapsed.
-        static let histDeckGap: CGFloat = 6
         /// Expanded: keep histogram inside the viewfinder, clear of the deck below.
         static let expandedHistogramBottomPad: CGFloat = 12
         /// Gap between viewfinder bottom and expanded shutter deck.
@@ -516,11 +515,6 @@ struct ContentView: View {
 
         static func bottomPad(safeBottom: CGFloat) -> CGFloat {
             max(safeBottom * 0.55, 8)
-        }
-
-        /// Lift the glass bar above the safe-area strip + shutter deck.
-        static func histogramBottomPad(safeBottom: CGFloat, deckHeight: CGFloat = deckHeight) -> CGFloat {
-            deckHeight + bottomPad(safeBottom: safeBottom) + histDeckGap
         }
     }
 
@@ -921,6 +915,7 @@ struct ContentView: View {
 
                     // VIEWFINDER — when bottom is collapsed, feed runs under the shutter
                     // with a bottom gradient + compact controls overlaid.
+                    // Swiped-down / collapsed: no histogram — shutter dock only (Build 121).
                     ZStack(alignment: .bottom) {
                         viewfinderFrame(showHistogram: !effectiveBottomCollapsed && !minimalismMode)
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -929,48 +924,9 @@ struct ContentView: View {
                                 ? (lockCompactTop ? 4 : 6)
                                 : DS.pageMargin)
 
-                        if effectiveBottomCollapsed && !minimalismMode {
-                            // Histogram BELOW shutter in z-order. Never put contentShape
-                            // on the bottom-padded frame — that invisible pad sat on top
-                            // of the shutter and ate every tap.
-                            LiveExposureChrome(
-                                isManualExposure: isManualExposure,
-                                isoOverride: isoValue,
-                                shutterOverride: shutterSpeeds[safeShutterSpeedIndex]
-                            ) { liveISO, liveShutter in
-                                RefractiveGlassInfoBar(
-                                    iso: liveISO,
-                                    shutterSpeed: liveShutter,
-                                    aperture: apertureValue,
-                                    photoCount: photoCount,
-                                    exposureValue: exposureValue,
-                                    captureFormat: captureFormat,
-                                    aspectLabel: aspectRatio.shortLabel,
-                                    isLocked: isLocked,
-                                    isManualExposure: isManualExposure,
-                                    naturalCapture: naturalCapture,
-                                    showLevel: showLevel,
-                                    compact: isLandscape,
-                                    onToggleLock: { toggleAEAFLock() },
-                                    onReturnToAuto: { returnToAuto() }
-                                )
-                            }
-                            .padding(.horizontal, isLandscape ? 10 : 14)
-                            .simultaneousGesture(bottomDeckSwipe)
-                            .padding(.bottom, CollapsedChrome.histogramBottomPad(
-                                safeBottom: safeBottom,
-                                deckHeight: isLandscape
-                                    ? CollapsedChrome.landscapeDeckHeight
-                                    : CollapsedChrome.deckHeight
-                            ))
-                            .transition(
-                                .asymmetric(
-                                    insertion: .opacity.combined(with: .offset(y: 8)),
-                                    removal: .opacity.combined(with: .offset(y: 6))
-                                )
-                            )
-                            .zIndex(2)
-
+                        if effectiveBottomCollapsed {
+                            // Shutter dock always stays in the quiet finder (incl. Minimalism).
+                            // Histogram stays off while collapsed — expanded deck only.
                             collapsedBottomOverlay(safeBottom: safeBottom, compact: isLandscape)
                                 // Fill the finder and pin chrome to the bottom edge —
                                 // without this the shutter can float mid-frame.
@@ -981,12 +937,12 @@ struct ContentView: View {
                                         removal: .opacity.combined(with: .offset(y: 10))
                                     )
                                 )
-                                // Above histogram + viewfinder chrome so shutter wins taps.
+                                // Above viewfinder chrome so shutter wins taps.
                                 .zIndex(10)
                         }
 
-                        // Chrome above histogram, BELOW shutter dock — corner
-                        // buttons stay tappable; empty space can't cover shutter.
+                        // Chrome BELOW shutter dock — corner buttons stay tappable;
+                        // empty space can't cover shutter.
                         ViewfinderOverlay(
                             showGrid: showGrid,
                             aspectRatio: $aspectRatio,
