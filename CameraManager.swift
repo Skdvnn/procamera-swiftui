@@ -1856,174 +1856,27 @@ class CameraManager: NSObject, ObservableObject {
         }
     }
 
-    // MARK: - Film Filter Processing
+    // MARK: - Film Filter Processing (Build 124 — deeper stock recipes)
+
+    /// Preview vs still only differ on expensive glow + grain intensity.
+    /// Color / curves stay identical so finder ≈ bake (WYSIWYG).
+    private enum FilmLookBudget {
+        case preview
+        case still
+
+        /// Still grain is ~1.7× preview (same ratio as Build 75).
+        var grainScale: Float { self == .preview ? 0.58 : 1.0 }
+        var allowFullBloom: Bool { self == .still }
+    }
 
     // Apply filter to CIImage (for live preview)
     func applyFilmFilter(to ciImage: CIImage, filter: FilmFilter? = nil) -> CIImage {
         let activeFilter = filter ?? selectedFilmFilter
-        guard activeFilter != .none else { return ciImage }
-
-        var outputImage = ciImage
-
-        switch activeFilter {
-        case .none:
-            break
-
-        case .portra400:
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 0.9
-            colorControls.contrast = 0.95
-            colorControls.brightness = 0.02
-            if let result = colorControls.outputImage { outputImage = result }
-
-            let tempTint = CIFilter.temperatureAndTint()
-            tempTint.inputImage = outputImage
-            tempTint.neutral = CIVector(x: 6500, y: 0)
-            tempTint.targetNeutral = CIVector(x: 5800, y: 10)
-            if let result = tempTint.outputImage { outputImage = result }
-
-        case .ektar100:
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 1.3
-            colorControls.contrast = 1.1
-            colorControls.brightness = 0.0
-            if let result = colorControls.outputImage { outputImage = result }
-
-            let vibrance = CIFilter.vibrance()
-            vibrance.inputImage = outputImage
-            vibrance.amount = 0.3
-            if let result = vibrance.outputImage { outputImage = result }
-
-        case .kodakGold:
-            // Golden hour in a canister: warm cast, gentle contrast, soft lift
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 1.08
-            colorControls.contrast = 1.02
-            colorControls.brightness = 0.03
-            if let result = colorControls.outputImage { outputImage = result }
-
-            let tempTint = CIFilter.temperatureAndTint()
-            tempTint.inputImage = outputImage
-            tempTint.neutral = CIVector(x: 6500, y: 0)
-            tempTint.targetNeutral = CIVector(x: 5400, y: 12)
-            if let result = tempTint.outputImage { outputImage = result }
-
-            let vibrance = CIFilter.vibrance()
-            vibrance.inputImage = outputImage
-            vibrance.amount = 0.15
-            if let result = vibrance.outputImage { outputImage = result }
-
-        case .trix400:
-            let noir = CIFilter.photoEffectNoir()
-            noir.inputImage = outputImage
-            if let result = noir.outputImage { outputImage = result }
-
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.contrast = 1.15
-            if let result = colorControls.outputImage { outputImage = result }
-
-        case .cinestill800:
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 0.95
-            colorControls.contrast = 1.05
-            if let result = colorControls.outputImage { outputImage = result }
-
-            let tempTint = CIFilter.temperatureAndTint()
-            tempTint.inputImage = outputImage
-            tempTint.neutral = CIVector(x: 6500, y: 0)
-            tempTint.targetNeutral = CIVector(x: 5200, y: 15)
-            if let result = tempTint.outputImage { outputImage = result }
-
-            // Preview skips bloom — CIBloom every frame freezes the finder.
-            // Still bake keeps the full CineStill halation.
-
-        case .velvia50:
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 1.5
-            colorControls.contrast = 1.15
-            colorControls.brightness = -0.02
-            if let result = colorControls.outputImage { outputImage = result }
-
-            let vibrance = CIFilter.vibrance()
-            vibrance.inputImage = outputImage
-            vibrance.amount = 0.4
-            if let result = vibrance.outputImage { outputImage = result }
-
-        case .instant:
-            outputImage = applyInstantFilmLook(to: outputImage, preview: true)
-        }
-
-        // Light live grain so the finder matches the still bake (Build 75).
-        // Canvas overlays were removed next to Metal — CI grain is cheap at preview size.
-        let inputExtent = ciImage.extent
-        if !inputExtent.isInfinite {
-            outputImage = outputImage.cropped(to: inputExtent)
-        }
-        outputImage = applyFilmGrain(to: outputImage, amount: 0.035)
-        // Keep origin at zero for Metal draw / createCGImage.
-        let e = outputImage.extent
-        if e.origin != .zero {
-            outputImage = outputImage.transformed(by: CGAffineTransform(
-                translationX: -e.origin.x,
-                y: -e.origin.y
-            ))
-        }
-        return outputImage
+        return gradeFilmStock(activeFilter, onto: ciImage, budget: .preview)
     }
 
     func applyFilmFilter(to image: UIImage) -> UIImage {
-
         applyFilmFilter(selectedFilmFilter, to: image)
-    }
-
-    /// Polaroid / SX-70 grade used by FilmFilter.instant (and legacy LensFX.instant).
-    private func applyInstantFilmLook(to image: CIImage, preview: Bool) -> CIImage {
-        let extent = image.extent
-        var output = image
-
-        let controls = CIFilter.colorControls()
-        controls.inputImage = output
-        controls.saturation = 0.82
-        controls.brightness = 0.02
-        controls.contrast = 0.92
-        if let result = controls.outputImage { output = result }
-
-        let tempTint = CIFilter.temperatureAndTint()
-        tempTint.inputImage = output
-        tempTint.neutral = CIVector(x: 6500, y: 0)
-        tempTint.targetNeutral = CIVector(x: 5300, y: -8)
-        if let result = tempTint.outputImage { output = result }
-
-        let curve = CIFilter.toneCurve()
-        curve.inputImage = output
-        curve.point0 = CGPoint(x: 0.00, y: 0.10)
-        curve.point1 = CGPoint(x: 0.25, y: 0.28)
-        curve.point2 = CGPoint(x: 0.50, y: 0.52)
-        curve.point3 = CGPoint(x: 0.75, y: 0.78)
-        curve.point4 = CGPoint(x: 1.00, y: 0.93)
-        if let result = curve.outputImage { output = result }
-
-        let vignette = CIFilter.vignette()
-        vignette.inputImage = output
-        vignette.intensity = 0.8
-        vignette.radius = 1.8
-        if let result = vignette.outputImage { output = result }
-
-        if !preview {
-            let bloom = CIFilter.bloom()
-            bloom.inputImage = output
-            bloom.radius = 4
-            bloom.intensity = 0.25
-            if let result = bloom.outputImage { output = result }
-        }
-
-        return output.cropped(to: extent)
     }
 
     private func applyFilmFilter(_ filmFilter: FilmFilter, to image: UIImage) -> UIImage {
@@ -2047,151 +1900,7 @@ class CameraManager: NSObject, ObservableObject {
             ciImage = ciImage.oriented(image.imageOrientation.cgImageOrientation)
         }
 
-
-        var outputImage = ciImage
-
-        switch filmFilter {
-        case .none:
-            break
-
-        case .portra400:
-            // Warm, slightly desaturated, lifted shadows
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 0.9
-            colorControls.contrast = 0.95
-            colorControls.brightness = 0.02
-            if let result = colorControls.outputImage {
-                outputImage = result
-            }
-
-            // Add warmth
-            let tempTint = CIFilter.temperatureAndTint()
-            tempTint.inputImage = outputImage
-            tempTint.neutral = CIVector(x: 6500, y: 0)
-            tempTint.targetNeutral = CIVector(x: 5800, y: 10)
-            if let result = tempTint.outputImage {
-                outputImage = result
-            }
-
-        case .ektar100:
-            // Vivid, saturated, punchy
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 1.3
-            colorControls.contrast = 1.1
-            colorControls.brightness = 0.0
-            if let result = colorControls.outputImage {
-                outputImage = result
-            }
-
-            // Add slight warmth
-            let vibrance = CIFilter.vibrance()
-            vibrance.inputImage = outputImage
-            vibrance.amount = 0.3
-            if let result = vibrance.outputImage {
-                outputImage = result
-            }
-
-        case .kodakGold:
-            // Golden hour in a canister: warm cast, gentle contrast, soft lift
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 1.08
-            colorControls.contrast = 1.02
-            colorControls.brightness = 0.03
-            if let result = colorControls.outputImage {
-                outputImage = result
-            }
-
-            let tempTint = CIFilter.temperatureAndTint()
-            tempTint.inputImage = outputImage
-            tempTint.neutral = CIVector(x: 6500, y: 0)
-            tempTint.targetNeutral = CIVector(x: 5400, y: 12)
-            if let result = tempTint.outputImage {
-                outputImage = result
-            }
-
-            let vibrance = CIFilter.vibrance()
-            vibrance.inputImage = outputImage
-            vibrance.amount = 0.15
-            if let result = vibrance.outputImage {
-                outputImage = result
-            }
-
-        case .trix400:
-            // Classic black and white
-            let noir = CIFilter.photoEffectNoir()
-            noir.inputImage = outputImage
-            if let result = noir.outputImage {
-                outputImage = result
-            }
-
-            // Add contrast
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.contrast = 1.15
-            if let result = colorControls.outputImage {
-                outputImage = result
-            }
-
-        case .cinestill800:
-            // Cinematic look with warm highlights
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 0.95
-            colorControls.contrast = 1.05
-            if let result = colorControls.outputImage {
-                outputImage = result
-            }
-
-            // Warm color cast
-            let tempTint = CIFilter.temperatureAndTint()
-            tempTint.inputImage = outputImage
-            tempTint.neutral = CIVector(x: 6500, y: 0)
-            tempTint.targetNeutral = CIVector(x: 5200, y: 15)
-            if let result = tempTint.outputImage {
-                outputImage = result
-            }
-
-            // Add halation-like bloom (subtle highlight glow) — crop back so
-            // expanded bloom extent doesn't break createCGImage / Metal.
-            let bloomExtent = outputImage.extent
-            let bloom = CIFilter.bloom()
-            bloom.inputImage = outputImage
-            bloom.radius = 5
-            bloom.intensity = 0.3
-            if let result = bloom.outputImage {
-                outputImage = result.cropped(to: bloomExtent)
-            }
-
-        case .velvia50:
-            // Ultra vivid, high saturation
-            let colorControls = CIFilter.colorControls()
-            colorControls.inputImage = outputImage
-            colorControls.saturation = 1.5
-            colorControls.contrast = 1.15
-            colorControls.brightness = -0.02
-            if let result = colorControls.outputImage {
-                outputImage = result
-            }
-
-            // Boost vibrance
-            let vibrance = CIFilter.vibrance()
-            vibrance.inputImage = outputImage
-            vibrance.amount = 0.4
-            if let result = vibrance.outputImage {
-                outputImage = result
-            }
-
-        case .instant:
-            outputImage = applyInstantFilmLook(to: outputImage, preview: false)
-        }
-
-        // Bake grain into film stills so the finder overlay isn't preview-only.
-        if filmFilter != .none {
-            outputImage = applyFilmGrain(to: outputImage, amount: 0.06)
-        }
+        let outputImage = gradeFilmStock(filmFilter, onto: ciImage, budget: .still)
 
         // Same retry / software-fallback path as Lens FX — a single createCGImage
         // can fail under live-camera GPU load and used to drop the film look silently.
@@ -2200,6 +1909,342 @@ class CameraManager: NSObject, ObservableObject {
         }
         print("FilmFilter: bake failed for \(filmFilter) — saving unfiltered still")
         return (image, false)
+    }
+
+    /// Shared stock grade for live preview + still bake (Build 124).
+    private func gradeFilmStock(
+        _ stock: FilmFilter,
+        onto image: CIImage,
+        budget: FilmLookBudget
+    ) -> CIImage {
+        guard stock != .none else { return image }
+        let extent = image.extent
+        var output = image
+
+        switch stock {
+        case .none:
+            break
+        case .portra400:
+            output = gradePortra400(output)
+        case .ektar100:
+            output = gradeEktar100(output)
+        case .kodakGold:
+            output = gradeKodakGold(output)
+        case .trix400:
+            output = gradeTrix400(output)
+        case .cinestill800:
+            output = gradeCinestill800(output, budget: budget)
+        case .velvia50:
+            output = gradeVelvia50(output)
+        case .instant:
+            output = gradeInstant(output, budget: budget)
+        }
+
+        if !extent.isInfinite {
+            output = output.cropped(to: extent)
+        }
+        let grain = filmGrainAmount(for: stock) * budget.grainScale
+        output = applyFilmGrain(to: output, amount: grain)
+        // Keep origin at zero for Metal draw / createCGImage.
+        let e = output.extent
+        if e.origin != .zero {
+            output = output.transformed(by: CGAffineTransform(
+                translationX: -e.origin.x,
+                y: -e.origin.y
+            ))
+        }
+        return output
+    }
+
+    /// Still-bake grain amounts — preview scales by `FilmLookBudget.grainScale`.
+    private func filmGrainAmount(for stock: FilmFilter) -> Float {
+        switch stock {
+        case .none: return 0
+        case .portra400: return 0.048
+        case .ektar100: return 0.028
+        case .kodakGold: return 0.055
+        case .trix400: return 0.095
+        case .cinestill800: return 0.082
+        case .velvia50: return 0.022
+        case .instant: return 0.070
+        }
+    }
+
+    // MARK: Stock recipes
+
+    /// Portra 400 — soft pastel skins, muted greens, warm mid lift, gentle toe.
+    private func gradePortra400(_ image: CIImage) -> CIImage {
+        var o = image
+        o = filmColorControls(o, saturation: 0.86, contrast: 0.93, brightness: 0.015)
+        o = filmTempTint(o, targetKelvin: 5750, tint: 8)
+        // Soft S: lifted shadows, easy shoulder — skin stays open.
+        o = filmToneCurve(
+            o,
+            p0: CGPoint(x: 0.00, y: 0.04),
+            p1: CGPoint(x: 0.25, y: 0.27),
+            p2: CGPoint(x: 0.50, y: 0.52),
+            p3: CGPoint(x: 0.75, y: 0.76),
+            p4: CGPoint(x: 1.00, y: 0.96)
+        )
+        // Slight green-shadow / peach-highlight crosstalk.
+        o = filmColorMatrix(
+            o,
+            r: CIVector(x: 1.04, y: 0.02, z: -0.01, w: 0),
+            g: CIVector(x: -0.01, y: 0.98, z: 0.02, w: 0),
+            b: CIVector(x: 0.01, y: -0.02, z: 0.97, w: 0)
+        )
+        o = filmVignette(o, intensity: 0.28, radius: 1.6)
+        return o
+    }
+
+    /// Ektar 100 — punchy reds/blues, tight contrast, fine grain, clean neutrals.
+    private func gradeEktar100(_ image: CIImage) -> CIImage {
+        var o = image
+        o = filmColorControls(o, saturation: 1.28, contrast: 1.12, brightness: -0.01)
+        o = filmVibrance(o, amount: 0.28)
+        o = filmTempTint(o, targetKelvin: 6400, tint: -2)
+        o = filmToneCurve(
+            o,
+            p0: CGPoint(x: 0.00, y: 0.01),
+            p1: CGPoint(x: 0.22, y: 0.18),
+            p2: CGPoint(x: 0.50, y: 0.50),
+            p3: CGPoint(x: 0.78, y: 0.82),
+            p4: CGPoint(x: 1.00, y: 0.99)
+        )
+        o = filmColorMatrix(
+            o,
+            r: CIVector(x: 1.06, y: -0.02, z: -0.01, w: 0),
+            g: CIVector(x: -0.02, y: 1.02, z: 0.01, w: 0),
+            b: CIVector(x: -0.01, y: -0.01, z: 1.08, w: 0)
+        )
+        o = filmVignette(o, intensity: 0.22, radius: 1.7)
+        return o
+    }
+
+    /// Kodak Gold — amber nostalgia, soft highlight rolloff, sunny mids.
+    private func gradeKodakGold(_ image: CIImage) -> CIImage {
+        var o = image
+        o = filmColorControls(o, saturation: 1.12, contrast: 1.00, brightness: 0.035)
+        o = filmTempTint(o, targetKelvin: 5200, tint: 14)
+        o = filmVibrance(o, amount: 0.18)
+        o = filmToneCurve(
+            o,
+            p0: CGPoint(x: 0.00, y: 0.05),
+            p1: CGPoint(x: 0.25, y: 0.30),
+            p2: CGPoint(x: 0.50, y: 0.54),
+            p3: CGPoint(x: 0.75, y: 0.78),
+            p4: CGPoint(x: 1.00, y: 0.94)
+        )
+        o = filmColorMatrix(
+            o,
+            r: CIVector(x: 1.08, y: 0.04, z: -0.02, w: 0),
+            g: CIVector(x: 0.02, y: 1.00, z: -0.01, w: 0),
+            b: CIVector(x: -0.03, y: -0.02, z: 0.92, w: 0)
+        )
+        o = filmVignette(o, intensity: 0.32, radius: 1.55)
+        return o
+    }
+
+    /// Tri-X 400 — hard B&W with crushed toe, bright shoulder, heavy grain.
+    private func gradeTrix400(_ image: CIImage) -> CIImage {
+        var o = image
+        let noir = CIFilter.photoEffectNoir()
+        noir.inputImage = o
+        if let result = noir.outputImage { o = result }
+        o = filmColorControls(o, saturation: 0, contrast: 1.22, brightness: 0.0)
+        o = filmToneCurve(
+            o,
+            p0: CGPoint(x: 0.00, y: 0.00),
+            p1: CGPoint(x: 0.22, y: 0.14),
+            p2: CGPoint(x: 0.48, y: 0.48),
+            p3: CGPoint(x: 0.72, y: 0.80),
+            p4: CGPoint(x: 1.00, y: 1.00)
+        )
+        // Warm silver scan bias.
+        o = filmTempTint(o, targetKelvin: 6000, tint: 4)
+        o = filmVignette(o, intensity: 0.40, radius: 1.5)
+        return o
+    }
+
+    /// CineStill 800T — tungsten warmth + red edge glow on speculars.
+    private func gradeCinestill800(_ image: CIImage, budget: FilmLookBudget) -> CIImage {
+        var o = image
+        o = filmColorControls(o, saturation: 0.92, contrast: 1.08, brightness: 0.01)
+        o = filmTempTint(o, targetKelvin: 4800, tint: 12)
+        o = filmToneCurve(
+            o,
+            p0: CGPoint(x: 0.00, y: 0.03),
+            p1: CGPoint(x: 0.25, y: 0.24),
+            p2: CGPoint(x: 0.50, y: 0.51),
+            p3: CGPoint(x: 0.78, y: 0.80),
+            p4: CGPoint(x: 1.00, y: 0.97)
+        )
+        // Teal-ish shadows / amber highlights.
+        o = filmColorMatrix(
+            o,
+            r: CIVector(x: 1.05, y: 0.03, z: -0.02, w: 0),
+            g: CIVector(x: -0.02, y: 0.98, z: 0.03, w: 0),
+            b: CIVector(x: 0.02, y: -0.01, z: 1.04, w: 0)
+        )
+        o = filmHalationGlow(o, budget: budget, stillRadius: 6, stillIntensity: 0.38, previewMix: 0.20)
+        o = filmVignette(o, intensity: 0.35, radius: 1.55)
+        return o
+    }
+
+    /// Velvia 50 — dense slide: deep greens/blues, hard blacks, tiny grain.
+    private func gradeVelvia50(_ image: CIImage) -> CIImage {
+        var o = image
+        o = filmColorControls(o, saturation: 1.48, contrast: 1.18, brightness: -0.025)
+        o = filmVibrance(o, amount: 0.35)
+        o = filmTempTint(o, targetKelvin: 6600, tint: -4)
+        o = filmToneCurve(
+            o,
+            p0: CGPoint(x: 0.00, y: 0.00),
+            p1: CGPoint(x: 0.20, y: 0.12),
+            p2: CGPoint(x: 0.50, y: 0.48),
+            p3: CGPoint(x: 0.80, y: 0.84),
+            p4: CGPoint(x: 1.00, y: 0.98)
+        )
+        o = filmColorMatrix(
+            o,
+            r: CIVector(x: 1.02, y: -0.03, z: -0.02, w: 0),
+            g: CIVector(x: -0.04, y: 1.10, z: -0.02, w: 0),
+            b: CIVector(x: -0.02, y: -0.02, z: 1.12, w: 0)
+        )
+        o = filmVignette(o, intensity: 0.30, radius: 1.65)
+        return o
+    }
+
+    /// Instant / SX-70 — creamy lift, greenish shadows, heavy falloff, soft glow.
+    private func gradeInstant(_ image: CIImage, budget: FilmLookBudget) -> CIImage {
+        var o = image
+        o = filmColorControls(o, saturation: 0.78, contrast: 0.90, brightness: 0.03)
+        o = filmTempTint(o, targetKelvin: 5150, tint: -10)
+        o = filmToneCurve(
+            o,
+            p0: CGPoint(x: 0.00, y: 0.12),
+            p1: CGPoint(x: 0.25, y: 0.30),
+            p2: CGPoint(x: 0.50, y: 0.54),
+            p3: CGPoint(x: 0.75, y: 0.80),
+            p4: CGPoint(x: 1.00, y: 0.92)
+        )
+        o = filmColorMatrix(
+            o,
+            r: CIVector(x: 1.04, y: 0.02, z: 0.01, w: 0),
+            g: CIVector(x: 0.01, y: 1.02, z: -0.02, w: 0),
+            b: CIVector(x: -0.02, y: 0.03, z: 0.94, w: 0)
+        )
+        o = filmVignette(o, intensity: 0.85, radius: 1.75)
+        o = filmHalationGlow(o, budget: budget, stillRadius: 4.5, stillIntensity: 0.28, previewMix: 0.12)
+        return o
+    }
+
+    // MARK: Film CI helpers
+
+    private func filmColorControls(
+        _ image: CIImage,
+        saturation: Float,
+        contrast: Float,
+        brightness: Float
+    ) -> CIImage {
+        let f = CIFilter.colorControls()
+        f.inputImage = image
+        f.saturation = saturation
+        f.contrast = contrast
+        f.brightness = brightness
+        return f.outputImage ?? image
+    }
+
+    private func filmVibrance(_ image: CIImage, amount: Float) -> CIImage {
+        let f = CIFilter.vibrance()
+        f.inputImage = image
+        f.amount = amount
+        return f.outputImage ?? image
+    }
+
+    private func filmTempTint(_ image: CIImage, targetKelvin: CGFloat, tint: CGFloat) -> CIImage {
+        let f = CIFilter.temperatureAndTint()
+        f.inputImage = image
+        f.neutral = CIVector(x: 6500, y: 0)
+        f.targetNeutral = CIVector(x: targetKelvin, y: tint)
+        return f.outputImage ?? image
+    }
+
+    private func filmToneCurve(
+        _ image: CIImage,
+        p0: CGPoint, p1: CGPoint, p2: CGPoint, p3: CGPoint, p4: CGPoint
+    ) -> CIImage {
+        let f = CIFilter.toneCurve()
+        f.inputImage = image
+        f.point0 = p0
+        f.point1 = p1
+        f.point2 = p2
+        f.point3 = p3
+        f.point4 = p4
+        return f.outputImage ?? image
+    }
+
+    private func filmColorMatrix(
+        _ image: CIImage,
+        r: CIVector, g: CIVector, b: CIVector
+    ) -> CIImage {
+        let f = CIFilter.colorMatrix()
+        f.inputImage = image
+        f.rVector = r
+        f.gVector = g
+        f.bVector = b
+        f.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        f.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        return f.outputImage ?? image
+    }
+
+    private func filmVignette(_ image: CIImage, intensity: Float, radius: Float) -> CIImage {
+        let f = CIFilter.vignette()
+        f.inputImage = image
+        f.intensity = intensity
+        f.radius = radius
+        return f.outputImage ?? image
+    }
+
+    /// Still uses real bloom; preview uses a cheap screen-glow so the finder
+    /// keeps CineStill / Instant character without freezing Metal.
+    private func filmHalationGlow(
+        _ image: CIImage,
+        budget: FilmLookBudget,
+        stillRadius: Float,
+        stillIntensity: Float,
+        previewMix: Float
+    ) -> CIImage {
+        let extent = image.extent
+        if budget.allowFullBloom {
+            let bloom = CIFilter.bloom()
+            bloom.inputImage = image
+            bloom.radius = stillRadius
+            bloom.intensity = stillIntensity
+            let bloomExtent = image.extent
+            if let result = bloom.outputImage {
+                return result.cropped(to: bloomExtent)
+            }
+            return image
+        }
+        // Preview-safe: soft blur screened in at low mix (no CIBloom).
+        let blur = CIFilter.gaussianBlur()
+        blur.inputImage = image
+        blur.radius = max(2, stillRadius * 0.45)
+        guard let soft = blur.outputImage?.cropped(to: extent) else { return image }
+        let fade = CIFilter.colorMatrix()
+        fade.inputImage = soft
+        let m = CGFloat(previewMix)
+        fade.rVector = CIVector(x: m, y: 0, z: 0, w: 0)
+        fade.gVector = CIVector(x: 0, y: m * 0.85, z: 0, w: 0)
+        fade.bVector = CIVector(x: 0, y: 0, z: m * 0.7, w: 0)
+        fade.aVector = CIVector(x: 0, y: 0, z: 0, w: 1)
+        fade.biasVector = CIVector(x: 0, y: 0, z: 0, w: 0)
+        guard let glow = fade.outputImage else { return image }
+        let screen = CIFilter.screenBlendMode()
+        screen.inputImage = glow
+        screen.backgroundImage = image
+        return (screen.outputImage ?? image).cropped(to: extent)
     }
 
     /// Soft luminance grain (shared by live preview + still bake).

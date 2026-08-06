@@ -229,18 +229,19 @@ def test_enum_coverage() -> None:
     check("film enum count", len(film_cases) >= 8, f"{film_cases}")
     check("fx enum count", len(fx_cases) >= 13, f"{fx_cases}")
 
-    # Live film switch
-    live = switch_cases(ROOT / "CameraManager.swift", "func applyFilmFilter(to ciImage")
+    # Build 124 — shared gradeFilmStock recipes cover live + still.
+    cam_text = (ROOT / "CameraManager.swift").read_text()
+    grade = switch_cases(ROOT / "CameraManager.swift", "private func gradeFilmStock")
+    if not grade:
+        grade = set(re.findall(
+            r"case\s+\.(\w+):",
+            cam_text[cam_text.find("private func gradeFilmStock"):cam_text.find("private func gradeFilmStock") + 2500],
+        ))
     for c in film_cases:
-        check(f"live film .{c}", c in live, f"missing in live switch; have {sorted(live)[:20]}")
-
-    # Still film switch (second applyFilmFilter)
-    still_text = (ROOT / "CameraManager.swift").read_text()
-    # Find private applyFilmFilter(_ filmFilter
-    m = re.search(r"private func applyFilmFilter\(_ filmFilter[\s\S]{0,12000}?renderCIImageSafely", still_text)
-    still = set(re.findall(r"case\s+\.(\w+)", m.group(0))) if m else set()
-    for c in film_cases:
-        check(f"still film .{c}", c in still, f"missing in still switch")
+        check(f"live film .{c}", c in grade, f"missing in gradeFilmStock; have {sorted(grade)[:20]}")
+        check(f"still film .{c}", c in grade, f"missing in gradeFilmStock; have {sorted(grade)[:20]}")
+    check("shared film budget", "enum FilmLookBudget" in cam_text and "gradeFilmStock" in cam_text)
+    check("per-stock grain amounts", "func filmGrainAmount" in cam_text)
 
     # LensFX apply switch
     fx_apply = switch_cases(ROOT / "LensFXEngine.swift", "func apply(\n        _ fx: LensFXMode")
@@ -471,9 +472,18 @@ def test_source_guards() -> None:
     check("album export failure surfaced", "Album export failed — keepers in Field Book" in (ROOT / "CullGallery.swift").read_text())
     check("comic fallback", "func applyToon" in (ROOT / "LensFXEngine.swift").read_text())
     check("film grain bake", "func applyFilmGrain" in cam)
-    # Preview intentionally skips CineStill bloom (perf); still bake keeps it.
-    check("cinestill still bloom", "case .cinestill800:" in cam and "bloom.intensity = 0.3" in cam)
-    check("preview bloom skipped", "Preview skips bloom" in cam)
+    # Preview uses cheap screen-glow; still bake keeps real CIBloom (Build 124).
+    check(
+        "cinestill still bloom",
+        "gradeCinestill800" in cam
+        and "allowFullBloom" in cam
+        and "bloom.intensity = stillIntensity" in cam,
+    )
+    check(
+        "preview bloom skipped",
+        "Preview-safe: soft blur screened" in cam
+        and "filmHalationGlow" in cam,
+    )
     check("live preview bridge", "class LivePreviewBridge" in preview and "let livePreview = LivePreviewBridge()" in cam)
     check("no @Published filtered preview", "@Published var filteredPreviewImage" not in cam)
     check("previewCheap live FX", "previewCheap: true" in cam and "previewCheap: Bool = false" in (ROOT / "LensFXEngine.swift").read_text())
@@ -1240,8 +1250,15 @@ def test_source_guards() -> None:
     check("draw normalizes CI origin", "Orientation shifts origin off" in preview)
     check("mark presented before GPU wait", "Reveal Metal as soon as this drawable" in preview)
     check("draw fail restores early", "if !metalHasPresented || consecutiveDrawFails >= 3" in preview)
-    check("live film grain preview", "applyFilmGrain(to: outputImage, amount: 0.035)" in cam)
+    check(
+        "live film grain preview",
+        "filmGrainAmount(for: stock) * budget.grainScale" in cam
+        and "grainScale" in cam,
+    )
     check("CineStill bloom cropped", "result.cropped(to: bloomExtent)" in cam)
+    check("film recipes portra curve", "gradePortra400" in cam and "filmToneCurve" in cam)
+    check("film recipes tri-x curve", "gradeTrix400" in cam)
+    check("film preview halation cheap", "filmHalationGlow" in cam and "screenBlendMode" in cam)
     check("preview normalize before CI", "Normalize origin before CI filters" in cam)
 
     # Build 76 — bug-fix pass

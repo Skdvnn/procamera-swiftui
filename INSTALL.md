@@ -8,15 +8,16 @@ produces an **unsigned** `ProCamera-unsigned.ipa` and attaches it to the rolling
 [`latest-build` release](../../releases/tag/latest-build). Apple requires every
 app on a device to be signed, so pick one of the paths below.
 
-**Build 123 phone test pack (honest natural stills):**
+**Build 124 phone test pack (deeper film vibes):**
 [`ProCamera-unsigned.ipa`](../../releases/download/latest-build/ProCamera-unsigned.ipa)
 from [`latest-build`](../../releases/tag/latest-build).
 
-**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **123**.
-Verified: natural stills stay ~12MP WYSIWYG (no deferred/ZSL HDR crunch), upright
-orientation repaired, original HEIC kept when clean; swiped-down hides histogram;
-shutter stays in Minimalism.
+**Preferred:** `git pull` → Xcode **Cmd+R** → confirm build **124**.
+Verified: each film stock has its own tone curve / color / grain / vignette
+(Portra soft, Tri-X crunchy, CineStill halation, Velvia dense); natural stills
+stay honest; swiped-down hides histogram.
 
+Build 123: natural 12MP + sideways repair.
 Build 122: original HEIC bytes to Photos.
 Build 121: collapsed hist off / shutter stays.
 Build 120: Compact top.
